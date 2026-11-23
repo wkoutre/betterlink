@@ -39,6 +39,26 @@ import Testing
         #expect(try RuleStore(file: target).load() == c)
     }
 
+    /// Security audit, Nov 2026 (M8): a save through a link to a missing file
+    /// would create that file wherever the link points, with betterlink's
+    /// permissions. Any program can plant such a link, so it is refused.
+    @Test func savingThroughALinkToAMissingFileIsRefused() throws {
+        let fm = FileManager.default
+        let base = fm.temporaryDirectory.appendingPathComponent("bl-dangling-\(UUID().uuidString)", isDirectory: true)
+        let folder = base.appendingPathComponent("settings", isDirectory: true)
+        let elsewhere = base.appendingPathComponent("elsewhere", isDirectory: true)
+        for d in [folder, elsewhere] { try fm.createDirectory(at: d, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700]) }
+        let target = elsewhere.appendingPathComponent("planted.json")
+        let link = folder.appendingPathComponent("rules.json")
+        try fm.createSymbolicLink(at: link, withDestinationURL: target)
+        let s = RuleStore(file: link)
+        #expect(throws: (any Error).self) { try s.save(RuleStore.Contents()) }
+        #expect(throws: (any Error).self) { try s.update { $0.rules = [Rule(kind: .domain, pattern: "acme.com", profile: "Default")] } }
+        #expect(!fm.fileExists(atPath: target.path))
+        #expect(try fm.contentsOfDirectory(atPath: elsewhere.path).isEmpty)
+        #expect(try fm.destinationOfSymbolicLink(atPath: link.path) == target.path)
+    }
+
     @Test func damagedFileIsAnErrorNotAnEmptyList() throws {
         let s = tempStore()
         try s.save(RuleStore.Contents())

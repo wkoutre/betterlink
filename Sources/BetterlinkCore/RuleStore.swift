@@ -73,6 +73,14 @@ public struct RuleStore: Sendable {
         // When rules.json is a symlink (into a dotfiles repo, say), write the
         // file it points to: an atomic write to the link itself would replace
         // the link with a plain file and leave its target stale.
+        // A link to a file that isn't there is refused: saving would create
+        // that file wherever the link points, with betterlink's own
+        // permissions, and any program can plant such a link in a settings
+        // folder. (fileExists follows the link, so it is false for one.)
+        let fm = FileManager.default
+        if let destination = try? fm.destinationOfSymbolicLink(atPath: file.path), !fm.fileExists(atPath: file.path) {
+            throw ConfigError.unsafeFile("Refused to save rules.json: it is a link to \(destination), which doesn't exist. Create that file or remove the link.")
+        }
         let target = file.resolvingSymlinksInPath()
         try enc.encode(contents).write(to: target, options: [.atomic])
         try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
