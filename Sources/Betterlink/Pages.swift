@@ -367,11 +367,11 @@ struct PermissionsPage: View {
 
     private var fullDiskAccessNote: String {
         let fda = switch model.fullDiskAccess {
-        case true?: "Full Disk Access: on."
-        case false?: "Full Disk Access: off."
-        case nil: "Full Disk Access: unknown."
+        case true?: "Full Disk Access: on. "
+        case false?: "Full Disk Access: off. "
+        case nil: ""   // no probe could tell; saying "unknown" only worries people
         }
-        return fda + " After changing it in System Settings, come back here; betterlink checks again when the window is active."
+        return fda + "After changing it in System Settings, come back here; betterlink checks again when the window is active."
     }
 }
 
