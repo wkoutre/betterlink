@@ -17,7 +17,8 @@ name: release
 # back into this workflow (the actor check below is a second guard, for the
 # day someone swaps in a PAT or app token).
 #
-# Merges that touch only docs, tests or CI don't release (paths-ignore).
+# Merges that touch only docs, tests, CI or the setup scripts don't release
+# (paths-ignore).
 # Release one anyway with Actions › release › Run workflow › publish.
 #
 # Run it by hand with publish unchecked for a dry run: it builds and zips
@@ -39,6 +40,8 @@ on:
       - ".github/**"
       - "Tests/**"
       - "cli/test/**"
+      - "scripts/set-release-secrets.sh" # setup helpers, not in the app
+      - "scripts/set-version.sh"
   workflow_dispatch:
     inputs:
       publish:

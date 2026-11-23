@@ -113,7 +113,7 @@ It makes an SSH key on your Mac, adds the public half to the tap as a deploy key
 
 ## Cutting a release
 
-Merge a pull request. That's it. On every push to `main` that changes more than docs, tests or CI (`**/*.md`, `LICENSE`, `.github/**`, `Tests/**`, `cli/test/**` don't count), the `release` workflow:
+Merge a pull request. That's it. On every push to `main` that changes more than docs, tests or CI (`**/*.md`, `LICENSE`, `.github/**`, `Tests/**`, `cli/test/**` and the two setup scripts `scripts/set-release-secrets.sh` / `scripts/set-version.sh` don't count), the `release` workflow:
 
 1. **test**: runs `make test` and `make test-cli` on `main`.
 2. **version**: reads `CFBundleShortVersionString` from `Info.plist`.
