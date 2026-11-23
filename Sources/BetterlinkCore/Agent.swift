@@ -480,13 +480,28 @@ public enum Agent {
         }
         if read.isEmpty {
             throw fail(unreadable.isEmpty ? "No installed browser has profiles to import."
-                       : "Couldn't read profiles from \(unreadable.joined(separator: ", ")): this process may not read other apps' data. Run it from Terminal, or allow Full Disk Access.")
+                       : importFailure(env.installed.filter { unreadable.contains($0.name) }))
         }
         let readIDs = Set(live.map(\.browser))
         try store(env).update { c in
             c.profiles = (c.profiles ?? []).filter { !readIDs.contains($0.browser) } + live
         }
         return .success(["imported": live.count, "browsers": read, "couldNotRead": unreadable])
+    }
+
+    /// Why no browser's profiles could be read, from what each read ran into.
+    static func importFailure(_ browsers: [Browser], home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                              fullDiskAccess: Bool? = FullDiskAccess.isGranted()) -> String {
+        let reasons = browsers.compactMap { b -> String? in
+            guard let file = b.profilesFile(home: home) else { return nil }
+            switch ProfileFileAccess.check(file) {
+            case .readable: return "\(b.name)'s profile list has no profiles betterlink can use."
+            case .missing: return "\(b.name) has no profile list yet (open it once first)."
+            case let access: return access.explanation(browser: b.name, fullDiskAccess: fullDiskAccess)
+            }
+        }
+        return (["Couldn't read profiles from \(browsers.map(\.name).joined(separator: ", "))."] + reasons)
+            .joined(separator: " ")
     }
 
     // MARK: Settings

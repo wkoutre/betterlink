@@ -34,15 +34,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var isDefaultBrowser = false
     /// Whether betterlink can read each installed browser's profile list
     /// (macOS asks the user before an app reads another app's data).
-    @Published private(set) var browserAccess: [String: BrowserAccess] = [:]
+    @Published private(set) var browserAccess: [String: ProfileFileAccess] = [:]
+    /// Whether betterlink has Full Disk Access; nil when it can't tell.
+    @Published private(set) var fullDiskAccess: Bool?
     @Published private(set) var opensAtLogin = false
-
-    enum BrowserAccess: Equatable {
-        case allowed
-        case denied
-        /// The browser keeps no profile list where betterlink looks (never opened yet).
-        case noProfiles
-    }
     /// Whether the Log page shows. Stored in rules.json (so the CLI and a
     /// synced folder carry it); changing it here saves it there.
     @Published var showLog: Bool = false {
@@ -630,20 +625,19 @@ final class AppModel: ObservableObject {
 
     /// True when something on the Permissions page needs the user.
     var permissionsNeedAttention: Bool {
-        !isDefaultBrowser || browserAccess.values.contains(.denied) && !catalog.hasProfilesToChoose
+        !isDefaultBrowser || browserAccess.values.contains { $0 != .readable && $0 != .missing } && !catalog.hasProfilesToChoose
     }
 
     /// Re-checks every permission the Permissions page shows.
     func refreshPermissions() {
         refreshDefaultBrowser()
-        var access: [String: BrowserAccess] = [:]
+        var access: [String: ProfileFileAccess] = [:]
         for b in browsers where b.family != .plain {
             guard let file = b.profilesFile() else { continue }
-            if !FileManager.default.fileExists(atPath: file.path) { access[b.bundleId] = .noProfiles; continue }
-            access[b.bundleId] = FileManager.default.isReadableFile(atPath: file.path) && (try? Data(contentsOf: file)) != nil
-                ? .allowed : .denied
+            access[b.bundleId] = ProfileFileAccess.check(file)
         }
         browserAccess = access
+        fullDiskAccess = FullDiskAccess.isGranted()
         opensAtLogin = SMAppService.mainApp.status == .enabled
         refreshCatalog()
     }
