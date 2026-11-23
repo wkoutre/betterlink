@@ -1,0 +1,27 @@
+# Update PRs for what betterlink pins by hand: the actions (pinned to commits),
+# Sparkle (Package.swift and Package.resolved) and the command's packages
+# (cli/bun.lock). Bun itself is pinned in the workflows and checked by
+# scripts/check-bun.sh; update those together.
+#
+# cooldown: a new upstream release waits a week before its PR, so a bad or
+# hijacked release has time to be caught. Security updates don't wait.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  - package-ecosystem: swift
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+  - package-ecosystem: bun
+    directory: /cli
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

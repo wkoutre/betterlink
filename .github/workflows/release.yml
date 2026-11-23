@@ -71,6 +71,7 @@ jobs:
         with:
           bun-version: 1.4.4
           no-cache: true # a release build must not restore a cache others can write
+      - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
       - run: make test
       - run: make test-cli
       - run: ./scripts/release.sh
@@ -107,6 +108,7 @@ jobs:
         with:
           bun-version: 1.4.4
           no-cache: true
+      - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
       - run: make test
       - run: make test-cli
 
@@ -180,6 +182,7 @@ jobs:
         with:
           bun-version: 1.4.4
           no-cache: true # a release build must not restore a cache others can write
+      - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
 
       - name: Check the version matches Info.plist
         env:

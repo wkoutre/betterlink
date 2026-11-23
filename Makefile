@@ -43,7 +43,9 @@ icon:
 	iconutil -c icns .build/AppIcon.iconset -o .build/AppIcon.icns
 
 build: fetch icon cli
-	swift build -c release
+	# Only the versions Package.resolved pins (Sparkle, by commit): a tag moved
+	# upstream fails the build instead of being built in.
+	swift build -c release --only-use-versions-from-resolved-file
 	rm -rf $(APP)
 	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Helpers $(CONTENTS)/Resources/typescript/lib
 	cp .build/release/Betterlink $(CONTENTS)/MacOS/Betterlink
