@@ -41,7 +41,7 @@ To bring in the profiles of the browsers you already have, run this once:
 
 Then open **Permissions** in the window:
 - **Default browser** (required): click **Make Default Browser**.
-- **Browser data** (optional): lets betterlink read each browser's profile list by itself. macOS calls this Full Disk Access; **Open Privacy Settings** goes straight to it. The page shows, per browser, whether its profiles are readable.
+- **Browser data** (optional): lets betterlink read each browser's profile list by itself. macOS calls this Full Disk Access; **Open Privacy Settings** goes straight to it. The page shows, per browser, whether its profiles are readable and, if not, why. Chrome and Brave usually need no grant at all; if a browser shows **Blocked** with Full Disk Access on, something else on the Mac refuses the read (often a work Mac's security software), so add its profiles by hand.
 - **Open at login** (optional).
 
 ### Updates

@@ -277,7 +277,7 @@ struct ProfilesPage: View {
                 EmptyView()
             } footer: {
                 HStack {
-                    Text(model.browserAccess.values.contains(.allowed)
+                    Text(model.browserAccess.values.contains(.readable)
                          ? "betterlink keeps this list in step with your browsers."
                          : "Without browser data access, add profiles by hand.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
@@ -318,19 +318,26 @@ struct PermissionsPage: View {
                     Button("Open Privacy Settings") { model.openFullDiskAccessSettings() }
                 }
                 ForEach(model.browsers.filter { $0.family != .plain }) { b in
-                    HStack {
-                        Text(b.name).foregroundStyle(DS.Palette.textSecondary)
-                        Spacer()
-                        switch model.browserAccess[b.bundleId] {
-                        case .allowed: StatusBadge(text: "Readable", kind: .success, symbol: "checkmark")
-                        case .denied: StatusBadge(text: "Not allowed", kind: .warning)
-                        case .noProfiles, nil: StatusBadge(text: "No profiles yet", kind: .neutral)
+                    let access = model.browserAccess[b.bundleId] ?? .missing
+                    VStack(alignment: .leading, spacing: 3) {
+                        HStack {
+                            Text(b.name).foregroundStyle(DS.Palette.textSecondary)
+                            Spacer()
+                            switch access {
+                            case .readable: StatusBadge(text: access.badge(fullDiskAccess: model.fullDiskAccess), kind: .success, symbol: "checkmark")
+                            case .missing: StatusBadge(text: access.badge(fullDiskAccess: model.fullDiskAccess), kind: .neutral)
+                            default: StatusBadge(text: access.badge(fullDiskAccess: model.fullDiskAccess), kind: .warning)
+                            }
+                        }
+                        if let why = access.explanation(browser: b.name, fullDiskAccess: model.fullDiskAccess) {
+                            Text(why).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                     }
                     .padding(.leading, DS.Space.space4)
                 }
             } footer: {
-                Text("After allowing it in System Settings, come back here; betterlink checks again when the window is active.")
+                Text(fullDiskAccessNote)
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
             }
             DSSection {
@@ -351,9 +358,20 @@ struct PermissionsPage: View {
 
     private var browserDataBadge: StatusBadge {
         let states = model.browsers.filter { $0.family != .plain }.compactMap { model.browserAccess[$0.bundleId] }
-        if states.contains(.denied) { return StatusBadge(text: "Not allowed", kind: .warning) }
-        if states.contains(.allowed) { return StatusBadge(text: "Allowed", kind: .success, symbol: "checkmark") }
+        if let bad = states.first(where: { $0 != .readable && $0 != .missing }) {
+            return StatusBadge(text: bad.badge(fullDiskAccess: model.fullDiskAccess), kind: .warning)
+        }
+        if states.contains(.readable) { return StatusBadge(text: "Allowed", kind: .success, symbol: "checkmark") }
         return StatusBadge(text: "Optional", kind: .neutral)
+    }
+
+    private var fullDiskAccessNote: String {
+        let fda = switch model.fullDiskAccess {
+        case true?: "Full Disk Access: on."
+        case false?: "Full Disk Access: off."
+        case nil: "Full Disk Access: unknown."
+        }
+        return fda + " After changing it in System Settings, come back here; betterlink checks again when the window is active."
     }
 }
 
