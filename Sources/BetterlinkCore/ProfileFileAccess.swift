@@ -67,19 +67,38 @@ public enum ProfileFileAccess: Equatable, Sendable {
 }
 
 /// Whether this process has Full Disk Access.
+///
+/// macOS has no API for this, so betterlink tries files that only a process
+/// with Full Disk Access may open. One file alone proved unreliable: on a work
+/// Mac with the grant on, the user's TCC database gave no clear answer, so the
+/// Permissions page said "unknown". Several probes, in different protected
+/// places, make a clear answer much more likely.
 public enum FullDiskAccess {
-    /// The user's TCC database: only a process with Full Disk Access may open it.
-    public static func probeFile(home: URL = FileManager.default.homeDirectoryForCurrentUser) -> URL {
-        home.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db")
+    /// Files only a process with Full Disk Access may open, most telling first.
+    /// Mail and Messages stores are left out on purpose: a work Mac's security
+    /// software may flag any app that opens them.
+    public static func probeFiles(home: URL = FileManager.default.homeDirectoryForCurrentUser,
+                                  root: URL = URL(fileURLWithPath: "/")) -> [URL] {
+        let lib = home.appendingPathComponent("Library")
+        return [
+            lib.appendingPathComponent("Application Support/com.apple.TCC/TCC.db"),
+            root.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db"),
+            lib.appendingPathComponent("Safari/Bookmarks.plist"),
+            lib.appendingPathComponent("Safari/CloudTabs.db"),
+        ]
     }
 
-    /// True or false by opening the probe file; nil when it can't tell (no
-    /// probe file, or an unexpected error).
-    public static func isGranted(probe: URL = probeFile()) -> Bool? {
-        switch ProfileFileAccess.check(probe) {
-        case .readable: return true
-        case .blocked: return false
-        case .missing, .filePermissions, .failed: return nil
-        }
+    /// True when any probe opens (the grant is on); false when none opens and
+    /// at least one is refused by the system; nil when none tells (all
+    /// missing, or failing for unrelated reasons).
+    public static func isGranted(probes: [URL] = probeFiles()) -> Bool? {
+        verdict(probes.map(ProfileFileAccess.check))
+    }
+
+    /// The answer from each probe's result: one readable file settles it.
+    public static func verdict(_ results: [ProfileFileAccess]) -> Bool? {
+        if results.contains(.readable) { return true }
+        if results.contains(.blocked) { return false }
+        return nil
     }
 }

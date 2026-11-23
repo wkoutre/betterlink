@@ -65,14 +65,27 @@ import Testing
                 == "Couldn't read Brave's profiles: Input/output error.")
     }
 
-    @Test func fullDiskAccessProbe() throws {
-        let home = try tempHome()
-        let probe = FullDiskAccess.probeFile(home: home)
-        #expect(probe.path.hasSuffix("Library/Application Support/com.apple.TCC/TCC.db"))
-        #expect(FullDiskAccess.isGranted(probe: probe) == nil)
-        try FileManager.default.createDirectory(at: probe.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("x".utf8).write(to: probe)
-        #expect(FullDiskAccess.isGranted(probe: probe) == true)
+    @Test func fullDiskAccessProbes() throws {
+        let home = try tempHome(), root = try tempHome()
+        let probes = FullDiskAccess.probeFiles(home: home, root: root)
+        #expect(probes.first?.path.hasSuffix("Library/Application Support/com.apple.TCC/TCC.db") == true)
+        #expect(probes.contains { $0.path == root.appendingPathComponent("Library/Application Support/com.apple.TCC/TCC.db").path })
+        #expect(probes.count >= 4)
+        // Nothing there: can't tell.
+        #expect(FullDiskAccess.isGranted(probes: probes) == nil)
+        // The reported case: the user's TCC.db gives no answer, but a later
+        // probe opens, so the grant is on.
+        let safari = probes.first { $0.lastPathComponent == "Bookmarks.plist" }!
+        try FileManager.default.createDirectory(at: safari.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: safari)
+        #expect(FullDiskAccess.isGranted(probes: probes) == true)
+    }
+
+    @Test func fullDiskAccessVerdict() {
+        #expect(FullDiskAccess.verdict([.missing, .blocked, .readable]) == true)
+        #expect(FullDiskAccess.verdict([.missing, .blocked, .filePermissions]) == false)
+        #expect(FullDiskAccess.verdict([.missing, .filePermissions, .failed("x")]) == nil)
+        #expect(FullDiskAccess.verdict([]) == nil)
     }
 
     @Test func importFailureSaysWhyPerBrowser() throws {
