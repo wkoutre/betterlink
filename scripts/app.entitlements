@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- betterlink runs config.ts and the bundled TypeScript compiler in-process
+     with JavaScriptCore. Under the hardened runtime, JavaScriptCore only JITs
+     with this entitlement; without it, it falls back to the interpreter, and a
+     heavier config.ts can hit its 0.25 s per-link limit.
+     apple-events: Dia allows one process only, so betterlink opens a link in
+     a Dia profile by switching Dia's space with AppleScript (DiaSpace.swift).
+     Under the hardened runtime, Apple Events need this entitlement. -->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.automation.apple-events</key>
+	<true/>
+</dict>
+</plist>

@@ -1,0 +1,234 @@
+import AppKit
+import BetterlinkCore
+import ServiceManagement
+
+/// `Betterlink agent <command> ['<json input>']`: the machine interface the
+/// betterlink CLI (Contents/Helpers/betterlink) calls. Prints one JSON
+/// envelope, `{"version":1,"ok":…}`, and exits 0 when ok, 1 otherwise.
+///
+/// The core commands live in BetterlinkCore's `Agent`. The few that need the
+/// app itself (default browser, open at login, settings folder) are here.
+/// After a change, a running betterlink is told to re-read its files; the
+/// notice carries no data, so another process can at most make it re-read.
+enum AgentCommand {
+    static let reloadNotice = Notification.Name("com.wkoutre.betterlink.reload")
+
+    static let appCommands = [
+        "default-browser.get", "default-browser.set",
+        "login.get", "login.set",
+        "folder.get", "folder.set",
+        "menu-bar.get", "menu-bar.set",
+        "updates.get", "updates.set",
+        "toast.get", "toast.set",
+    ]
+
+    static func run(_ args: [String]) -> Int32 {
+        guard let command = args.first else {
+            return emit(AgentResponseJSON.failure("Usage: Betterlink agent <command> ['<json>']. Commands: \((Agent.commands + appCommands).joined(separator: ", "))."))
+        }
+        var input: [String: Any] = [:]
+        if args.count > 1 {
+            guard let data = args[1].data(using: .utf8),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+            else { return emit(AgentResponseJSON.failure("The input must be a JSON object, such as '{\"link\":\"https://example.com\"}'.")) }
+            input = obj
+        }
+        let folder = SettingsFolder.resolve()
+        let installed = Browser.known.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
+
+        if appCommands.contains(command) {
+            let out = runAppCommand(command, input, folder: folder)
+            if changes(command) && isOK(out) { notifyApp() }
+            return emit(out)
+        }
+        let ts = (Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("typescript")
+        let needsCompiler = command == "config.check" || command == "test"
+        let compiler = needsCompiler ? try? TypeScriptCompiler(typescriptJS: ts.appendingPathComponent("typescript.js"),
+                                                               libDirectory: ts.appendingPathComponent("lib")) : nil
+        guard Agent.commands.contains(command) else {
+            return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \((Agent.commands + appCommands).joined(separator: ", "))."))
+        }
+        let response = Agent.run(command, input: input, env: AgentEnvironment(folder: folder, installed: installed, compiler: compiler))
+        let out = response.json()
+        if changes(command) && response.ok { notifyApp() }
+        return emit(out)
+    }
+
+    private static func changes(_ command: String) -> Bool {
+        !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check"].contains(command)
+    }
+
+    private static func isOK(_ json: Data) -> Bool {
+        ((try? JSONSerialization.jsonObject(with: json)) as? [String: Any])?["ok"] as? Bool == true
+    }
+
+    private static func emit(_ json: Data) -> Int32 {
+        FileHandle.standardOutput.write(json)
+        FileHandle.standardOutput.write(Data("\n".utf8))
+        return isOK(json) ? 0 : 1
+    }
+
+    /// Tells a running betterlink to re-read rules.json, config.ts and its
+    /// settings folder. Carries nothing.
+    static func notifyApp() {
+        DistributedNotificationCenter.default().postNotificationName(reloadNotice, object: nil, userInfo: nil,
+                                                                    deliverImmediately: true)
+    }
+
+    private static func runAppCommand(_ command: String, _ input: [String: Any], folder: SettingsFolder) -> Data {
+        switch command {
+        case "default-browser.get":
+            return AgentResponseJSON.success(["isDefault": isDefaultBrowser()])
+        case "default-browser.set":
+            if isDefaultBrowser() { return AgentResponseJSON.success(["isDefault": true]) }
+            // The same three registrations as the window's button. macOS
+            // asks the user to confirm once.
+            let app = Bundle.main.bundleURL
+            for register in [
+                { (done: @escaping @Sendable ((any Error)?) -> Void) in NSWorkspace.shared.setDefaultApplication(at: app, toOpenURLsWithScheme: "http", completion: done) },
+                { done in NSWorkspace.shared.setDefaultApplication(at: app, toOpenURLsWithScheme: "https", completion: done) },
+                { done in NSWorkspace.shared.setDefaultApplication(at: app, toOpen: .html, completion: done) },
+            ] as [(@escaping @Sendable ((any Error)?) -> Void) -> Void] {
+                waitWhileRunLoopRuns(seconds: 120, register)
+            }
+            return AgentResponseJSON.success([
+                "isDefault": isDefaultBrowser(),
+                "note": "macOS asks the user to confirm; until they do, betterlink is not the default.",
+            ])
+        case "login.get":
+            let st = SMAppService.mainApp.status
+            let word = switch st {
+            case .enabled: "enabled"
+            case .requiresApproval: "requiresApproval"
+            case .notRegistered: "notRegistered"
+            case .notFound: "notFound"
+            @unknown default: "unknown"
+            }
+            return AgentResponseJSON.success(["enabled": st == .enabled, "status": word])
+        case "login.set":
+            guard let n = input["enabled"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
+                return AgentResponseJSON.failure("Give enabled: true or false.")
+            }
+            let on = n.boolValue
+            do {
+                if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
+                return AgentResponseJSON.success(["enabled": SMAppService.mainApp.status == .enabled])
+            } catch {
+                return AgentResponseJSON.failure("Couldn't change Open at login: \(error.localizedDescription). Use betterlink's Permissions page.")
+            }
+        case "menu-bar.get":
+            return AgentResponseJSON.success(["shown": MenuBarIcon.isShown(in: MenuBarIcon.defaults())])
+        case "menu-bar.set":
+            guard let n = input["shown"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
+                return AgentResponseJSON.failure("Give shown: true or false.")
+            }
+            let d = MenuBarIcon.defaults()
+            MenuBarIcon.setShown(n.boolValue, in: d)
+            d.synchronize()  // the running app reads it as soon as it is notified
+            return AgentResponseJSON.success([
+                "shown": n.boolValue,
+                "note": "This Mac only. With the icon hidden, open betterlink from Spotlight or Finder to see its window.",
+            ])
+        case "updates.get":
+            return AgentResponseJSON.success([
+                "automatic": UpdateChecks.isAutomatic(in: UpdateChecks.defaults()),
+                "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+                "updaterInThisBuild": UpdateChecks.updaterCanRun(info: Bundle.main.infoDictionary ?? [:]),
+            ])
+        case "updates.set":
+            guard let n = input["automatic"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
+                return AgentResponseJSON.failure("Give automatic: true or false.")
+            }
+            let d = UpdateChecks.defaults()
+            UpdateChecks.setAutomatic(n.boolValue, in: d)
+            d.synchronize()
+            return AgentResponseJSON.success(["automatic": n.boolValue])
+        case "toast.get":
+            let d = MenuBarIcon.defaults()
+            return AgentResponseJSON.success(["shown": LinkToast.isShown(in: d), "position": LinkToast.position(in: d).rawValue])
+        case "toast.set":
+            let shown = input["shown"]
+            let position = input["position"]
+            if shown == nil && position == nil { return AgentResponseJSON.failure("Give shown (true or false), position (top or bottom), or both.") }
+            var newShown: Bool?
+            if let shown {
+                guard let n = shown as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
+                    return AgentResponseJSON.failure("Give shown: true or false.")
+                }
+                newShown = n.boolValue
+            }
+            var newPosition: LinkToast.Position?
+            if let position {
+                guard let s = position as? String, let p = LinkToast.Position(rawValue: s) else {
+                    return AgentResponseJSON.failure("Give position: top or bottom.")
+                }
+                newPosition = p
+            }
+            let d = MenuBarIcon.defaults()
+            if let newShown { LinkToast.setShown(newShown, in: d) }
+            if let newPosition { LinkToast.setPosition(newPosition, in: d) }
+            d.synchronize()
+            return AgentResponseJSON.success(["shown": LinkToast.isShown(in: d), "position": LinkToast.position(in: d).rawValue,
+                                              "note": "This Mac only."])
+        case "folder.get":
+            return AgentResponseJSON.success(["path": folder.directory.path,
+                                              "isStandard": folder.directory == SettingsFolder.defaultDirectory])
+        case "folder.set":
+            if !(ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty {
+                return AgentResponseJSON.failure("BETTERLINK_HOME is set, so the settings folder can't be changed.")
+            }
+            let target: SettingsFolder
+            if let path = input["path"] as? String, !path.isEmpty {
+                target = SettingsFolder(directory: URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true))
+            } else if let n = input["standard"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID(), n.boolValue {
+                target = SettingsFolder(directory: SettingsFolder.defaultDirectory)
+            } else {
+                return AgentResponseJSON.failure("Give path (a folder) or standard: true.")
+            }
+            do {
+                try folder.copySettings(to: target)
+                if target.directory == SettingsFolder.defaultDirectory {
+                    UserDefaults.standard.removeObject(forKey: SettingsFolder.defaultsKey)
+                } else {
+                    UserDefaults.standard.set(target.directory.path, forKey: SettingsFolder.defaultsKey)
+                }
+                UserDefaults.standard.synchronize()  // the running app reads it as soon as it is notified
+                return AgentResponseJSON.success(["path": target.directory.path])
+            } catch {
+                return AgentResponseJSON.failure("Didn't switch folders: \(error)")
+            }
+        default:
+            return AgentResponseJSON.failure("Unknown command \(command).")
+        }
+    }
+
+    /// betterlink is the default browser only if it opens both http and https links.
+    static func isDefaultBrowser() -> Bool {
+        let me = Bundle.main.bundleURL.standardizedFileURL
+        return ["http://example.com", "https://example.com"].allSatisfy {
+            NSWorkspace.shared.urlForApplication(toOpen: URL(string: $0)!)?.standardizedFileURL == me
+        }
+    }
+
+    /// Starts an asynchronous call and keeps the run loop turning until it
+    /// finishes, so a completion delivered on the main queue still arrives.
+    private static func waitWhileRunLoopRuns(seconds: TimeInterval,
+                                             _ start: (@escaping @Sendable ((any Error)?) -> Void) -> Void) {
+        final class Flag: @unchecked Sendable { var done = false }
+        let flag = Flag()
+        start { _ in DispatchQueue.main.async { flag.done = true } }
+        let deadline = Date().addingTimeInterval(seconds)
+        while !flag.done && Date() < deadline {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.1))
+        }
+    }
+}
+
+/// The same envelope as BetterlinkCore's AgentResponse, for the app's own commands.
+enum AgentResponseJSON {
+    static func success(_ data: [String: Any]) -> Data { encode(["version": 1, "ok": true, "data": data]) }
+    static func failure(_ message: String) -> Data { encode(["version": 1, "ok": false, "error": message]) }
+    private static func encode(_ obj: [String: Any]) -> Data {
+        (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data()
+    }
+}

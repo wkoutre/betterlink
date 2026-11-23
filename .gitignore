@@ -1,0 +1,8 @@
+.build/
+/dist/
+.DS_Store
+/TASKS*.md
+/Vendor/
+
+# The CLI's dependencies
+/cli/node_modules/

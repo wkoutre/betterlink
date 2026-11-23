@@ -1,0 +1,38 @@
+name: Bug report
+description: A link opened in the wrong place, or something in betterlink broke.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: For security problems, use the Security tab's private report instead.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: decision
+    attributes:
+      label: Routing decision
+      description: For a link that opened in the wrong place, the output of `betterlink test <link>`. Replace anything private.
+      render: text
+  - type: input
+    id: version
+    attributes:
+      label: betterlink version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version
+    validations:
+      required: true
+  - type: input
+    id: browsers
+    attributes:
+      label: Browsers involved
+      placeholder: "Chrome 142, Firefox 145"

@@ -1,0 +1,369 @@
+{
+ "generator": "node v22.23.4",
+ "vectors": [
+  {
+   "input": "https://acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "https://app.acme.com/swap?chain=base#x",
+   "ok": true,
+   "protocol": "https:",
+   "host": "app.acme.com",
+   "port": "",
+   "href": "https://app.acme.com/swap?chain=base#x"
+  },
+  {
+   "input": "HTTPS://APP.ACME.COM/Swap",
+   "ok": true,
+   "protocol": "https:",
+   "host": "app.acme.com",
+   "port": "",
+   "href": "https://app.acme.com/Swap"
+  },
+  {
+   "input": "https://evil.com\\@acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/@acme.com/"
+  },
+  {
+   "input": "https://evil.com\\@app.acme.com/x",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/@app.acme.com/x"
+  },
+  {
+   "input": "https:\\\\evil.com\\acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/acme.com"
+  },
+  {
+   "input": "https:evil.com/acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/acme.com"
+  },
+  {
+   "input": "https:/evil.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/"
+  },
+  {
+   "input": "https:///evil.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/"
+  },
+  {
+   "input": "https://acme.com@evil.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://acme.com@evil.com/"
+  },
+  {
+   "input": "https://user:p@ss@evil.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://user:p%40ss@evil.com/"
+  },
+  {
+   "input": "https://acme.com:pw@evil.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://acme.com:pw@evil.com/"
+  },
+  {
+   "input": "https://evil.com#@acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/#@acme.com"
+  },
+  {
+   "input": "https://evil.com?x=@acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/?x=@acme.com"
+  },
+  {
+   "input": "https://evil.com/@acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/@acme.com"
+  },
+  {
+   "input": "https://ev\til.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/"
+  },
+  {
+   "input": "https://ac\nme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "  https://acme.com/  ",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "\u0001https://acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "https://acme%2ecom/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "https://app%2Eacme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "app.acme.com",
+   "port": "",
+   "href": "https://app.acme.com/"
+  },
+  {
+   "input": "https://acme.com./",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com.",
+   "port": "",
+   "href": "https://acme.com./"
+  },
+  {
+   "input": "https://ACME.com:443/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "https://acme.com:8443/x",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "8443",
+   "href": "https://acme.com:8443/x"
+  },
+  {
+   "input": "http://0x7f.1/",
+   "ok": true,
+   "protocol": "http:",
+   "host": "127.0.0.1",
+   "port": "",
+   "href": "http://127.0.0.1/"
+  },
+  {
+   "input": "http://127.0.0.1/",
+   "ok": true,
+   "protocol": "http:",
+   "host": "127.0.0.1",
+   "port": "",
+   "href": "http://127.0.0.1/"
+  },
+  {
+   "input": "http://[::1]:8080/",
+   "ok": true,
+   "protocol": "http:",
+   "host": "[::1]",
+   "port": "8080",
+   "href": "http://[::1]:8080/"
+  },
+  {
+   "input": "https://acmе.org/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "xn--acm-tdd.org",
+   "port": "",
+   "href": "https://xn--acm-tdd.org/"
+  },
+  {
+   "input": "https://xn--acm-4ve.com/",
+   "ok": false
+  },
+  {
+   "input": "https://evil-acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil-acme.com",
+   "port": "",
+   "href": "https://evil-acme.com/"
+  },
+  {
+   "input": "https://acme.com.evil.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com.evil.com",
+   "port": "",
+   "href": "https://acme.com.evil.com/"
+  },
+  {
+   "input": "https://app.acme.com.evil.com/swap",
+   "ok": true,
+   "protocol": "https:",
+   "host": "app.acme.com.evil.com",
+   "port": "",
+   "href": "https://app.acme.com.evil.com/swap"
+  },
+  {
+   "input": "https://evil.com/?q=acme.com",
+   "ok": true,
+   "protocol": "https:",
+   "host": "evil.com",
+   "port": "",
+   "href": "https://evil.com/?q=acme.com"
+  },
+  {
+   "input": "https://ex ample.com/",
+   "ok": false
+  },
+  {
+   "input": "https://exa%20mple.com/",
+   "ok": false
+  },
+  {
+   "input": "https://evil.com%2f@acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://evil.com%2f@acme.com/"
+  },
+  {
+   "input": "https://evil.com%5c@acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://evil.com%5c@acme.com/"
+  },
+  {
+   "input": "https://acme.com\\path\\to?q=\\x#\\y",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/path/to?q=\\x#\\y"
+  },
+  {
+   "input": "http://localhost:3000/",
+   "ok": true,
+   "protocol": "http:",
+   "host": "localhost",
+   "port": "3000",
+   "href": "http://localhost:3000/"
+  },
+  {
+   "input": "https://a.b.c.acme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "a.b.c.acme.com",
+   "port": "",
+   "href": "https://a.b.c.acme.com/"
+  },
+  {
+   "input": "https://",
+   "ok": false
+  },
+  {
+   "input": "https:",
+   "ok": false
+  },
+  {
+   "input": "notaurl",
+   "ok": false
+  },
+  {
+   "input": "ftp://acme.com/",
+   "ok": true,
+   "protocol": "ftp:",
+   "host": "acme.com",
+   "port": "",
+   "href": "ftp://acme.com/"
+  },
+  {
+   "input": "javascript:alert(1)",
+   "ok": true,
+   "protocol": "javascript:",
+   "host": "",
+   "port": "",
+   "href": "javascript:alert(1)"
+  },
+  {
+   "input": "file:///Users/me/page.html",
+   "ok": true,
+   "protocol": "file:",
+   "host": "",
+   "port": "",
+   "href": "file:///Users/me/page.html"
+  },
+  {
+   "input": "https://xn--/",
+   "ok": false
+  },
+  {
+   "input": "https://%E2%80%8Bacme.com/",
+   "ok": true,
+   "protocol": "https:",
+   "host": "acme.com",
+   "port": "",
+   "href": "https://acme.com/"
+  },
+  {
+   "input": "https://acme.com%00.evil.com/",
+   "ok": false
+  },
+  {
+   "input": "https://[acme.com]/",
+   "ok": false
+  }
+ ]
+}
