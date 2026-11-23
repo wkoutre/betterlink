@@ -18,9 +18,10 @@ Derived from [Finch](https://github.com/expelledboy/finch) (MIT). It fixes three
 
 Requires macOS 15 or later on Apple silicon.
 
-With Homebrew:
+With Homebrew (it asks you to trust a tap before it installs from it):
 
 ```sh
+brew trust wkoutre/tap
 brew install --cask wkoutre/tap/betterlink
 ```
 
