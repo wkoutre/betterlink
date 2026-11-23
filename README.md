@@ -59,7 +59,7 @@ Rules and the fallback each name a browser and, where it has them, a profile.
 | Family | Browsers | How a profile is chosen | Tested |
 |---|---|---|---|
 | Chromium | Brave, Chrome (also Beta, Canary), Chromium, Edge, Comet, Vivaldi, Helium, Opera, Opera GX, Ecosia, Wavebox, Yandex, Brave Nightly | `--profile-directory=<folder> -- <link>` on a fresh process, which a running browser hands to itself | Brave, by hand. The rest are expected to work. |
-| Dia | Dia | Dia allows one copy of itself and calls its profiles spaces, so betterlink switches Dia's front window to the space with the profile's name (AppleScript `focus profile`), then hands Dia the link. macOS asks once to let betterlink control Dia. With no space of that name, or without that permission, the link opens in the current space and the Log says why. | By hand (Dia 1.58). |
+| Dia | Dia | Dia allows one copy of itself and calls its profiles spaces, so betterlink switches Dia's front window to the space with the profile's name (AppleScript `focus profile`), then hands Dia the link. macOS asks once to let betterlink control Dia. With no space of that name, or without that permission, the link opens in your fallback profile instead, so it never lands in another Dia profile, and the Log says why. Only a link already headed for a fallback that is itself a Dia space still opens in Dia's current space. | By hand (Dia 1.58). |
 | Firefox | Firefox, Firefox Developer Edition, Zen | `-P <name> <link>` | Expected to work, not yet tested. |
 | No profiles | Safari, Arc | the link is handed to the browser the ordinary way | Expected to work. |
 

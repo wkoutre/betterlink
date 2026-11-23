@@ -83,4 +83,83 @@ import Testing
         #expect(O.noSuchSpace.note(space: "Work")?.contains("current space") == true)
         #expect(O.notAllowed.note(space: "Work")?.contains("Automation") == true)
     }
+
+    /// Security audit, Nov 2026 (M7): when Dia can't show the link's space it
+    /// would open the link in whichever space is in front, so a link ruled
+    /// into one profile could land in another. It goes to the fallback instead.
+    @Test func onlyFocusedCountsAsSwitched() {
+        typealias O = DiaSpace.Outcome
+        #expect(O.focused.switched)
+        for o in [O.noSuchSpace, .noWindow, .notAllowed, .failed("boom")] { #expect(!o.switched) }
+    }
+
+    @Test func aFailedSwitchSendsTheLinkToTheFallbackProfile() throws {
+        let chrome = BrowserProfile(browser: "com.google.Chrome", directory: "Default", name: "Personal", color: nil)
+        let catalog = ProfileCatalog(profiles: [work, chrome])
+        let plan = try LaunchPlan.make(profile: work, argument: "https://a.com/x?y=1", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        let other = try #require(plan.afterFailedSwitch(fallback: chrome.ref, catalog: catalog, ownBundleId: "dev.betterlink"))
+        #expect(other.bundleId == "com.google.Chrome")
+        #expect(other.mode == .commandLine(["--profile-directory=Default", "--", "https://a.com/x?y=1"]))
+    }
+
+    /// The fallback is allowed even when it isn't a stored profile, as for any link.
+    @Test func theFallbackNeedNotBeStored() throws {
+        let catalog = ProfileCatalog(profiles: [work])
+        let plan = try LaunchPlan.make(profile: work, argument: "https://a.com/", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        let fallback = ProfileRef(browser: "com.google.Chrome", directory: "Default")
+        let other = try #require(plan.afterFailedSwitch(fallback: fallback, catalog: catalog, ownBundleId: "dev.betterlink"))
+        #expect(other.mode == .commandLine(["--profile-directory=Default", "--", "https://a.com/"]))
+    }
+
+    /// A link that was headed for the fallback has nowhere else to go.
+    @Test func noOtherPlaceWhenTheSpaceIsTheFallback() throws {
+        let catalog = ProfileCatalog(profiles: [work])
+        let plan = try LaunchPlan.make(profile: work, argument: "https://a.com/", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        #expect(plan.afterFailedSwitch(fallback: work.ref, catalog: catalog, ownBundleId: "dev.betterlink") == nil)
+    }
+
+    /// A fallback in another Dia space is a second switch, tried once.
+    @Test func aFallbackInAnotherDiaSpaceIsAnotherSwitch() throws {
+        let home = BrowserProfile(browser: dia, directory: "Default", name: "Home", color: nil)
+        let catalog = ProfileCatalog(profiles: [work, home])
+        let plan = try LaunchPlan.make(profile: work, argument: "https://a.com/", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        let other = try #require(plan.afterFailedSwitch(fallback: home.ref, catalog: catalog, ownBundleId: "dev.betterlink"))
+        #expect(other.mode == .switchSpace(name: "Home", link: "https://a.com/"))
+        #expect(other.afterFailedSwitch(fallback: home.ref, catalog: catalog, ownBundleId: "dev.betterlink") == nil)
+    }
+
+    @Test func onlyASpaceSwitchHasAFallbackPlan() throws {
+        let chrome = BrowserProfile(browser: "com.google.Chrome", directory: "Profile 2", name: "Work", color: nil)
+        let catalog = ProfileCatalog(profiles: [chrome, work])
+        let plan = try LaunchPlan.make(profile: chrome, argument: "https://a.com/", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        #expect(plan.afterFailedSwitch(fallback: work.ref, catalog: catalog, ownBundleId: "dev.betterlink") == nil)
+    }
+
+    /// betterlink as its own fallback would hand the link back to itself.
+    @Test func noFallbackPlanThatTargetsBetterlinkItself() throws {
+        let catalog = ProfileCatalog(profiles: [work])
+        let plan = try LaunchPlan.make(profile: work, argument: "https://a.com/", catalog: catalog,
+                                       ownBundleId: "dev.betterlink").get()
+        let own = ProfileRef(browser: "dev.betterlink", directory: "Default")
+        #expect(plan.afterFailedSwitch(fallback: own, catalog: catalog, ownBundleId: "dev.betterlink") == nil)
+    }
+
+    @Test func notesSayWhereTheLinkWent() {
+        typealias O = DiaSpace.Outcome
+        #expect(O.focused.note(space: "Work", openedIn: "Personal") == nil)
+        #expect(O.noSuchSpace.note(space: "Work", openedIn: "Personal")
+                == "Dia has no space named \"Work\", so the link opened in Personal instead.")
+        #expect(O.notAllowed.note(space: "Work", openedIn: "Personal")
+                == "betterlink isn't allowed to control Dia, so the link opened in Personal instead. Allow it in System Settings › Privacy & Security › Automation.")
+        #expect(O.failed("boom").note(space: "Work", openedIn: "Personal")
+                == "Couldn't switch Dia to \"Work\" (boom), so the link opened in Personal instead.")
+        // With nowhere else to send it, Dia still gets the link.
+        #expect(O.noWindow.note(space: "Work") == "Dia had no window to switch to \"Work\", so the link opened wherever Dia put it.")
+        #expect(O.failed("boom").note(space: "Work") == "Couldn't switch Dia to \"Work\" (boom), so the link opened in the current space.")
+    }
 }

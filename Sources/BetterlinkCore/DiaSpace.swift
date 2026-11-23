@@ -45,18 +45,27 @@ public enum DiaSpace {
         ["-e", script, "--", space]
     }
 
+    /// What the switch came to. Only `.focused` puts the link in the space it
+    /// was meant for. After anything else Dia would open it in whichever space
+    /// is in front, which may be another profile, so the link goes to the
+    /// fallback profile instead (`LaunchPlan.afterFailedSwitch`). It opens in
+    /// Dia's current space only when it was headed for the fallback already
+    /// and there is nowhere else to send it.
     public enum Outcome: Equatable, Sendable {
         /// The front window now shows the space.
         case focused
-        /// Dia has no space with that name, so the link opens in the current one.
+        /// Dia has no space with that name.
         case noSuchSpace
-        /// Dia showed no window in time, so the link opens wherever Dia puts it.
+        /// Dia showed no window in time.
         case noWindow
         /// macOS refused betterlink control of Dia (Privacy & Security ›
-        /// Automation), so the link opens in the current space.
+        /// Automation).
         case notAllowed
         /// osascript failed some other way; the message is its error text.
         case failed(String)
+
+        /// Whether Dia's front window shows the space the link is for.
+        public var switched: Bool { self == .focused }
 
         /// Reads osascript's exit status, standard output and standard error.
         public static func parse(status: Int32, output: String, error: String) -> Outcome {
@@ -75,14 +84,21 @@ public enum DiaSpace {
         }
 
         /// A line for the Log, or nil when the space was found.
-        public func note(space: String) -> String? {
+        /// - Parameter fallback: the name of the fallback profile the link
+        ///   opened in instead, or nil when it was handed to Dia anyway.
+        public func note(space: String, openedIn fallback: String? = nil) -> String? {
+            let why: String
             switch self {
             case .focused: return nil
-            case .noSuchSpace: return "Dia has no space named \"\(space)\", so the link opened in the current space."
-            case .noWindow: return "Dia had no window to switch to \"\(space)\", so the link opened wherever Dia put it."
-            case .notAllowed: return "betterlink isn't allowed to control Dia, so the link opened in the current space. Allow it in System Settings › Privacy & Security › Automation."
-            case .failed(let why): return "Couldn't switch Dia to \"\(space)\" (\(why)), so the link opened in the current space."
+            case .noSuchSpace: why = "Dia has no space named \"\(space)\""
+            case .noWindow: why = "Dia had no window to switch to \"\(space)\""
+            case .notAllowed: why = "betterlink isn't allowed to control Dia"
+            case .failed(let reason): why = "Couldn't switch Dia to \"\(space)\" (\(reason))"
             }
+            let allow = self == .notAllowed ? " Allow it in System Settings › Privacy & Security › Automation." : ""
+            if let fallback { return "\(why), so the link opened in \(fallback) instead.\(allow)" }
+            let place = self == .noWindow ? "wherever Dia put it" : "in the current space"
+            return "\(why), so the link opened \(place).\(allow)"
         }
     }
 }
