@@ -1,29 +1,64 @@
 name: release
-# A version tag (v0.3.0) builds, signs, notarizes and staples betterlink.app,
-# then opens a DRAFT GitHub Release with the zip, SHA256SUMS, the Homebrew
-# cask and the Sparkle feed (appcast.xml). Publishing the draft is a manual
-# step, and it is what makes installed copies offer the update.
+# Every merge to main ships a release, end to end:
+#   test     make test + make test-cli on the merged commit (no secrets)
+#   version  picks the version and tags it (no secrets, can push):
+#              - Info.plist's version has no tag yet (a PR set it, e.g. 0.4.0):
+#                release it as is, no bump commit
+#              - it is already tagged: bump the patch, commit "betterlink X.Y.Z"
+#                to main, tag that commit
+#   release  builds, signs, notarizes, staples, then PUBLISHES the GitHub
+#            Release (zip, SHA256SUMS, cask, appcast.xml). Publishing is what
+#            makes installed copies offer the update (their feed follows
+#            releases/latest).
+#   tap      copies the filled-in cask to wkoutre/homebrew-tap.
 #
-# Run it by hand (workflow_dispatch) for a dry run: it builds and zips
+# Why one workflow: a tag or commit pushed with GITHUB_TOKEN never starts
+# another workflow run. That is also what stops the bump commit from looping
+# back into this workflow (the actor check below is a second guard, for the
+# day someone swaps in a PAT or app token).
+#
+# Merges that touch only docs, tests, CI or the setup scripts don't release
+# (paths-ignore).
+# Release one anyway with Actions › release › Run workflow › publish.
+#
+# Run it by hand with publish unchecked for a dry run: it builds and zips
 # unsigned, never sees the signing secrets, and publishes nothing.
 #
-# The signing secrets live in the "release" environment, which should allow
-# only v* tags (Settings › Environments › release › Deployment branches and
-# tags), so no branch can run code with the Developer ID.
+# The signing secrets live in the "release" environment. It must allow the
+# main branch (Settings › Environments › release › Deployment branches and
+# tags), because these jobs run from main, not from a tag. Only people who
+# can push to main can reach it.
+#
+# A failed run: fix the cause, then "Re-run failed jobs". A rerun reuses the
+# version the first attempt tagged, so no version is skipped.
 on:
   push:
-    tags: ["v*"]
+    branches: ["main"]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE"
+      - ".github/**"
+      - "Tests/**"
+      - "cli/test/**"
+      - "scripts/set-release-secrets.sh" # setup helpers, not in the app
+      - "scripts/set-version.sh"
   workflow_dispatch:
+    inputs:
+      publish:
+        description: "Publish a real release (unchecked: unsigned dry run, publishes nothing)"
+        type: boolean
+        default: false
 
 permissions: {}
 
+# One release at a time; a merge during a release waits for it.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release
   cancel-in-progress: false
 
 jobs:
   dry-run:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && !inputs.publish
     runs-on: macos-latest
     timeout-minutes: 45
     permissions:
@@ -48,34 +83,113 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  test:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      github.actor != 'github-actions[bot]' &&
+      (github.event_name == 'push' || inputs.publish)
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      # main's tip, not the pushed commit: a merge that queued behind an
+      # earlier release must see that release's bump commit.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          persist-credentials: false
+      - id: sha
+        run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.4
+          no-cache: true
+      - run: make test
+      - run: make test-cli
+
+  version:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write # push the bump commit and the tag
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      sha: ${{ steps.version.outputs.sha }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.test.outputs.sha }} # exactly what the tests passed on
+          fetch-depth: 0 # tags, and main's history for the retry below
+          persist-credentials: true # zizmor: ignore[artipacked] this job pushes the bump commit and tag
+
+      - name: Pick the version, commit, tag, push
+        id: version
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          current=$(./scripts/set-version.sh current)
+
+          # Already tagged (a queued run whose changes an earlier release
+          # already shipped, or a rerun): release that tag again, which is a
+          # no-op once it's published.
+          for tag in $(git tag --points-at HEAD -l 'v*'); do
+            echo "HEAD is already $tag; nothing new to version."
+            echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          done
+
+          if git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
+            version=$(./scripts/set-version.sh patch)
+            git add Info.plist
+            git commit -m "betterlink $version"
+            git tag "v$version"
+            # Someone may have merged docs while this ran; replay on top, retry once.
+            if ! git push --atomic origin HEAD:main "v$version"; then
+              git pull --rebase origin main
+              git tag -f "v$version"
+              git push --atomic origin HEAD:main "v$version"
+            fi
+            echo "Bumped $current -> $version"
+          else
+            version=$current
+            git tag "v$version"
+            git push origin "v$version"
+            echo "Info.plist's $version had no tag yet; releasing it as is."
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
   release:
-    if: github.event_name == 'push'
+    needs: version
     runs-on: macos-latest
     timeout-minutes: 60
     environment: release
     permissions:
-      contents: write # create the draft release
+      contents: write # create and publish the release
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
           no-cache: true # a release build must not restore a cache others can write
 
-      - name: Check the tag matches Info.plist
+      - name: Check the version matches Info.plist
         env:
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           version=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Info.plist)
-          if [ "$TAG" != "v$version" ]; then
-            echo "Tag $TAG doesn't match Info.plist version $version." >&2
+          if [ "$VERSION" != "$version" ]; then
+            echo "Release $VERSION doesn't match Info.plist version $version." >&2
             exit 1
           fi
-
-      - run: make test
-      - run: make test-cli
 
       - name: Import the Developer ID certificate
         env:
@@ -115,17 +229,70 @@ jobs:
           rm -f "$RUNNER_TEMP/notary.p8" "$RUNNER_TEMP/cert.p12" "$RUNNER_TEMP/update.key"
           security delete-keychain "$RUNNER_TEMP/release.keychain-db" 2>/dev/null || true
 
-      - name: Draft the GitHub Release
+      - name: Publish the GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
-          version="${TAG#v}"
-          files="dist/betterlink-$version.zip dist/betterlink-macos.zip dist/SHA256SUMS dist/betterlink.rb dist/appcast.xml"
-          # A re-run after the draft exists replaces its files instead of failing.
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber $files
+          tag="v$VERSION"
+          files="dist/betterlink-$VERSION.zip dist/betterlink-macos.zip dist/SHA256SUMS dist/betterlink.rb dist/appcast.xml"
+          # Upload everything to a draft first, then publish in one step, so
+          # the appcast never goes live before the zip it points at.
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null | grep -qx false; then
+            echo "$tag is already published; nothing to do."
+            exit 0
+          elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber $files
           else
-            gh release create "$TAG" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-              --title "betterlink $version" --generate-notes $files
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+              --title "betterlink $VERSION" --generate-notes $files
           fi
+          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          {
+            echo "### Published betterlink $VERSION"
+            echo '```'
+            cat dist/SHA256SUMS
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  tap:
+    needs: [version, release]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # Holds HOMEBREW_TAP_DEPLOY_KEY: a deploy key with write access to
+    # wkoutre/homebrew-tap only (GITHUB_TOKEN can't write another repo). Its
+    # own environment, so a required reviewer on release isn't asked twice.
+    environment: homebrew-tap
+    permissions:
+      contents: read
+    steps:
+      - name: Update Casks/betterlink.rb in wkoutre/homebrew-tap
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+          DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
+        run: |
+          if [ -z "$DEPLOY_KEY" ]; then
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY isn't set in the homebrew-tap environment; copy betterlink.rb from the v$VERSION release into the tap by hand."
+            exit 0
+          fi
+          (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/tap_key")
+          # GitHub's published SSH host key, pinned rather than trusted on first use.
+          echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$RUNNER_TEMP/known_hosts"
+          export GIT_SSH_COMMAND="ssh -i $RUNNER_TEMP/tap_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$RUNNER_TEMP/known_hosts"
+          trap 'rm -f "$RUNNER_TEMP/tap_key"' EXIT
+
+          gh release download "v$VERSION" --repo "$GITHUB_REPOSITORY" --pattern betterlink.rb --dir "$RUNNER_TEMP"
+          git clone --depth 1 git@github.com:wkoutre/homebrew-tap.git "$RUNNER_TEMP/tap"
+          cd "$RUNNER_TEMP/tap"
+          mkdir -p Casks
+          cp "$RUNNER_TEMP/betterlink.rb" Casks/betterlink.rb
+          if git diff --quiet -- Casks/betterlink.rb && git ls-files --error-unmatch Casks/betterlink.rb >/dev/null 2>&1; then
+            echo "The tap already has betterlink $VERSION."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/betterlink.rb
+          git commit -m "betterlink $VERSION"
+          git push origin HEAD

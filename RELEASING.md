@@ -1,8 +1,8 @@
 # Releasing betterlink
 
-Releases are built, signed, notarized and stapled by `.github/workflows/release.yml` when a `v*` tag is pushed. It opens a **draft** GitHub Release; publishing it is a manual click.
+Every merge to `main` ships a release. `.github/workflows/release.yml` runs the tests, bumps the version, tags it, builds, signs, notarizes and staples the app, **publishes** the GitHub Release, and updates the Homebrew tap. Nobody tags or clicks anything. See [Cutting a release](#cutting-a-release).
 
-Setup happens once, in four parts: Apple (a Developer ID certificate), App Store Connect (an API key for notarization), an update signing key for Sparkle, and GitHub (an environment holding seven secrets). Allow about 20 minutes.
+Setup happens once, in five parts: Apple (a Developer ID certificate), App Store Connect (an API key for notarization), an update signing key for Sparkle, GitHub (an environment holding seven secrets), and a deploy key for the Homebrew tap. Allow about 20 minutes.
 
 Everything below runs on your Mac. Keep the files it makes (`.p12`, `.p8`) out of the repo and delete them, or move them to your password manager, when you finish.
 
@@ -57,7 +57,7 @@ betterlink updates itself with [Sparkle](https://sparkle-project.org). Installed
 
 ## 4. GitHub environment and secrets
 
-The secrets go in an environment named `release` that only `v*` tags can use, so no branch can run code with your Developer ID. Run this in Terminal with the [GitHub CLI](https://cli.github.com) signed in as the repo owner. Set `REPO` to the repository that will publish releases (the public one, once it exists).
+The secrets go in an environment named `release` that only the `main` branch can use, so no other branch, and no pull request, can run code with your Developer ID. Run this in Terminal with the [GitHub CLI](https://cli.github.com) signed in as the repo owner. Set `REPO` to the repository that will publish releases (the public one, once it exists).
 
 The easy way: from a betterlink checkout, `bash scripts/set-release-secrets.sh [owner/repo]` does all of the below, including the update key. (`--update-key-only` adds just that one.) It asks for each file and value, checks the .p12 password before saving anything, and reads the identity from the .p12 and the Key ID from the .p8's name.
 
@@ -66,12 +66,12 @@ Or by hand:
 ```sh
 REPO=wkoutre/betterlink
 
-# The environment, limited to tags matching v*.
+# The environment, limited to the main branch.
 gh api -X PUT "repos/$REPO/environments/release" \
   -F 'deployment_branch_policy[protected_branches]=false' \
   -F 'deployment_branch_policy[custom_branch_policies]=true'
 gh api -X POST "repos/$REPO/environments/release/deployment-branch-policies" \
-  -f name='v*' -f type=tag
+  -f name='main' -f type=branch
 
 # The seven secrets. Each command reads its value from a file or prompts for it,
 # so nothing lands in your shell history.
@@ -87,7 +87,7 @@ gh secret set SPARKLE_UPDATE_KEY --env release --repo "$REPO" < ~/Desktop/better
 gh secret list --env release --repo "$REPO"
 ```
 
-Prefer clicking? **Settings › Environments › New environment** `release`, then **Deployment branches and tags › Selected branches and tags › Add rule › Tag** `v*`, then **Add environment secret** seven times with the names above. For the .p12 and .p8, paste the output of `base64 -i <file> | pbcopy`; for `SPARKLE_UPDATE_KEY`, paste the key file's one line as it is.
+Prefer clicking? **Settings › Environments › New environment** `release`, then **Deployment branches and tags › Selected branches and tags › Add rule › Branch** `main`, then **Add environment secret** seven times with the names above. For the .p12 and .p8, paste the output of `base64 -i <file> | pbcopy`; for `SPARKLE_UPDATE_KEY`, paste the key file's one line as it is.
 
 Then delete the local files:
 
@@ -101,22 +101,39 @@ Keep them in your password manager first. You can always export the `.p12` again
 
 The app is signed with `scripts/app.entitlements` (allow-jit, so JavaScriptCore can JIT config.ts under the hardened runtime). The bundled command is signed with `scripts/cli.entitlements` (what Bun executables need). A stable Developer ID also keeps macOS permissions such as Full Disk Access across updates; an ad-hoc signed build loses them each time. Sparkle's framework, helpers and XPC services are signed again with the same Developer ID, because the hardened runtime only loads code from betterlink's own team.
 
+## 5. Homebrew tap deploy key
+
+The workflow copies each release's cask into [wkoutre/homebrew-tap](https://github.com/wkoutre/homebrew-tap). The built-in workflow token can't write to another repository, so it uses a deploy key that can write to the tap and nothing else:
+
+```sh
+bash scripts/set-release-secrets.sh --auto-release
+```
+
+It makes an SSH key on your Mac, adds the public half to the tap as a deploy key with write access, saves the private half as `HOMEBREW_TAP_DEPLOY_KEY` in its own `homebrew-tap` environment (main only, so a required reviewer on `release` isn't asked twice per release), and deletes the local copy. It also limits `release` to `main`: it adds that branch rule and removes the old `v*` tag rule, which would otherwise let any pushed tag reach the signing keys. Without the key, releases still publish; the workflow's summary warns that the tap needs a manual copy.
+
 ## Cutting a release
 
-1. In a pull request, set `CFBundleShortVersionString` and `CFBundleVersion` in `Info.plist` to the new version. They must be equal, because Sparkle compares `CFBundleVersion`. Merge it.
-2. Tag the merge commit and push the tag:
+Merge a pull request. That's it. On every push to `main` that changes more than docs, tests or CI (`**/*.md`, `LICENSE`, `.github/**`, `Tests/**`, `cli/test/**` and the two setup scripts `scripts/set-release-secrets.sh` / `scripts/set-version.sh` don't count), the `release` workflow:
 
-   ```sh
-   git checkout main && git pull
-   git tag v0.3.0 && git push origin v0.3.0
-   ```
+1. **test**: runs `make test` and `make test-cli` on `main`.
+2. **version**: reads `CFBundleShortVersionString` from `Info.plist`.
+   - If that version has no tag yet, it is released as is. This is how to ship a minor or major version: set it in your pull request with `scripts/set-version.sh minor` (or `major`, or `0.4.0`).
+   - Otherwise it bumps the patch (`scripts/set-version.sh patch`), commits `betterlink X.Y.Z` to `main` as `github-actions[bot]`, and tags it `vX.Y.Z`. Pushes made with the workflow token never start another workflow run, so the bump commit doesn't loop.
 
-3. The `release` workflow runs `make test` and `make test-cli`, then builds, signs, notarizes and staples the app. It opens a **draft** GitHub Release with `betterlink-<version>.zip`, `betterlink-macos.zip` (the same file under a fixed name, which simplyautomated.io/betterlink/download points at), `SHA256SUMS`, `betterlink.rb` (the Homebrew cask, filled in) and `appcast.xml` (the Sparkle feed, with the zip's signature). A tag without the signing secrets, or with an update key that doesn't match `SUPublicEDKey`, fails instead of shipping.
-4. Check the draft, then publish it. Publishing is what makes installed copies offer the update: their feed URL follows GitHub's latest published release.
-5. Copy `betterlink.rb` into the Homebrew tap as `Casks/betterlink.rb`.
+   Don't bump the patch by hand in a pull request; CI does it.
+3. **release**: builds, signs, notarizes and staples the app, uploads `betterlink-<version>.zip`, `betterlink-macos.zip` (the same file under a fixed name, which simplyautomated.io/betterlink/download points at), `SHA256SUMS`, `betterlink.rb` (the Homebrew cask) and `appcast.xml` (the Sparkle feed) to a draft, then publishes it in one step. Installed copies see the update within a day: their feed URL follows GitHub's latest published release. A run without the signing secrets, or with an update key that doesn't match `SUPublicEDKey`, fails instead of shipping.
+4. **tap**: copies `betterlink.rb` into the tap as `Casks/betterlink.rb`.
+
+Merges while a release runs wait for it, then release together.
+
+If `release` has a required reviewer (Settings › Environments › release), each release pauses before the signing job until you approve it in the run. The tap job uses its own environment, so that is the only click.
+
+To release a docs-only change anyway: **Actions › release › Run workflow**, check **publish**.
+
+When a run fails, fix the cause and click **Re-run failed jobs**. It reuses the version the first attempt tagged, so no number is skipped, and a release that is already published isn't touched again.
 
 ## Dry run
 
-Run the `release` workflow by hand (**Actions › release › Run workflow**). It runs the tests, builds and zips unsigned, never sees the signing secrets, and publishes nothing; the checksum is in the run summary. Locally, `./scripts/release.sh` does the same and leaves the files in `dist/`.
+Run the `release` workflow by hand (**Actions › release › Run workflow**) with **publish** unchecked. It runs the tests, builds and zips unsigned, never sees the signing secrets, and publishes nothing; the checksum is in the run summary. Locally, `./scripts/release.sh` does the same and leaves the files in `dist/`.
 
 After opening a `dist/` build on a Mac where an installed betterlink is the default browser, unregister it (see CONTRIBUTING.md) so links keep going to the installed copy.
