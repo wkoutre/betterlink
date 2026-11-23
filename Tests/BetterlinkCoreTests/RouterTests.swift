@@ -96,6 +96,18 @@ func web(_ s: String) -> Link {
         #expect(Rule(kind: .contains, pattern: "café", profile: "Profile 1").matches(web("https://a.com/café")))
         #expect(Rule(kind: .contains, pattern: "café", profile: "Profile 1").matches(web("https://a.com/caf%C3%A9")))
         #expect(Rule(kind: .contains, pattern: "#/#room", profile: "Profile 1").matches(web("https://a.com/#/#room")))
+        // One stray "%" doesn't stop the other escapes from decoding, and
+        // case is folded after decoding.
+        #expect(Rule(kind: .contains, pattern: "café", profile: "Profile 1").matches(web("https://x.com/café?d=100%")))
+        #expect(Rule(kind: .contains, pattern: "café", profile: "Profile 1").matches(web("https://x.com/CAFÉ")))
+        #expect(Rule(kind: .contains, pattern: "CAFÉ", profile: "Profile 1").matches(web("https://x.com/caf%C3%A9")))
+        #expect(!Rule(kind: .contains, pattern: "café", profile: "Profile 1").matches(web("https://x.com/cafe")))
+    }
+
+    @Test func decodingEscapesKeepsWhatIsNotAnEscape() {
+        #expect(Rule.decodingEscapes("a%20b%zz%2") == "a b%zz%2")
+        #expect(Rule.decodingEscapes("100%") == "100%")
+        #expect(Rule.decodingEscapes("caf%C3%A9%") == "café%")
     }
 
     @Test func containsRuleMatchesTheTextAnywhereInTheLink() {

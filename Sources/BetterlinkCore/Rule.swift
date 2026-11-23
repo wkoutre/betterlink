@@ -53,8 +53,7 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
             // spells it out or percent-encodes it.
             let needle = pattern.trimmingCharacters(in: .whitespaces).lowercased()
             guard !needle.isEmpty else { return false }
-            let href = link.href.lowercased()
-            return href.contains(needle) || (href.removingPercentEncoding?.contains(needle) ?? false)
+            return link.href.lowercased().contains(needle) || Self.decodingEscapes(link.href).lowercased().contains(needle)
         case .domain:
             // acme.com matches acme.com and any subdomain, never
             // evil-acme.com or acme.com.evil.com.
@@ -77,6 +76,32 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
             let next = rest[rest.index(rest.startIndex, offsetBy: want.count)]
             return next == "/" || next == "?" || next == "#"
         }
+    }
+
+    /// Decodes each valid "%XX" escape on its own and leaves the rest as it
+    /// is, so one stray "%" (as in "?d=100%") doesn't stop the others from
+    /// decoding. Bytes that aren't UTF-8 become U+FFFD.
+    static func decodingEscapes(_ s: String) -> String {
+        func hex(_ b: UInt8) -> UInt8? {
+            switch b {
+            case UInt8(ascii: "0")...UInt8(ascii: "9"): return b - UInt8(ascii: "0")
+            case UInt8(ascii: "a")...UInt8(ascii: "f"): return b - UInt8(ascii: "a") + 10
+            case UInt8(ascii: "A")...UInt8(ascii: "F"): return b - UInt8(ascii: "A") + 10
+            default: return nil
+            }
+        }
+        let bytes = Array(s.utf8)
+        var out: [UInt8] = []
+        out.reserveCapacity(bytes.count)
+        var i = 0
+        while i < bytes.count {
+            if bytes[i] == UInt8(ascii: "%"), i + 2 < bytes.count, let h = hex(bytes[i + 1]), let l = hex(bytes[i + 2]) {
+                out.append(h << 4 | l); i += 3
+            } else {
+                out.append(bytes[i]); i += 1
+            }
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     /// "acme.com", "*.acme.com", "https://acme.com/x" -> "acme.com".
