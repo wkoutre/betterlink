@@ -9,8 +9,9 @@ let package = Package(
         .executable(name: "Betterlink", targets: ["Betterlink"]),
     ],
     dependencies: [
-        // Auto-update. Pinned exactly; the release script re-signs it with
-        // betterlink's Developer ID.
+        // Auto-update. Pinned exactly, and to a commit by Package.resolved
+        // (committed; `make build` refuses any other). The release script
+        // re-signs it with betterlink's Developer ID.
         .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
     ],
     targets: [

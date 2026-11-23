@@ -129,7 +129,8 @@ final class AppModel: ObservableObject {
                                    fallback: fallback, ownBundleId: Bundle.main.bundleIdentifier ?? "") {
             case .success(let plan):
                 record(raw, opener, profile.name, decision.reason)
-                launch(plan)
+                launch(plan, ifSwitchFails: plan.afterFailedSwitch(fallback: fallback, catalog: catalog,
+                                                                    ownBundleId: Bundle.main.bundleIdentifier ?? ""))
                 if showsLinkToast, let m = LinkToast.message(for: decision) {
                     LinkToastWindow.shared.show(profile: m.profile, detail: m.detail, position: linkToastPosition)
                 }
@@ -143,7 +144,10 @@ final class AppModel: ObservableObject {
     /// What would happen to a link, without opening it (the link tester).
     func preview(_ raw: String, modifiers: ModifierKeys = []) -> Decision { router.decide(raw, opener: nil, modifiers: modifiers) }
 
-    private func launch(_ plan: LaunchPlan) {
+    /// - Parameter ifSwitchFails: for a Dia link, the plan that opens it in
+    ///   the fallback profile when Dia can't show the link's space
+    ///   (`LaunchPlan.afterFailedSwitch`); nil when there is no other place.
+    private func launch(_ plan: LaunchPlan, ifSwitchFails: LaunchPlan? = nil) {
         let name = browserName(plan.bundleId)
         guard let app = NSWorkspace.shared.urlForApplication(withBundleIdentifier: plan.bundleId) else {
             // Never hand the link to the system: betterlink is the default
@@ -172,7 +176,10 @@ final class AppModel: ObservableObject {
         case .switchSpace(let space, let link):
             // Dia refuses a second process, so never createsNewApplicationInstance
             // here: switch its front window to the space, then hand it the link.
-            // The link opens even when the switch fails, in the current space.
+            // When the switch fails, Dia would open the link in whichever space
+            // is in front, which may be another profile. So the link goes to the
+            // fallback profile instead; only a link that was headed for the
+            // fallback already (no `ifSwitchFails`) is still handed to Dia.
             guard let url = URL(string: link) else { fail("Couldn't open \(link) in \(name)."); return }
             // One Dia link at a time: switch the space, hand Dia the link, and
             // only then let the next link switch the space again. Otherwise two
@@ -181,6 +188,22 @@ final class AppModel: ObservableObject {
                 let outcome = Self.runOsascript(DiaSpace.osascriptArguments(space: space))
                 let handedOver = DispatchSemaphore(value: 0)
                 Task { @MainActor in
+                    if !outcome.switched, let other = ifSwitchFails {
+                        let elsewhere = self.fallbackProfile
+                            ?? BrowserProfile(browser: other.bundleId, directory: self.fallback.directory,
+                                              name: self.browserName(other.bundleId), color: nil)
+                        if let line = outcome.note(space: space, openedIn: elsewhere.name) { self.note(line) }
+                        // Replaces the toast that named the space the link didn't reach.
+                        if self.showsLinkToast {
+                            LinkToastWindow.shared.show(profile: elsewhere, detail: "Dia couldn't switch to \(space)",
+                                                        position: self.linkToastPosition)
+                        }
+                        // A fallback that is another Dia space waits its turn
+                        // on this queue; if that switch fails too, Dia gets the link.
+                        self.launch(other)
+                        handedOver.signal()
+                        return
+                    }
                     if let line = outcome.note(space: space) { self.note(line) }
                     let open = NSWorkspace.OpenConfiguration()
                     open.activates = true

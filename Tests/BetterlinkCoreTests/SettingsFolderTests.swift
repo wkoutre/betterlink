@@ -64,4 +64,45 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: b.rulesFile.path))
     }
 
+    /// Security audit, Nov 2026: `folder.set` copied whatever a symlinked
+    /// rules.json or config.ts pointed at. Any program can plant such a link
+    /// (and choose the settings folder), so with Full Disk Access betterlink
+    /// would copy a file that program may not read to where it can. The new
+    /// folder gets a link to the same file instead; nothing is read.
+    @Test func switchingFoldersLinksASymlinkedFileInsteadOfCopyingItsTarget() throws {
+        let fm = FileManager.default
+        let elsewhere = try temp()
+        let secret = elsewhere.appendingPathComponent("private.txt")
+        try "not betterlink's to copy".write(to: secret, atomically: true, encoding: .utf8)
+        let dotfiles = elsewhere.appendingPathComponent("rules.json")
+        try RuleStore(file: dotfiles).save(RuleStore.Contents(rules: [Rule(kind: .domain, pattern: "acme.com", profile: "Default")]))
+
+        let a = SettingsFolder(directory: try temp()), b = SettingsFolder(directory: try temp())
+        try fm.createSymbolicLink(at: a.configFile, withDestinationURL: secret)
+        // A relative link, as a dotfiles manager makes: it must still resolve from the new folder.
+        try fm.createSymbolicLink(atPath: a.rulesFile.path,
+                                  withDestinationPath: "../\(elsewhere.lastPathComponent)/rules.json")
+        try a.copySettings(to: b)
+
+        for (file, target) in [(b.configFile, secret), (b.rulesFile, dotfiles)] {
+            let type = try fm.attributesOfItem(atPath: file.path)[.type] as? FileAttributeType
+            #expect(type == .typeSymbolicLink, "\(file.lastPathComponent) must be a link, not a copy")
+            #expect(try fm.destinationOfSymbolicLink(atPath: file.path) == target.resolvingSymlinksInPath().path)
+        }
+        // The linked rules still load from the new folder, and a save goes to the one shared file.
+        #expect(try RuleStore(folder: b).load().rules.count == 1)
+        try RuleStore(folder: b).update { $0.rules.removeAll() }
+        #expect(try RuleStore(file: dotfiles).load().rules.isEmpty)
+    }
+
+    /// A plain file is still copied, so the two folders stay independent.
+    @Test func switchingFoldersStillCopiesPlainFiles() throws {
+        let a = SettingsFolder(directory: try temp()), b = SettingsFolder(directory: try temp())
+        try "// a".write(to: a.configFile, atomically: true, encoding: .utf8)
+        try a.copySettings(to: b)
+        let type = try FileManager.default.attributesOfItem(atPath: b.configFile.path)[.type] as? FileAttributeType
+        #expect(type == .typeRegular)
+        try "// changed".write(to: a.configFile, atomically: true, encoding: .utf8)
+        #expect(try String(contentsOf: b.configFile, encoding: .utf8) == "// a")
+    }
 }

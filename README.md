@@ -59,7 +59,7 @@ Rules and the fallback each name a browser and, where it has them, a profile.
 | Family | Browsers | How a profile is chosen | Tested |
 |---|---|---|---|
 | Chromium | Brave, Chrome (also Beta, Canary), Chromium, Edge, Comet, Vivaldi, Helium, Opera, Opera GX, Ecosia, Wavebox, Yandex, Brave Nightly | `--profile-directory=<folder> -- <link>` on a fresh process, which a running browser hands to itself | Brave, by hand. The rest are expected to work. |
-| Dia | Dia | Dia allows one copy of itself and calls its profiles spaces, so betterlink switches Dia's front window to the space with the profile's name (AppleScript `focus profile`), then hands Dia the link. macOS asks once to let betterlink control Dia. With no space of that name, or without that permission, the link opens in the current space and the Log says why. | By hand (Dia 1.58). |
+| Dia | Dia | Dia allows one copy of itself and calls its profiles spaces, so betterlink switches Dia's front window to the space with the profile's name (AppleScript `focus profile`), then hands Dia the link. macOS asks once to let betterlink control Dia. With no space of that name, or without that permission, the link opens in your fallback profile instead, so it never lands in another Dia profile, and the Log says why. Only a link already headed for a fallback that is itself a Dia space still opens in Dia's current space. | By hand (Dia 1.58). |
 | Firefox | Firefox, Firefox Developer Edition, Zen | `-P <name> <link>` | Expected to work, not yet tested. |
 | No profiles | Safari, Arc | the link is handed to the browser the ordinary way | Expected to work. |
 
@@ -129,6 +129,7 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 ## Accepted risks
 
 1. **Another app can reroute your links.** Any program running as you can edit `config.ts` or `rules.json`. betterlink refuses either file if someone else owns it, or if other users can write to it or to its folder. It does not defend against malware already running as you.
+   It doesn't lend that program its own permissions, though. The `betterlink` command runs with the permissions of whatever started it (your terminal, a script, an agent), and it refuses to start the way an app is started (`open -a betterlink.app --args agent …`), where it would run with betterlink's own Full Disk Access. Switching settings folders links a symlinked `rules.json` or `config.ts` into the new folder instead of copying what it points to.
 2. **betterlink sees every link you open.** It keeps them in memory only and sends nothing anywhere. Its only network request is the update check (see Updates), which carries no link or setting.
 3. **A build from source isn't notarized.** Releases are signed and notarized; `make install` ad-hoc signs a local build, so macOS forgets its permissions (such as Full Disk Access) each time you rebuild.
 4. **Lookalike domains open in the fallback profile.** For example `exаmple.com` with a Cyrillic а. betterlink doesn't try to detect them.

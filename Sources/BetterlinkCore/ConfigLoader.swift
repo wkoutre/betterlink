@@ -48,7 +48,8 @@ public struct SettingsFolder: Equatable, Sendable {
 
     /// Copies rules.json and config.ts into `target` where it has none, so
     /// switching folders keeps the user's settings. Refuses a folder that
-    /// FileSafety would refuse to read from.
+    /// FileSafety would refuse to read from. A file that is a symlink (into
+    /// a dotfiles repo, say) is linked again, not copied: see below.
     public func copySettings(to target: SettingsFolder) throws {
         let fm = FileManager.default
         let copies = [(rulesFile, target.rulesFile), (configFile, target.configFile)]
@@ -66,9 +67,18 @@ public struct SettingsFolder: Equatable, Sendable {
         if let problem = FileSafety.folderProblem(target.directory) {
             throw ConfigError.unsafeFile("Can't use that folder: \(problem).")
         }
-        // Copy what a symlink points to, not the link: a relative link would
-        // point nowhere from the new folder.
-        for (from, to) in copies { try fm.copyItem(at: from.resolvingSymlinksInPath(), to: to) }
+        for (from, to) in copies {
+            if (try? fm.destinationOfSymbolicLink(atPath: from.path)) != nil {
+                // Link to the same file, by its full path (a relative link
+                // would point nowhere from the new folder). Never copy what a
+                // link points to: any program can put a link to a file only
+                // betterlink may read (with Full Disk Access) in a settings
+                // folder, and a copy would hand it that file's contents.
+                try fm.createSymbolicLink(at: to, withDestinationURL: from.resolvingSymlinksInPath())
+            } else {
+                try fm.copyItem(at: from, to: to)
+            }
+        }
     }
 }
 

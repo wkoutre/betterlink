@@ -81,4 +81,21 @@ public struct LaunchPlan: Equatable, Sendable {
             return .success(LaunchPlan(bundleId: browser.bundleId, mode: .openURL(argument)))
         }
     }
+
+    /// The plan that opens the same link in the fallback profile, for a space
+    /// switch that failed. Dia would otherwise open the link in whichever
+    /// space is in front, and a link ruled into one profile must not land in
+    /// another. nil when this plan is no space switch, when it already is the
+    /// fallback's (there is nowhere else to send the link), or when the
+    /// fallback can't be opened.
+    public func afterFailedSwitch(fallback: ProfileRef, catalog: ProfileCatalog, ownBundleId: String) -> LaunchPlan? {
+        guard case .switchSpace(_, let link) = mode else { return nil }
+        let profile = catalog.profile(fallback)
+            ?? BrowserProfile(browser: fallback.browser, directory: fallback.directory, name: "", color: nil)
+        guard case .success(let plan) = LaunchPlan.make(profile: profile, argument: link, catalog: catalog,
+                                                        fallback: fallback, ownBundleId: ownBundleId),
+              plan != self
+        else { return nil }
+        return plan
+    }
 }
