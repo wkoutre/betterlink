@@ -109,7 +109,7 @@ The workflow copies each release's cask into [wkoutre/homebrew-tap](https://gith
 bash scripts/set-release-secrets.sh --auto-release
 ```
 
-It makes an SSH key on your Mac, adds the public half to the tap as a deploy key with write access, saves the private half as `HOMEBREW_TAP_DEPLOY_KEY` in the `release` environment, and deletes the local copy. It also adds the `main` branch rule to the environment if it isn't there (an environment made before releases moved to `main` allowed only `v*` tags). Without the key, releases still publish; the workflow's summary warns that the tap needs a manual copy.
+It makes an SSH key on your Mac, adds the public half to the tap as a deploy key with write access, saves the private half as `HOMEBREW_TAP_DEPLOY_KEY` in its own `homebrew-tap` environment (main only, so a required reviewer on `release` isn't asked twice per release), and deletes the local copy. It also limits `release` to `main`: it adds that branch rule and removes the old `v*` tag rule, which would otherwise let any pushed tag reach the signing keys. Without the key, releases still publish; the workflow's summary warns that the tap needs a manual copy.
 
 ## Cutting a release
 
@@ -125,6 +125,8 @@ Merge a pull request. That's it. On every push to `main` that changes more than 
 4. **tap**: copies `betterlink.rb` into the tap as `Casks/betterlink.rb`.
 
 Merges while a release runs wait for it, then release together.
+
+If `release` has a required reviewer (Settings › Environments › release), each release pauses before the signing job until you approve it in the run. The tap job uses its own environment, so that is the only click.
 
 To release a docs-only change anyway: **Actions › release › Run workflow**, check **publish**.
 

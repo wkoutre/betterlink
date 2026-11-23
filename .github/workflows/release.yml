@@ -260,8 +260,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Holds HOMEBREW_TAP_DEPLOY_KEY: a deploy key with write access to
-    # wkoutre/homebrew-tap only (GITHUB_TOKEN can't write another repo).
-    environment: release
+    # wkoutre/homebrew-tap only (GITHUB_TOKEN can't write another repo). Its
+    # own environment, so a required reviewer on release isn't asked twice.
+    environment: homebrew-tap
     permissions:
       contents: read
     steps:
@@ -272,7 +273,7 @@ jobs:
           DEPLOY_KEY: ${{ secrets.HOMEBREW_TAP_DEPLOY_KEY }}
         run: |
           if [ -z "$DEPLOY_KEY" ]; then
-            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY isn't set in the release environment; copy betterlink.rb from the v$VERSION release into the tap by hand."
+            echo "::warning::HOMEBREW_TAP_DEPLOY_KEY isn't set in the homebrew-tap environment; copy betterlink.rb from the v$VERSION release into the tap by hand."
             exit 0
           fi
           (umask 077 && printf '%s\n' "$DEPLOY_KEY" > "$RUNNER_TEMP/tap_key")

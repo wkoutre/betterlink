@@ -8,8 +8,9 @@
 #   bash scripts/set-release-secrets.sh --auto-release [owner/repo]
 #
 # --auto-release only does what releasing on every merge adds: it lets main
-# use the environment and gives the release workflow a deploy key that can
-# write to the Homebrew tap (wkoutre/homebrew-tap, or $TAP_REPO).
+# use the environment (and removes the old v* tag rule), and gives the release
+# workflow a deploy key that can write to the Homebrew tap
+# (wkoutre/homebrew-tap, or $TAP_REPO) in a second environment, homebrew-tap.
 #
 # It asks for each value. Passwords are read without echo and passed to gh
 # on stdin, so nothing lands in shell history or the process list.
@@ -50,43 +51,71 @@ update_key() {
   printf '\n  Save %s in your password manager now. Without it no update can reach\n  people who already installed betterlink.\n' "$KEYFILE"
 }
 
-# Releases run from main on every merge (.github/workflows/release.yml), so
-# main must be allowed to use the environment and its secrets.
-allow_main() {
-  if gh api "repos/$REPO/environments/release/deployment-branch-policies" --jq '.branch_policies[] | select(.type=="branch") | .name' | grep -qx 'main'; then
-    echo "  branch rule main already there"
+# Creates an environment that only custom branch/tag rules can use. An
+# existing one is left as is: PUT replaces its settings, which would drop a
+# required reviewer added since.
+ensure_env() {
+  if gh api "repos/$REPO/environments/$1" --jq .name >/dev/null 2>&1; then
+    echo "  environment $1 already there"
   else
-    gh api -X POST "repos/$REPO/environments/release/deployment-branch-policies" -f name='main' -f type=branch >/dev/null
-    echo "  added branch rule main"
+    gh api -X PUT "repos/$REPO/environments/$1" \
+      -F 'deployment_branch_policy[protected_branches]=false' \
+      -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
+    echo "  made environment $1"
   fi
 }
 
-# A deploy key that can write to the tap and nothing else. The private half
-# goes straight into the environment and is deleted here; the public half is
-# the tap's deploy key. Running it again adds a fresh key: delete the old one
-# under the tap's Settings › Deploy keys.
+# Releases run from main on every merge (.github/workflows/release.yml), so
+# main must be allowed to use the environment and its secrets, and nothing
+# else: a tag rule left over from the old tag-triggered flow would let any
+# pushed v* tag carrying its own workflow reach the keys.
+allow_only_main() {
+  local policies="repos/$REPO/environments/$1/deployment-branch-policies"
+  if gh api "$policies" --jq '.branch_policies[] | select(.type=="branch") | .name' | grep -qx 'main'; then
+    echo "  branch rule main already there"
+  else
+    gh api -X POST "$policies" -f name='main' -f type=branch >/dev/null
+    echo "  added branch rule main"
+  fi
+  gh api "$policies" --jq '.branch_policies[] | select(.type=="tag" or .name!="main") | "\(.id) \(.type) \(.name)"' |
+    while read -r id type name; do
+      gh api -X DELETE "$policies/$id" >/dev/null
+      echo "  removed $type rule $name"
+    done
+}
+
+# A deploy key that can write to the tap and nothing else, in its own
+# environment (homebrew-tap, main only) so a required reviewer on release
+# doesn't also hold up the tap. The private half goes straight into the
+# environment and is deleted here; the public half is the tap's deploy key.
+# Running it again adds a fresh key: delete the old one under the tap's
+# Settings › Deploy keys.
 tap_key() {
   TAP=${TAP_REPO:-wkoutre/homebrew-tap}
-  say "Homebrew tap deploy key ($TAP)"
+  say "Homebrew tap deploy key ($TAP), environment homebrew-tap"
   gh api "repos/$TAP" --jq .full_name >/dev/null || die "Can't reach $TAP with your gh login."
   command -v ssh-keygen >/dev/null || die "ssh-keygen is missing."
+  ensure_env homebrew-tap
+  allow_only_main homebrew-tap
   TMP=$(mktemp -d)
   trap 'rm -rf "$TMP"' EXIT
   ssh-keygen -q -t ed25519 -N '' -C "betterlink release workflow" -f "$TMP/key"
   gh api -X POST "repos/$TAP/keys" -f title="betterlink release ($REPO)" \
     -f key="$(cat "$TMP/key.pub")" -F read_only=false >/dev/null
   echo "  added a write deploy key to $TAP"
-  put HOMEBREW_TAP_DEPLOY_KEY < "$TMP/key"
+  gh secret set HOMEBREW_TAP_DEPLOY_KEY --env homebrew-tap --repo "$REPO" < "$TMP/key" >/dev/null
+  echo "  set HOMEBREW_TAP_DEPLOY_KEY"
   rm -rf "$TMP"
 }
 
 if [ "$ONLY_AUTO_RELEASE" = 1 ]; then
-  say "Environment 'release': allow main ($REPO)"
+  say "Environment 'release': main only ($REPO)"
   gh api "repos/$REPO/environments/release" --jq .name >/dev/null || die "No 'release' environment yet. Run this script without --auto-release first."
-  allow_main
+  allow_only_main release
   tap_key
   say "Check"
   gh secret list --env release --repo "$REPO"
+  gh secret list --env homebrew-tap --repo "$REPO"
   exit 0
 fi
 
@@ -98,10 +127,8 @@ if [ "$ONLY_UPDATE_KEY" = 1 ]; then
 fi
 
 say "1/5  Environment 'release', limited to main ($REPO)"
-gh api -X PUT "repos/$REPO/environments/release" \
-  -F 'deployment_branch_policy[protected_branches]=false' \
-  -F 'deployment_branch_policy[custom_branch_policies]=true' >/dev/null
-allow_main
+ensure_env release
+allow_only_main release
 
 say "2/5  Developer ID certificate (.p12)"
 P12_DEFAULT=~/Desktop/betterlink-devid.p12

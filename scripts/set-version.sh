@@ -9,10 +9,8 @@ set -eu
 cd "$(dirname "$0")/.."
 
 current=$(perl -0ne 'print $1 if m{<key>CFBundleShortVersionString</key>\s*<string>([^<]*)</string>}' Info.plist)
-case "$current" in
-  [0-9]*.[0-9]*.[0-9]*) ;;
-  *) echo "Info.plist: can't read CFBundleShortVersionString ($current)." >&2; exit 1 ;;
-esac
+printf '%s\n' "$current" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$' ||
+  { echo "Info.plist: can't read CFBundleShortVersionString ($current)." >&2; exit 1; }
 IFS=. read -r major minor patch <<VERSION
 $current
 VERSION
