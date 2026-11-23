@@ -46,6 +46,7 @@ If betterlink is installed on your Mac, your real rules live in its settings fol
 - Design changes go through `Design/tokens.json`, then `make tokens`. `make test` fails if `DesignTokens.swift` is out of date.
 - betterlink's only network code is Sparkle's update check. A change that adds any other network request needs an issue and agreement first.
 - Pin any new GitHub Action to a full commit SHA, with the version in a comment.
+- Leave the version in `Info.plist` alone: every merge to `main` releases and bumps the patch itself ([RELEASING.md](RELEASING.md)). Set it only to ship a minor or major version (`scripts/set-version.sh minor`).
 
 ## License
 
