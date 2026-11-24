@@ -54,23 +54,30 @@ struct SidebarGeometryTests {
         }
     }
 
-    /// Review F1: a narrowed window can land on a snap line itself (1/3, 3/4).
-    /// Settling it again, after a relaunch or turning the sidebar off and on,
-    /// must not narrow it a second time.
-    @Test func settlingAnAlreadyFittedWindowChangesNothing() {
+    /// Review F1: a narrowed window can land on a snap line itself (0..688 is
+    /// on the one-third line of 2056), so geometry alone would narrow it again.
+    /// FitMemory remembers it, across launches, so it is left alone.
+    @Test func aNarrowedWindowIsRememberedNotNarrowedAgain() throws {
         let big = CGRect(x: 0, y: 0, width: 2056, height: 1259)
         let half = CGRect(x: 0, y: 0, width: 1028, height: 1259)
-        let once = SidebarGeometry.settled(window: half, screen: big, width: 340, side: .right)
-        #expect(once == CGRect(x: 0, y: 0, width: 688, height: 1259))
-        #expect(SidebarGeometry.settled(window: once!, screen: big, width: 340, side: .right) == nil)
-        let fullOnce = SidebarGeometry.settled(window: screen, screen: screen, width: 360, side: .right)
-        #expect(fullOnce?.width == 1080)
-        #expect(SidebarGeometry.settled(window: fullOnce!, screen: screen, width: 360, side: .right) == nil)
-        for side in [SidebarSide.left, .right] {
-            for w in [200.0, 280, 340, 360, 440] {
-                if let a = SidebarGeometry.settled(window: half, screen: big, width: w, side: side) {
-                    #expect(SidebarGeometry.settled(window: a, screen: big, width: w, side: side) == nil, "\(side) \(w)")
-                }
+        let inner = try #require(SidebarGeometry.settled(window: half, screen: big, width: 340, side: .right))
+        #expect(inner == CGRect(x: 0, y: 0, width: 688, height: 1259))
+        #expect(SidebarGeometry.isSnapped(inner, screen: big)) // why geometry alone can't tell
+        var memory = FitMemory()
+        memory.record(.init(bundleId: "com.google.Chrome", inner: inner, outer: half))
+        let saved = try JSONDecoder().decode(FitMemory.self, from: JSONEncoder().encode(memory)) // a relaunch
+        #expect(saved.fitted(CGRect(x: 0.5, y: 0, width: 688, height: 1259), bundleId: "com.google.Chrome")?.outer == half)
+        #expect(saved.fitted(inner, bundleId: "com.brave.Browser") == nil)
+        #expect(saved.fitted(half, bundleId: "com.google.Chrome") == nil)
+    }
+
+    /// Review round 2, N2: a window the user has just snapped is always narrowed,
+    /// even when it plus the sidebar would land on another snap line.
+    @Test func aFreshlySnappedWindowIsAlwaysNarrowed() {
+        for (sw, w) in [(1440.0, 360.0), (1440, 240), (1920, 320), (1728, 290), (2056, 340)] {
+            let scr = CGRect(x: 0, y: 0, width: sw, height: 875)
+            for tile in [CGRect(x: 0, y: 0, width: sw / 2, height: 875), CGRect(x: 0, y: 0, width: sw / 3, height: 875), scr] {
+                #expect(SidebarGeometry.settled(window: tile, screen: scr, width: w, side: .right) != nil, "\(sw) \(w) \(tile)")
             }
         }
     }

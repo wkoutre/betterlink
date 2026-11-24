@@ -90,18 +90,6 @@ public enum SidebarGeometry {
         let w = window.integral
         let resolved = resolve(side, window: w, screen: screen)
         let room = resolved == .left ? w.minX - screen.minX : screen.maxX - w.maxX
-        // Already fitted: the window and its sidebar beside it fill a tile. A
-        // fitted window can itself land on a snap line (a half less the sidebar
-        // can be a third), so this comes first; without it a second settle, after
-        // a relaunch or the sidebar turned off and on, would narrow it again.
-        let besideRect = resolved == .left ? CGRect(x: w.minX - width, y: w.minY, width: width, height: w.height)
-                                           : CGRect(x: w.maxX, y: w.minY, width: width, height: w.height)
-        // When both readings land near the grid, the more exact one wins: 688 +
-        // 340 = 1028 is exactly half of 2056, while 1028 + 340 = 1368 is 3 pt off
-        // two thirds. A tie (both exact) also leaves the window alone: resizing
-        // is the step that must never repeat.
-        if room >= width, isSnapped(w.union(besideRect), screen: screen),
-           snapError(w.union(besideRect), screen: screen) <= snapError(w, screen: screen) { return nil }
         let need: CGFloat
         if isSnapped(w, screen: screen) {
             need = width
@@ -120,4 +108,47 @@ public enum SidebarGeometry {
         }
         return out == w ? nil : out
     }
+}
+
+/// The windows the sidebar has narrowed, kept across launches. From its frame
+/// alone a narrowed window can look freshly snapped (a half less the sidebar
+/// can sit on the one-third line) and a freshly snapped one can look already
+/// fitted, so whether a window was narrowed is remembered, not guessed: a
+/// window still at a frame recorded here is left alone, and the record holds
+/// the space to give back.
+public struct FitMemory: Codable, Equatable, Sendable {
+    public struct Entry: Codable, Equatable, Sendable {
+        public var bundleId: String
+        /// What the window was narrowed to, and the space it had before.
+        public var inner: CGRect, outer: CGRect
+        public init(bundleId: String, inner: CGRect, outer: CGRect) {
+            self.bundleId = bundleId; self.inner = inner; self.outer = outer
+        }
+    }
+
+    public private(set) var entries: [Entry] = []
+    public init(entries: [Entry] = []) { self.entries = entries }
+
+    /// Frames within a point count as the same: browsers round.
+    static func same(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
+    }
+
+    /// The record for a window of `bundleId` now at `frame`: it was narrowed to
+    /// exactly this and hasn't moved since.
+    public func fitted(_ frame: CGRect, bundleId: String) -> Entry? {
+        entries.last { $0.bundleId == bundleId && Self.same($0.inner, frame) }
+    }
+
+    public mutating func record(_ e: Entry) {
+        entries.removeAll { $0.bundleId == e.bundleId && Self.same($0.inner, e.inner) }
+        entries.append(e)
+        if entries.count > 50 { entries.removeFirst(entries.count - 50) }
+    }
+
+    public mutating func forget(_ frame: CGRect, bundleId: String) {
+        entries.removeAll { $0.bundleId == bundleId && Self.same($0.inner, frame) }
+    }
+
+    public mutating func forgetAll() { entries = [] }
 }

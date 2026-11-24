@@ -21,6 +21,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                                                      forEventClass: kInternetEventClass, andEventID: kAEGetURL)
     }
 
+    /// Quitting gives the browser windows the sidebar narrowed their space back.
+    func applicationWillTerminate(_ notification: Notification) {
+        SidebarController.shared.giveSpaceBack()
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Development aids for screenshots: BETTERLINK_APPEARANCE=light|dark.
         switch ProcessInfo.processInfo.environment["BETTERLINK_APPEARANCE"] {

@@ -30,8 +30,21 @@ final class SidebarController: ObservableObject {
         var outer: CGRect, inner: CGRect, side: SidebarSide
         /// The window itself, to give it its space back later.
         var window: AXUIElement?
+        var bundleId: String
     }
-    private var fits: [Int: Fit] = [:]
+    /// Mirrored into `memory`, which outlives the app, so a window narrowed
+    /// before a relaunch is still known as narrowed (review: geometry alone
+    /// can't tell a narrowed window from a freshly snapped one).
+    private var fits: [Int: Fit] = [:] {
+        didSet {
+            for (k, f) in oldValue where fits[k].map({ !Self.same($0.inner, f.inner) }) ?? true {
+                memory.forget(f.inner, bundleId: f.bundleId)
+            }
+            for f in fits.values { memory.record(.init(bundleId: f.bundleId, inner: f.inner, outer: f.outer)) }
+            saveMemory()
+        }
+    }
+    private var memory = FitMemory()
     /// The narrowest a browser let its window get, by window, once it stopped us.
     private var minWidths: [Int: CGFloat] = [:]
     private var askedAt = Date.distantPast
@@ -45,6 +58,7 @@ final class SidebarController: ObservableObject {
         tracker = WindowTracker(browserBundleIds: Set(Browser.known.map(\.bundleId)))
         enabled = defaults.bool(forKey: "sidebar.enabled")
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
+        memory = defaults.data(forKey: "sidebar.fitMemory").flatMap { try? JSONDecoder().decode(FitMemory.self, from: $0) } ?? FitMemory()
         let w = defaults.double(forKey: "sidebar.width")
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
@@ -75,16 +89,26 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
-        // Give the window back the space the sidebar took.
-        // Every window it narrowed, not only the one in front, if still as narrowed.
+        giveSpaceBack()
+        minWidths = [:]
+        tracker.stop()
+        panel?.orderOut(nil)
+    }
+
+    /// Gives every window the sidebar narrowed, not only the one in front, its
+    /// space back, if it is still as narrowed. Also called when the app quits.
+    func giveSpaceBack() {
         for f in fits.values {
             guard let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) else { continue }
             tracker.setWindowFrame(f.outer, of: win)
         }
         fits = [:]
-        minWidths = [:]
-        tracker.stop()
-        panel?.orderOut(nil)
+        memory.forgetAll()
+        saveMemory()
+    }
+
+    private func saveMemory() {
+        if let d = try? JSONEncoder().encode(memory) { defaults.set(d, forKey: "sidebar.fitMemory") }
     }
 
     private func trustMayHaveChanged() {
@@ -133,6 +157,13 @@ final class SidebarController: ObservableObject {
             fits[t.windowHash] = nil // otherwise the user moved, resized or snapped it again
         }
         guard refused == nil else { return }
+        // Narrowed before (this launch or an earlier one) and not moved since: keep it.
+        if fits[t.windowHash] == nil, let e = memory.fitted(t.frame, bundleId: t.bundleId) {
+            fits[t.windowHash] = Fit(outer: e.outer, inner: t.frame,
+                                     side: SidebarGeometry.resolve(side, window: e.outer, screen: screen(for: e.outer)),
+                                     window: tracker.boundWindow, bundleId: t.bundleId)
+            return layout()
+        }
         fit(t, into: outer)
         layout()
     }
@@ -147,7 +178,7 @@ final class SidebarController: ObservableObject {
                                                       minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
             fits[t.windowHash] = Fit(outer: outer, inner: inner,
                                      side: SidebarGeometry.resolve(side, window: outer, screen: screen),
-                                     window: tracker.boundWindow)
+                                     window: tracker.boundWindow, bundleId: t.bundleId)
             askedAt = Date()
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }

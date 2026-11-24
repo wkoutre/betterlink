@@ -104,7 +104,9 @@ final class WindowTracker: NSObject {
         AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
         AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p)
         AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
-        if window == nil || CFEqual(win, observedWindow as CFTypeRef?) { refresh() }
+        // CFEqual traps on NULL, and the bound window is nil after a non-browser
+        // app came to the front (review round 2, N1).
+        if window == nil || observedWindow.map({ CFEqual(win, $0) }) == true { refresh() }
     }
 
     /// Brings the browser back to the front (after a click in the sidebar).
