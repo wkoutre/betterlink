@@ -90,6 +90,18 @@ final class WindowTracker: NSObject {
     /// example to give it its space back when the sidebar is turned off).
     var boundWindow: AXUIElement? { observedWindow }
 
+    /// The bound window's window-server number.
+    var boundWindowNumber: UInt32? {
+        if windowNumber == nil, let f = target?.frame { windowNumber = findWindowNumber(f) }
+        return windowNumber
+    }
+
+    /// Every window the window server knows (any app, any Space, minimized too).
+    static func liveWindowNumbers() -> Set<UInt32> {
+        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        return Set(list.compactMap { ($0[kCGWindowNumber as String] as? NSNumber)?.uint32Value })
+    }
+
     /// A window's frame now, in Cocoa coordinates.
     func currentFrame(of win: AXUIElement) -> CGRect? { frame(of: win) }
 

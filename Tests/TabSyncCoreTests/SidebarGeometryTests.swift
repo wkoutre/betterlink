@@ -56,7 +56,7 @@ struct SidebarGeometryTests {
 
     /// Review F1: a narrowed window can land on a snap line itself (0..688 is
     /// on the one-third line of 2056), so geometry alone would narrow it again.
-    /// FitMemory remembers it, across launches, so it is left alone.
+    /// FitMemory remembers it by its window number, across launches.
     @Test func aNarrowedWindowIsRememberedNotNarrowedAgain() throws {
         let big = CGRect(x: 0, y: 0, width: 2056, height: 1259)
         let half = CGRect(x: 0, y: 0, width: 1028, height: 1259)
@@ -64,11 +64,31 @@ struct SidebarGeometryTests {
         #expect(inner == CGRect(x: 0, y: 0, width: 688, height: 1259))
         #expect(SidebarGeometry.isSnapped(inner, screen: big)) // why geometry alone can't tell
         var memory = FitMemory()
-        memory.record(.init(bundleId: "com.google.Chrome", inner: inner, outer: half))
+        memory.record(.init(bundleId: "com.google.Chrome", window: 41, inner: inner, outer: half))
         let saved = try JSONDecoder().decode(FitMemory.self, from: JSONEncoder().encode(memory)) // a relaunch
-        #expect(saved.fitted(CGRect(x: 0.5, y: 0, width: 688, height: 1259), bundleId: "com.google.Chrome")?.outer == half)
-        #expect(saved.fitted(inner, bundleId: "com.brave.Browser") == nil)
-        #expect(saved.fitted(half, bundleId: "com.google.Chrome") == nil)
+        #expect(saved.fitted(CGRect(x: 0.5, y: 0, width: 688, height: 1259), window: 41)?.outer == half)
+        #expect(saved.fitted(half, window: 41) == nil) // moved since
+    }
+
+    /// Review round 3, N2: another window of the same browser, snapped to the
+    /// frame some window was narrowed to, is a fresh snap, not a fitted window.
+    @Test func anotherWindowAtARememberedFrameIsNotMistakenForIt() {
+        var memory = FitMemory()
+        let inner = CGRect(x: 0, y: 0, width: 1080, height: 875), full = CGRect(x: 0, y: 0, width: 1440, height: 875)
+        memory.record(.init(bundleId: "com.google.Chrome", window: 41, inner: inner, outer: full))
+        #expect(memory.fitted(inner, window: 42) == nil)
+        #expect(SidebarGeometry.settled(window: inner, screen: full, width: 360, side: .right) == CGRect(x: 0, y: 0, width: 720, height: 875))
+    }
+
+    @Test func recordsOfClosedWindowsArePruned() {
+        var memory = FitMemory()
+        let r = CGRect(x: 0, y: 0, width: 700, height: 800)
+        memory.record(.init(bundleId: "a", window: 1, inner: r, outer: r))
+        memory.record(.init(bundleId: "a", window: 2, inner: r, outer: r))
+        memory.prune(alive: [2, 9])
+        #expect(memory.entries.map(\.window) == [2])
+        memory.forget(window: 2)
+        #expect(memory.entries.isEmpty)
     }
 
     /// Review round 2, N2: a window the user has just snapped is always narrowed,

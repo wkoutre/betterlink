@@ -31,16 +31,18 @@ final class SidebarController: ObservableObject {
         /// The window itself, to give it its space back later.
         var window: AXUIElement?
         var bundleId: String
+        /// Its window-server number, which FitMemory knows it by.
+        var number: UInt32?
     }
     /// Mirrored into `memory`, which outlives the app, so a window narrowed
     /// before a relaunch is still known as narrowed (review: geometry alone
     /// can't tell a narrowed window from a freshly snapped one).
     private var fits: [Int: Fit] = [:] {
         didSet {
-            for (k, f) in oldValue where fits[k].map({ !Self.same($0.inner, f.inner) }) ?? true {
-                memory.forget(f.inner, bundleId: f.bundleId)
+            for (k, f) in oldValue where fits[k] == nil { if let n = f.number { memory.forget(window: n) } }
+            for f in fits.values {
+                if let n = f.number { memory.record(.init(bundleId: f.bundleId, window: n, inner: f.inner, outer: f.outer)) }
             }
-            for f in fits.values { memory.record(.init(bundleId: f.bundleId, inner: f.inner, outer: f.outer)) }
             saveMemory()
         }
     }
@@ -59,6 +61,7 @@ final class SidebarController: ObservableObject {
         enabled = defaults.bool(forKey: "sidebar.enabled")
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
         memory = defaults.data(forKey: "sidebar.fitMemory").flatMap { try? JSONDecoder().decode(FitMemory.self, from: $0) } ?? FitMemory()
+        memory.prune(alive: WindowTracker.liveWindowNumbers())
         let w = defaults.double(forKey: "sidebar.width")
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
@@ -102,9 +105,9 @@ final class SidebarController: ObservableObject {
             guard let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) else { continue }
             tracker.setWindowFrame(f.outer, of: win)
         }
+        // Removing them from `fits` forgets their records; windows narrowed
+        // before a relaunch that weren't reached keep theirs (still narrowed).
         fits = [:]
-        memory.forgetAll()
-        saveMemory()
     }
 
     private func saveMemory() {
@@ -158,10 +161,10 @@ final class SidebarController: ObservableObject {
         }
         guard refused == nil else { return }
         // Narrowed before (this launch or an earlier one) and not moved since: keep it.
-        if fits[t.windowHash] == nil, let e = memory.fitted(t.frame, bundleId: t.bundleId) {
+        if fits[t.windowHash] == nil, let n = tracker.boundWindowNumber, let e = memory.fitted(t.frame, window: n) {
             fits[t.windowHash] = Fit(outer: e.outer, inner: t.frame,
                                      side: SidebarGeometry.resolve(side, window: e.outer, screen: screen(for: e.outer)),
-                                     window: tracker.boundWindow, bundleId: t.bundleId)
+                                     window: tracker.boundWindow, bundleId: t.bundleId, number: n)
             return layout()
         }
         fit(t, into: outer)
@@ -178,7 +181,7 @@ final class SidebarController: ObservableObject {
                                                       minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
             fits[t.windowHash] = Fit(outer: outer, inner: inner,
                                      side: SidebarGeometry.resolve(side, window: outer, screen: screen),
-                                     window: tracker.boundWindow, bundleId: t.bundleId)
+                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
             askedAt = Date()
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }

@@ -113,16 +113,19 @@ public enum SidebarGeometry {
 /// The windows the sidebar has narrowed, kept across launches. From its frame
 /// alone a narrowed window can look freshly snapped (a half less the sidebar
 /// can sit on the one-third line) and a freshly snapped one can look already
-/// fitted, so whether a window was narrowed is remembered, not guessed: a
-/// window still at a frame recorded here is left alone, and the record holds
-/// the space to give back.
+/// fitted, so whether a window was narrowed is remembered, not guessed. A
+/// window is known by its window-server number, which stays the same for the
+/// window's life (betterlink relaunching included) and is never shared, so
+/// another window at the same frame is never mistaken for it.
 public struct FitMemory: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var bundleId: String
+        /// The window's window-server number (CGWindowID).
+        public var window: UInt32
         /// What the window was narrowed to, and the space it had before.
         public var inner: CGRect, outer: CGRect
-        public init(bundleId: String, inner: CGRect, outer: CGRect) {
-            self.bundleId = bundleId; self.inner = inner; self.outer = outer
+        public init(bundleId: String, window: UInt32, inner: CGRect, outer: CGRect) {
+            self.bundleId = bundleId; self.window = window; self.inner = inner; self.outer = outer
         }
     }
 
@@ -134,21 +137,19 @@ public struct FitMemory: Codable, Equatable, Sendable {
         abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
     }
 
-    /// The record for a window of `bundleId` now at `frame`: it was narrowed to
-    /// exactly this and hasn't moved since.
-    public func fitted(_ frame: CGRect, bundleId: String) -> Entry? {
-        entries.last { $0.bundleId == bundleId && Self.same($0.inner, frame) }
+    /// The record for this window when it is still exactly as narrowed.
+    public func fitted(_ frame: CGRect, window: UInt32) -> Entry? {
+        entries.last { $0.window == window && Self.same($0.inner, frame) }
     }
 
     public mutating func record(_ e: Entry) {
-        entries.removeAll { $0.bundleId == e.bundleId && Self.same($0.inner, e.inner) }
+        entries.removeAll { $0.window == e.window }
         entries.append(e)
         if entries.count > 50 { entries.removeFirst(entries.count - 50) }
     }
 
-    public mutating func forget(_ frame: CGRect, bundleId: String) {
-        entries.removeAll { $0.bundleId == bundleId && Self.same($0.inner, frame) }
-    }
+    public mutating func forget(window: UInt32) { entries.removeAll { $0.window == window } }
 
-    public mutating func forgetAll() { entries = [] }
+    /// Drops the records of windows that no longer exist.
+    public mutating func prune(alive: Set<UInt32>) { entries.removeAll { !alive.contains($0.window) } }
 }
