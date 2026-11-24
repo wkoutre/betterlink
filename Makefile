@@ -20,7 +20,8 @@ LOCKFILE = /tmp/betterlink-swiftpm.lock
 SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -k -t 0 $(LOCKFILE) true 2>/dev/null || echo "Waiting for another SwiftPM build to finish ($(LOCKFILE))..." >&2; } && /usr/bin/lockf -k $(LOCKFILE))
 
 # The certificate a local build is signed with (scripts/sign.sh): a Developer
-# ID Application identity from the keychain. macOS then matches the build by
+# ID Application identity from the keychain, by its SHA-1 hash (two
+# certificates can share a name). macOS then matches the build by
 # bundle id and team, as it does the release, so the build keeps its
 # permissions across rebuilds. None, or CI, leaves it ad-hoc signed. Looked up
 # only when the build recipe uses it, at most once per make run. Override with
@@ -28,7 +29,7 @@ SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -k -t 0 $(LOCKF
 ifdef CI
 DEV_SIGN_IDENTITY ?=
 else
-DEV_SIGN_IDENTITY ?= $(eval DEV_SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -m1 -oE '"Developer ID Application: [^"]+"' | tr -d '"'))$(DEV_SIGN_IDENTITY)
+DEV_SIGN_IDENTITY ?= $(eval DEV_SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -m1 '"Developer ID Application: ' | awk '{print $$2}'))$(DEV_SIGN_IDENTITY)
 endif
 
 # With only the Command Line Tools (no Xcode), swift-testing sits outside

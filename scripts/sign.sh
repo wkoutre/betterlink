@@ -19,7 +19,9 @@ cd "$(dirname "$SELF")/.."
 ID=$1
 MODE=${2:-}
 APP=dist/betterlink.app
-TS=
+# No secure timestamp for a local build: getting one asks Apple's server, so
+# an offline build would fail to sign.
+TS=--timestamp=none
 if [ "$MODE" = --release ]; then TS=--timestamp; fi
 
 sign() {
