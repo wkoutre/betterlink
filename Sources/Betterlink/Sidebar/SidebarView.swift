@@ -9,6 +9,7 @@ import TabSyncCore
 struct SidebarView: View {
     @EnvironmentObject var sidebar: SidebarController
     @ObservedObject private var tabs = TabsModel.shared
+    private var pal: SidebarColors { SidebarColors(sidebar.palette) }
     @ObservedObject private var lib = SidebarLibraryModel.shared
     @State private var newURL = ""
     @State private var renaming: UUID?
@@ -33,7 +34,7 @@ struct SidebarView: View {
                                 Label("New Folder", systemImage: "folder.badge.plus").font(DS.TextStyle.caption)
                             }
                             .buttonStyle(.plain)
-                            .foregroundStyle(DS.Palette.textTertiary)
+                            .foregroundStyle(pal.textTertiary)
                             .padding(.horizontal, DS.Space.space2)
                             .padding(.vertical, 4)
                         }
@@ -58,7 +59,7 @@ struct SidebarView: View {
             } else {
                 Text(emptyText)
                     .font(DS.TextStyle.caption)
-                    .foregroundStyle(DS.Palette.textTertiary)
+                    .foregroundStyle(pal.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                     .padding(DS.Space.space4)
                 Spacer()
@@ -74,6 +75,7 @@ struct SidebarView: View {
         }
         // The browser profile's frame color, like the browser's own window.
         .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
+        .environment(\.sidebarColors, pal)
     }
 
     // MARK: - Header
@@ -105,7 +107,7 @@ struct SidebarView: View {
                     Text(profile?.name ?? "Sidebar").font(DS.TextStyle.headline)
                     Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
                 }
-                .foregroundStyle(DS.Palette.textSecondary)
+                .foregroundStyle(pal.textSecondary)
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -114,7 +116,7 @@ struct SidebarView: View {
             if let m = match {
                 Text([m.session.browser, m.certain ? tabs.profileName(m.session) : nil].compactMap { $0 }.joined(separator: " · "))
                     .font(DS.TextStyle.caption)
-                    .foregroundStyle(DS.Palette.textTertiary)
+                    .foregroundStyle(pal.textTertiary)
                     .lineLimit(1)
             }
         }
@@ -134,7 +136,7 @@ struct SidebarView: View {
                     Favicon(url: link.icon ?? "")
                         .frame(maxWidth: .infinity, minHeight: 40)
                         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
-                            .fill(isOpen ? DS.Palette.selected : DS.Palette.hover.opacity(0.6)))
+                            .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
                 }
                 .buttonStyle(.plain)
                 .help(link.title)
@@ -149,7 +151,7 @@ struct SidebarView: View {
         .frame(minHeight: p.favorites.isEmpty ? 24 : nil)
         .overlay {
             if p.favorites.isEmpty {
-                Text("Drag a tab here for a Favorite").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                Text("Drag a tab here for a Favorite").font(DS.TextStyle.caption).foregroundStyle(pal.textTertiary)
             }
         }
         .dropDestination(for: String.self) { keys, _ in
@@ -168,8 +170,8 @@ struct SidebarView: View {
                 HStack(spacing: DS.Space.space2) {
                     Image(systemName: f.expanded ? "chevron.down" : "chevron.right")
                         .font(.system(size: 9, weight: .semibold)).frame(width: 10)
-                        .foregroundStyle(DS.Palette.textTertiary)
-                    Image(systemName: "folder").foregroundStyle(DS.Palette.textSecondary)
+                        .foregroundStyle(pal.textTertiary)
+                    Image(systemName: "folder").foregroundStyle(pal.textSecondary)
                     nameOrField(f.id, f.name, p)
                     Spacer(minLength: 0)
                 }
@@ -204,10 +206,10 @@ struct SidebarView: View {
             return AnyView(HStack(spacing: DS.Space.space2) {
                 Favicon(url: tab?.favIconUrl ?? l.icon ?? "")
                 nameOrField(l.id, l.title, p)
-                    .foregroundStyle(tab == nil ? DS.Palette.textSecondary : DS.Palette.text)
+                    .foregroundStyle(tab == nil ? pal.textSecondary : pal.text)
                 Spacer(minLength: 0)
                 // Open: like Arc, the saved link stands for its tab.
-                if tab != nil { Circle().fill(DS.Palette.accent).frame(width: 5, height: 5).accessibilityLabel("open") }
+                if tab != nil { Circle().fill(pal.accent).frame(width: 5, height: 5).accessibilityLabel("open") }
             }
             .padding(.leading, CGFloat(depth) * 14 + 18)
             .rowStyle(selected: tab?.active == true)
@@ -271,7 +273,7 @@ struct SidebarView: View {
 
     private func newTabField(_ m: Match) -> some View {
         HStack(spacing: DS.Space.space2) {
-            Image(systemName: "plus").foregroundStyle(DS.Palette.textTertiary)
+            Image(systemName: "plus").foregroundStyle(pal.textTertiary)
             TextField("New Tab", text: $newURL)
                 .textFieldStyle(.plain)
                 .font(DS.TextStyle.body)
@@ -400,21 +402,23 @@ private struct SidebarTabRow: View {
     let close: () -> Void
     @State private var hovering = false
 
+    @Environment(\.sidebarColors) private var pal
+
     var body: some View {
         HStack(spacing: DS.Space.space2) {
             Favicon(url: tab.favIconUrl)
             Text(tab.title.isEmpty ? tab.url : tab.title)
                 .font(DS.TextStyle.body)
                 .lineLimit(1)
-                .foregroundStyle(DS.Palette.text)
+                .foregroundStyle(pal.text)
             Spacer(minLength: 0)
             if tab.audible {
-                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(DS.Palette.textTertiary)
+                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(pal.textTertiary)
             }
             if hovering {
                 Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
                     .buttonStyle(.plain)
-                    .foregroundStyle(DS.Palette.textSecondary)
+                    .foregroundStyle(pal.textSecondary)
                     .accessibilityLabel("Close \(tab.title)")
             }
         }
@@ -422,7 +426,7 @@ private struct SidebarTabRow: View {
         .padding(.vertical, 6)
         .background(
             RoundedRectangle(cornerRadius: 7, style: .continuous)
-                .fill(tab.active ? DS.Palette.selected : (hovering ? DS.Palette.hover : .clear))
+                .fill(tab.active ? pal.selected : (hovering ? pal.hover : .clear))
         )
         .contentShape(Rectangle())
         .onHover { hovering = $0 }
@@ -433,11 +437,49 @@ private struct SidebarTabRow: View {
     }
 }
 
-private extension View {
-    func rowStyle(selected: Bool = false) -> some View {
-        self.padding(.horizontal, DS.Space.space2)
+private struct RowStyle: ViewModifier {
+    var selected: Bool
+    @Environment(\.sidebarColors) private var pal
+    func body(content: Content) -> some View {
+        content.padding(.horizontal, DS.Space.space2)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? DS.Palette.selected : .clear))
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? pal.selected : .clear))
             .contentShape(Rectangle())
+    }
+}
+
+private extension View {
+    func rowStyle(selected: Bool = false) -> some View { modifier(RowStyle(selected: selected)) }
+}
+
+/// The sidebar's text and fill colors: the standard design tokens, or, on a
+/// profile color, the readable palette made for it (SidebarPalette, WCAG AA).
+struct SidebarColors {
+    var text, textSecondary, textTertiary, hover, selected, accent: Color
+
+    init(_ p: SidebarPalette?) {
+        guard let p else {
+            text = DS.Palette.text; textSecondary = DS.Palette.textSecondary; textTertiary = DS.Palette.textTertiary
+            hover = DS.Palette.hover; selected = DS.Palette.selected; accent = DS.Palette.accent
+            return
+        }
+        func c(_ v: SidebarPalette.RGB, _ a: Double = 1) -> Color { Color(.sRGB, red: v.r, green: v.g, blue: v.b, opacity: a) }
+        text = c(p.foreground)
+        textSecondary = c(p.level(SidebarPalette.secondaryOpacity))
+        textTertiary = c(p.level(SidebarPalette.tertiaryOpacity))
+        hover = c(p.foreground, SidebarPalette.hoverOpacity)
+        selected = c(p.foreground, SidebarPalette.selectedOpacity)
+        accent = c(p.foreground)
+    }
+}
+
+private struct SidebarColorsKey: EnvironmentKey {
+    static let defaultValue = SidebarColors(nil)
+}
+
+extension EnvironmentValues {
+    var sidebarColors: SidebarColors {
+        get { self[SidebarColorsKey.self] }
+        set { self[SidebarColorsKey.self] = newValue }
     }
 }

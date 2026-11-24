@@ -347,8 +347,15 @@ final class SidebarController: ObservableObject {
 
     /// Paints the sidebar in the browser profile's frame color (nil: the
     /// standard sidebar material), so it reads as part of that window.
-    func setTint(_ rgb: UInt32?) { tint = rgb; panel?.setTint(rgb) }
+    func setTint(_ rgb: UInt32?) {
+        let p = rgb.map { SidebarPalette(profileColor: $0) }
+        if palette != p { palette = p }
+        tint = p?.background.hex
+        panel?.setTint(tint)
+    }
     private var tint: UInt32?
+    /// Readable colors for the profile color (WCAG AA), or nil for the standard look.
+    @Published private(set) var palette: SidebarPalette?
 
     /// After a click or a typed link in the sidebar, hand the keyboard back to the browser.
     func returnFocusToBrowser() { tracker.activateBrowser() }
