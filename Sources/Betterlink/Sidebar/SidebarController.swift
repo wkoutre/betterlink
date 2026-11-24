@@ -220,6 +220,8 @@ final class SidebarController: ObservableObject {
 
     /// The window came to rest: make the pair fill the space the window was given.
     private func settle(_ t: WindowTracker.Target) {
+        // The tab list matches the window by its frame: refresh it now that it is still.
+        if target != t { target = t }
         guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         var outer = t.frame

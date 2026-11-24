@@ -14,6 +14,8 @@ public struct BrowserSession: Identifiable, Sendable {
     /// The browser's own process id, to match a session to the frontmost app.
     public var browserPid: Int = 0
     public var brands: [String] = []
+    /// The extension's id for its browser profile (see ProfileLocator).
+    public var instance: String?
     public var store = TabStore()
     /// Browser event -> app, measured on the shared machine clock.
     public var lastEventLatencyMs: Double?
@@ -124,6 +126,7 @@ public final class SyncHub: @unchecked Sendable {
                 s.browserPid = m.browserPid ?? s.browserPid
             case "hello":
                 s.brands = m.brands ?? []
+                s.instance = m.instance
             case "ack":
                 if let id = m.id, let sent = pending.removeValue(forKey: id) {
                     s.lastCommandRoundTripMs = receivedAt - sent

@@ -27,6 +27,38 @@ public struct SnapshotWindow: Codable, Equatable, Sendable {
     public var focused: Bool
     public var incognito: Bool?
     public var tabs: [Tab]
+    public var left: Double?
+    public var top: Double?
+    public var width: Double?
+    public var height: Double?
+
+    public init(id: Int, focused: Bool, incognito: Bool? = nil, tabs: [Tab],
+                left: Double? = nil, top: Double? = nil, width: Double? = nil, height: Double? = nil) {
+        self.id = id; self.focused = focused; self.incognito = incognito; self.tabs = tabs
+        self.left = left; self.top = top; self.width = width; self.height = height
+    }
+
+    public var bounds: WindowBounds? { WindowBounds(left: left, top: top, width: width, height: height) }
+}
+
+/// A browser window's frame in screen points, top-left origin: the browser's
+/// `chrome.windows` bounds, which use the same space as macOS Accessibility.
+public struct WindowBounds: Equatable, Sendable {
+    public var left, top, width, height: Double
+
+    public init(left: Double, top: Double, width: Double, height: Double) {
+        self.left = left; self.top = top; self.width = width; self.height = height
+    }
+
+    init?(left: Double?, top: Double?, width: Double?, height: Double?) {
+        guard let left, let top, let width, let height else { return nil }
+        self.init(left: left, top: top, width: width, height: height)
+    }
+
+    /// How far apart two frames are: the sum of their edges' distances.
+    public func distance(to o: WindowBounds) -> Double {
+        abs(left - o.left) + abs(top - o.top) + abs(left + width - o.left - o.width) + abs(top + height - o.top - o.height)
+    }
 }
 
 /// Everything the extension (or the host) can send to the app. One flat shape
@@ -46,6 +78,13 @@ public struct Inbound: Codable, Sendable {
     public var focused: Bool?
     public var incognito: Bool?
     public var windows: [SnapshotWindow]?
+    // windowCreated / windowBounds
+    public var left: Double?
+    public var top: Double?
+    public var width: Double?
+    public var height: Double?
+    /// hello: a random id the extension keeps in this browser profile's storage.
+    public var instance: String?
     public var changes: [String]?
     /// tabFavicon: the icon as a data: URL.
     public var favicon: String?
@@ -66,7 +105,7 @@ public struct Inbound: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, seq, t, tab, tabId, removedTabId, windowId, fromIndex, toIndex,
-             isWindowClosing, focused, incognito, windows, changes, favicon, userAgent, brands, id, ok, error, browser, pid, browserPid
+             isWindowClosing, focused, incognito, windows, left, top, width, height, instance, changes, favicon, userAgent, brands, id, ok, error, browser, pid, browserPid
         case protocolVersion = "protocol"
         case extensionVersion = "extension"
     }

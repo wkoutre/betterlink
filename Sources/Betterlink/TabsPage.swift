@@ -15,6 +15,9 @@ final class TabsModel: ObservableObject {
     static let shared = TabsModel()
 
     @Published private(set) var sessions: [BrowserSession] = []
+    /// Browser profile names, by the extension's instance id (see ProfileLocator).
+    @Published private(set) var profileNames: [String: String] = [:]
+    private var profileLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
     @Published private(set) var registrationVersion = 0
@@ -25,10 +28,37 @@ final class TabsModel: ObservableObject {
     func start() {
         guard hub == nil else { return }
         let hub = SyncHub(onChange: { [weak self] s in
-            DispatchQueue.main.async { self?.sessions = s }
+            DispatchQueue.main.async { self?.sessions = s; self?.lookUpProfiles(s) }
         })
         self.hub = hub
         hub.start()
+    }
+
+    /// The browser profile a session runs in, once known ("Claude", "Work").
+    func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profileNames[$0] } }
+
+    /// Finds each new session's profile in the background: the extension's id
+    /// in a profile folder's extension storage, then that folder's name in the
+    /// browser's Local State. Retried at most every 5 s until found (the
+    /// browser writes the storage a moment after the extension starts).
+    private func lookUpProfiles(_ sessions: [BrowserSession]) {
+        for s in sessions {
+            guard let instance = s.instance, profileNames[instance] == nil,
+                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > 5,
+                  let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
+                  let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
+                  let folder = browser.dataFolder else { continue }
+            profileLookups[instance] = Date()
+            let root = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
+            DispatchQueue.global(qos: .utility).async {
+                guard let dir = ProfileLocator.directory(instance: instance, dataFolder: root) else { return }
+                let state = FileManager.default.contents(atPath: root.appendingPathComponent("Local State").path)
+                let name = state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: browser.bundleId)
+                    .profiles.first { $0.directory == dir }?.name } ?? dir
+                DispatchQueue.main.async { self.profileNames[instance] = name }
+            }
+        }
     }
 
     func open(_ text: String, in session: BrowserSession? = nil, windowId: Int? = nil) {
@@ -110,7 +140,7 @@ struct TabsPage: View {
                         ForEach(entry.tabs) { tab in TabRow(tab: tab, session: session) }
                     } header: {
                         HStack {
-                            Text("\(session.browser) · Window \(i + 1)")
+                            Text("\(session.browser)\(tabs.profileName(session).map { " (\($0))" } ?? "") · Window \(i + 1)")
                             if entry.window.focused {
                                 Circle().fill(DS.Palette.success).frame(width: 6, height: 6).accessibilityLabel("Focused")
                             }

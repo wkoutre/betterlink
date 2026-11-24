@@ -27,6 +27,11 @@ export function serializeTab(t) {
 // `favicon(pageUrl)` resolves to a data: URL of the browser's cached icon for
 // that page, or "" (background.js reads Chrome's local favicon store; the app
 // itself never fetches anything from the network).
+// A window's frame in screen points, top-left origin (the same as macOS Accessibility).
+export function bounds(w) {
+  return { left: w.left ?? null, top: w.top ?? null, width: w.width ?? null, height: w.height ?? null };
+}
+
 export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "") {
   let seq = 0;
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
@@ -53,6 +58,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
         id: w.id,
         focused: !!w.focused,
         incognito: !!w.incognito,
+        ...bounds(w),
         tabs: (w.tabs || []).map(serializeTab),
       })),
     });
@@ -80,10 +86,15 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
       try { tab = serializeTab(await chrome.tabs.get(addedTabId)); } catch {}
       emit("tabReplaced", { tabId: addedTabId, removedTabId, tab });
     }],
-    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito })],
+    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, ...bounds(w) })],
     [chrome.windows.onRemoved, (windowId) => emit("windowRemoved", { windowId })],
     [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId })],
   ];
+  // Where each window is on screen, so the app can tell which browser profile
+  // owns the window in front (every profile runs its own copy of this extension).
+  if (chrome.windows.onBoundsChanged) {
+    listeners.push([chrome.windows.onBoundsChanged, (w) => emit("windowBounds", { windowId: w.id, ...bounds(w) })]);
+  }
 
   function attach() {
     for (const [ev, fn] of listeners) ev.addListener(fn);

@@ -29,6 +29,21 @@ const bridge = createBridge(chrome, send, () => Date.now(), favicon);
 // Listeners must be registered synchronously at top level so they also wake the worker.
 bridge.attach();
 
+// A random id kept in this profile's extension storage. betterlink finds it in
+// the profile's folder on disk to learn which browser profile this copy runs in.
+async function instanceId() {
+  try {
+    const got = await chrome.storage.local.get("betterlinkInstance");
+    if (got.betterlinkInstance) return got.betterlinkInstance;
+    const id = "betterlink-instance-" + crypto.randomUUID();
+    await chrome.storage.local.set({ betterlinkInstance: id });
+    return id;
+  } catch {
+    return "";
+  }
+}
+const instance = instanceId();
+
 function connect() {
   if (port) return;
   let p;
@@ -47,14 +62,18 @@ function connect() {
     if (port === p) port = null;
     scheduleRetry();
   });
-  send({
-    type: "hello",
-    protocol: PROTOCOL,
-    extension: chrome.runtime.getManifest().version,
-    userAgent: navigator.userAgent,
-    brands: (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand),
+  instance.then((id) => {
+    if (port !== p) return;
+    send({
+      type: "hello",
+      protocol: PROTOCOL,
+      extension: chrome.runtime.getManifest().version,
+      userAgent: navigator.userAgent,
+      brands: (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand),
+      instance: id,
+    });
+    bridge.snapshot();
   });
-  bridge.snapshot();
 }
 
 function scheduleRetry() {

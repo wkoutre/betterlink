@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import TabSyncCore
 
@@ -29,6 +30,14 @@ struct SidebarView: View {
             // Clear of the browser window's traffic lights when bound on the left.
             .padding(.top, 28)
 
+            if let m = match {
+                Text([m.session.browser, tabs.profileName(m.session)].compactMap { $0 }.joined(separator: " · "))
+                    .font(DS.TextStyle.caption)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                    .lineLimit(1)
+                    .padding(.horizontal, DS.Space.space4)
+                    .padding(.bottom, DS.Space.space1)
+            }
             if let m = match, let w = m.window {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 1) {
@@ -69,6 +78,16 @@ struct SidebarView: View {
     /// tab's title the AX window title starts with, else the focused window.
     static func match(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Match? {
         guard let t = target else { return nil }
+        // Each browser profile is its own session: the window whose reported
+        // frame matches the one in front says which profile it is.
+        let mine = sessions.filter { $0.browserPid == Int(t.pid) }
+        if let h = NSScreen.screens.first?.frame.height {
+            let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: h)
+            let front = WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height)
+            if let hit = WindowMatch.best(for: front, in: mine), let s = mine.first(where: { $0.id == hit.session }) {
+                return Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId })
+            }
+        }
         guard let s = sessions.first(where: { $0.browserPid == Int(t.pid) })
             ?? sessions.first(where: { $0.browser == t.appName }) else { return nil }
         let windows = s.store.orderedWindows

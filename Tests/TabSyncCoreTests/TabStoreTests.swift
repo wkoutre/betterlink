@@ -171,3 +171,42 @@ struct FaviconStoreTests {
         #expect(s.tabs[10]?.favIconUrl == "https://b/i.png")
     }
 }
+
+struct ProfileTests {
+    private func snapshot(_ wins: [SnapshotWindow]) -> Inbound {
+        var m = Inbound(type: "snapshot"); m.seq = 1; m.windows = wins; return m
+    }
+
+    @Test func windowBoundsArriveInTheSnapshotAndFollowMoves() {
+        var s = TabStore()
+        s.apply(snapshot([SnapshotWindow(id: 1, focused: true, tabs: [], left: 0, top: 31, width: 748, height: 1259)]))
+        #expect(s.windows[1]?.bounds == WindowBounds(left: 0, top: 31, width: 748, height: 1259))
+        var e = Inbound(type: "event"); e.kind = "windowBounds"; e.seq = 2; e.windowId = 1
+        e.left = 1028; e.top = 31; e.width = 748; e.height = 1259
+        s.apply(e)
+        #expect(s.windows[1]?.bounds?.left == 1028)
+    }
+
+    @Test func theFrontWindowIsMatchedToItsProfileByFrame() {
+        var a = BrowserSession(socketPath: "/a"), b = BrowserSession(socketPath: "/b")
+        a.store.apply(snapshot([SnapshotWindow(id: 1, focused: false, tabs: [], left: 0, top: 31, width: 748, height: 1259)]))
+        b.store.apply(snapshot([SnapshotWindow(id: 7, focused: true, tabs: [], left: 1028, top: 31, width: 748, height: 1259)]))
+        let front = WindowBounds(left: 1029, top: 31, width: 747, height: 1259)
+        #expect(WindowMatch.best(for: front, in: [a, b]) == WindowMatch.Hit(session: "/b", windowId: 7))
+        #expect(WindowMatch.best(for: WindowBounds(left: 300, top: 200, width: 500, height: 500), in: [a, b]) == nil)
+    }
+
+    @Test func theProfileFolderIsFoundByTheExtensionsStoredId() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("bl-prof-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: root) }
+        for (profile, token) in [("Default", "betterlink-instance-aaa"), ("Profile 1", "betterlink-instance-bbb")] {
+            let dir = root.appendingPathComponent(profile).appendingPathComponent("Local Extension Settings")
+                .appendingPathComponent(HostRegistration.extensionId)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("\u{1}\u{0}junk\"betterlinkInstance\"\"\(token)\"".utf8).write(to: dir.appendingPathComponent("000003.log"))
+        }
+        #expect(ProfileLocator.directory(instance: "betterlink-instance-bbb", dataFolder: root) == "Profile 1")
+        #expect(ProfileLocator.directory(instance: "betterlink-instance-aaa", dataFolder: root) == "Default")
+        #expect(ProfileLocator.directory(instance: "betterlink-instance-zzz", dataFolder: root) == nil)
+    }
+}

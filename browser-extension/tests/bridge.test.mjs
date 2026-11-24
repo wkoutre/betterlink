@@ -129,3 +129,20 @@ test("pages without a web URL never ask for an icon", async () => {
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(asked, []);
 });
+
+test("window frames ride along in the snapshot and on every move, for profile matching", async () => {
+  const chrome = fakeChrome();
+  chrome.windows.onBoundsChanged = ev();
+  const all = await chrome.windows.getAll();
+  Object.assign(all[0], { left: 0, top: 31, width: 748, height: 1259 });
+  const out = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1234);
+  b.attach();
+  await b.snapshot();
+  const snap = out.find((m) => m.type === "snapshot");
+  assert.deepEqual([snap.windows[0].left, snap.windows[0].top, snap.windows[0].width, snap.windows[0].height], [0, 31, 748, 1259]);
+  chrome.windows.onBoundsChanged.fire({ id: 1, left: 1028, top: 31, width: 748, height: 1259 });
+  const moved = out.find((m) => m.kind === "windowBounds");
+  assert.equal(moved.windowId, 1);
+  assert.equal(moved.left, 1028);
+});
