@@ -31,7 +31,7 @@ final class SidebarController: ObservableObject {
     /// The sidebar takes over the browser's tabs: its own tab strip is switched
     /// to collapsed vertical tabs (see TabStripTakeover), and with the sidebar
     /// on the left, the sidebar covers that column too.
-    @Published var takeOverTabs: Bool { didSet { save(); stripCover = nil; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
+    @Published var takeOverTabs: Bool { didSet { save(); stripCover = nil; takenOver = [:]; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
     /// Shows and hides the sidebar while an attached browser is in front.
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
@@ -210,7 +210,12 @@ final class SidebarController: ObservableObject {
     private func targetChanged(_ t: WindowTracker.Target?) {
         let newWindow = t != nil && t?.windowHash != current?.windowHash
         current = t
-        if newWindow, let t { stripCover = nil; if takeOverTabs { takeOver(t) } }
+        if newWindow, let t {
+            // A window already taken over keeps its measurement: coming back
+            // from another app neither drops the cover nor presses again.
+            stripCover = takenOver[t.windowHash] ?? nil
+            if takeOverTabs, takenOver[t.windowHash] == nil { takeOver(t) }
+        }
         var shown = t
         if let old = target { shown?.frame = old.frame }
         if shown != target { target = t }
@@ -220,6 +225,9 @@ final class SidebarController: ObservableObject {
     /// The browser's collapsed vertical tab column, as (width, distance from
     /// the window's top), measured from the window; nil when there is none.
     private var stripCover: CGSize?
+    /// Windows already taken over, with their measured column (nil inside
+    /// when the window shows none), by window hash.
+    private var takenOver: [Int: CGSize?] = [:]
 
     /// Collapses the bound window's tab strip (Chromium browsers), then
     /// measures the column it leaves, so the sidebar can cover it.
@@ -236,6 +244,7 @@ final class SidebarController: ObservableObject {
             guard self.tracker.boundWindowIsFocusedMain() else { return self.takeOver(t, pass: pass + 1) }
             if TabStripTakeover.apply(pid: t.pid) != nil { return self.takeOver(t, pass: pass + 1) }
             self.stripCover = self.tracker.verticalTabStrip()
+            self.takenOver[t.windowHash] = .some(self.stripCover)
             self.layout()
         }
     }
@@ -254,6 +263,13 @@ final class SidebarController: ObservableObject {
     private func settle(_ t: WindowTracker.Target) {
         // The tab list matches the window by its frame: refresh it now that it is still.
         if target != t { target = t }
+        // Every mouse-up settles: the user may have expanded the tab column or
+        // turned vertical tabs off, so measure it again (review F3).
+        if takeOverTabs, takenOver[t.windowHash] != nil {
+            let now = tracker.verticalTabStrip()
+            takenOver[t.windowHash] = .some(now)
+            if now != stripCover { stripCover = now; layout() }
+        }
         guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         var outer = t.frame
