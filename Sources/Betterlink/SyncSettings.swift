@@ -55,26 +55,35 @@ struct SyncSettingsSection: View {
     private func profileRow(_ id: UUID, _ name: String) -> some View {
         let on = Binding(get: { sync.selection.profiles[id] != nil },
                          set: { sync.selection.profiles[id] = $0 ? .init() : nil })
-        VStack(alignment: .leading, spacing: 4) {
+        let parts = sync.selection.profiles[id]
+        VStack(alignment: .leading, spacing: DS.Space.space2) {
             Toggle(isOn: on) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Sidebar Profile \u{201C}\(name)\u{201D}")
-                    Text("Its favorites, folders and name.").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    Text("Sidebar Profile \u{201C}\(name.trimmingCharacters(in: .whitespaces))\u{201D}")
+                    Text(summary(parts)).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 }
             }
-            if let parts = sync.selection.profiles[id] {
-                HStack(spacing: DS.Space.space4) {
-                    part("Favorites", parts.favorites) { sync.selection.profiles[id]?.favorites = $0 }
-                    part("Folders", parts.folders) { sync.selection.profiles[id]?.folders = $0 }
-                    part("Name", parts.appearance) { sync.selection.profiles[id]?.appearance = $0 }
+            if let parts {
+                HStack(spacing: DS.Space.space2) {
+                    SyncPartChip(label: "Favorites", symbol: "star", isOn: parts.favorites) { sync.selection.profiles[id]?.favorites.toggle() }
+                    SyncPartChip(label: "Folders", symbol: "folder", isOn: parts.folders) { sync.selection.profiles[id]?.folders.toggle() }
+                    SyncPartChip(label: "Name", symbol: "textformat", isOn: parts.appearance) { sync.selection.profiles[id]?.appearance.toggle() }
                 }
-                .padding(.leading, DS.Space.space4)
+                .transition(.opacity)
             }
         }
+        .animation(.easeOut(duration: 0.15), value: parts != nil)
     }
 
-    private func part(_ label: String, _ value: Bool, _ set: @escaping (Bool) -> Void) -> some View {
-        Toggle(label, isOn: Binding(get: { value }, set: set)).toggleStyle(.checkbox).font(DS.TextStyle.caption)
+    /// What this profile's switch covers now, in words.
+    private func summary(_ parts: SyncSelection.Parts?) -> String {
+        guard let parts else { return "Stays on this Mac." }
+        let names = [parts.favorites ? "favorites" : nil, parts.folders ? "folders" : nil, parts.appearance ? "name" : nil].compactMap { $0 }
+        switch names.count {
+        case 0: return "Pick what syncs below."
+        case 1: return "Syncs its \(names[0])."
+        default: return "Syncs its \(names.dropLast().joined(separator: ", ")) and \(names.last!)."
+        }
     }
 
     private func chooseFolder() {
@@ -85,5 +94,39 @@ struct SyncSettingsSection: View {
         panel.prompt = "Sync Here"
         panel.message = "Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync."
         if panel.runModal() == .OK, let url = panel.url { sync.choose(folder: url) }
+    }
+}
+
+/// One part of a Sidebar Profile that can sync, as a pill: filled with a
+/// check when it syncs, outlined when it doesn't.
+private struct SyncPartChip: View {
+    let label: String
+    let symbol: String
+    let isOn: Bool
+    let toggle: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: isOn ? "checkmark" : symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 12)
+                Text(label).font(DS.TextStyle.caption)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .foregroundStyle(isOn ? DS.Palette.accentText : DS.Palette.textSecondary)
+            .background(Capsule().fill(isOn ? DS.Palette.accentTint : (hovering ? DS.Palette.hover : Color.clear)))
+            .overlay(Capsule().strokeBorder(isOn ? DS.Palette.accent.opacity(0.35) : DS.Palette.border, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isOn)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "Syncs" : "Doesn't sync")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .help(isOn ? "\(label) syncs. Click to keep it on this Mac." : "\(label) stays on this Mac. Click to sync it.")
     }
 }
