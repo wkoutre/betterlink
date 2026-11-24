@@ -127,6 +127,23 @@ final class SidebarController: ObservableObject {
         Set(AppModel.installedBrowsers().filter { $0.family == .chromium || $0.bundleId == "com.apple.Safari" }.map(\.bundleId))
     }
 
+    /// Picks up settings another process wrote (`betterlink sidebar settings
+    /// set`, through AgentCommand): only what differs is set, so each change
+    /// takes effect as it does from the Tabs page. `sidebar.collapsed` is
+    /// applied with the same slide as the shortcut.
+    func reloadSettings() {
+        if let a = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Set.init), a != attachTo { attachTo = a }
+        if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
+        let w = defaults.double(forKey: "sidebar.width")
+        if w >= 200, w != width { width = w }
+        let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
+        if take != takeOverTabs { takeOverTabs = take }
+        let on = defaults.bool(forKey: "sidebar.enabled")
+        if on != enabled { enabled = on }
+        let hidden = defaults.bool(forKey: "sidebar.collapsed")
+        if enabled, hidden != collapsed { toggleCollapsed() }
+    }
+
     /// The shortcut and the menu item: hide the sidebar and give the window its
     /// space back, or show it and make room again.
     func toggleCollapsed() {

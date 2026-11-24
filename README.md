@@ -135,7 +135,7 @@ A sidebar beside your Chromium browser window, Arc-style, with every open tab sy
 1. **Another app can reroute your links.** Any program running as you can edit `config.ts` or `rules.json`. betterlink refuses either file if someone else owns it, or if other users can write to it or to its folder. It does not defend against malware already running as you.
    It doesn't lend that program its own permissions, though. The `betterlink` command runs with the permissions of whatever started it (your terminal, a script, an agent), and it refuses to start the way an app is started (`open -a betterlink.app --args agent …`), where it would run with betterlink's own Full Disk Access. Switching settings folders links a symlinked `rules.json` or `config.ts` into the new folder instead of copying what it points to.
 2. **betterlink sees every link you open.** It keeps them in memory only and sends nothing anywhere. Its only network request is the update check (see Updates), which carries no link or setting.
-3. **A build from source isn't notarized.** Releases are signed and notarized; `make install` ad-hoc signs a local build, so macOS forgets its permissions (such as Full Disk Access) each time you rebuild.
+3. **A build from source isn't notarized.** Releases are signed and notarized. `make build` and `make install` sign a local build with a Developer ID Application certificate when your keychain has one, and macOS then keeps its permissions (such as Full Disk Access and Accessibility) across rebuilds. If that certificate is betterlink's own (team JJDAHS4TUV), macOS can't tell the build from the release, so the two share those permissions. Without a certificate the build is ad-hoc signed, and macOS forgets its permissions each time you rebuild.
 4. **Lookalike domains open in the fallback profile.** For example `exаmple.com` with a Cyrillic а. betterlink doesn't try to detect them.
 
 ## Command line and coding agents
@@ -152,9 +152,22 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - the menu bar icon;
 - automatic update checks;
 - the link toast;
-- default browser.
+- default browser;
+- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
+- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open).
 
-The app keeps its log in memory only, so the command can't read it.
+The app keeps its log in memory only, so the command can't read it. A few sidebar actions still need the sidebar itself: opening a saved link so it holds its tab, Back to Saved Page, and Save This Page Here.
+
+```sh
+betterlink sidebar list                                       # every Sidebar Profile, with ids
+betterlink sidebar add-link --url https://mail.google.com --to favorites
+betterlink sidebar add-folder --name Reading
+betterlink sidebar move 3f2a --to favorites --position 1      # the first 4+ characters of an id are enough
+betterlink sidebar profiles assign --profile Work --browser "Google Chrome" --browserProfile "Profile 1"
+betterlink sidebar settings set --side left --width 300
+betterlink tabs list
+betterlink tabs close-others --tab 1234
+```
 
 The command ships inside the app at `betterlink.app/Contents/Helpers/betterlink`. **Agents › Install Command** in the window links it into `~/.local/bin`, creating that folder if needed (it never replaces a file, or a link that isn't betterlink's). Or link it yourself, using wherever betterlink.app is (usually `/Applications`):
 

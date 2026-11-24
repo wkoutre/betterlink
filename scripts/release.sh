@@ -57,30 +57,7 @@ fi
 UPDATES=1 make build
 
 if [ -n "$SIGN_IDENTITY" ]; then
-  # Sparkle comes signed by its own team; the hardened runtime only loads code
-  # from betterlink's team, so sign its parts again, innermost first.
-  SPARKLE="$APP/Contents/Frameworks/Sparkle.framework/Versions/B"
-  for part in "$SPARKLE/XPCServices/Installer.xpc" "$SPARKLE/Autoupdate" "$SPARKLE/Updater.app"; do
-    [ -e "$part" ] && codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$part"
-  done
-  if [ -e "$SPARKLE/XPCServices/Downloader.xpc" ]; then
-    codesign --force --timestamp --options runtime --preserve-metadata=entitlements \
-      --sign "$SIGN_IDENTITY" "$SPARKLE/XPCServices/Downloader.xpc"
-  fi
-  codesign --force --timestamp --options runtime --sign "$SIGN_IDENTITY" "$APP/Contents/Frameworks/Sparkle.framework"
-  # The hardened runtime, which notarization requires. Sign the nested command
-  # first (it is a Bun executable and needs JIT entitlements), then the app
-  # (JavaScriptCore runs config.ts in-process and needs allow-jit).
-  codesign --force --timestamp --options runtime \
-    --entitlements scripts/cli.entitlements \
-    --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/betterlink"
-  # The Tabs host a browser launches over native messaging: plain Swift, no entitlements.
-  codesign --force --timestamp --options runtime \
-    --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/betterlink-tabhost"
-  codesign --force --timestamp --options runtime \
-    --entitlements scripts/app.entitlements \
-    --sign "$SIGN_IDENTITY" "$APP"
-  codesign --verify --deep --strict --verbose=2 "$APP"
+  scripts/sign.sh "$SIGN_IDENTITY" --release
 else
   echo "SIGN_IDENTITY not set: the app stays ad-hoc signed (dry run)."
 fi
