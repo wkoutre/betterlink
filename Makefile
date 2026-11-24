@@ -2,6 +2,33 @@ APP        = dist/betterlink.app
 CONTENTS   = $(APP)/Contents
 LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
 
+# Caps how much SwiftPM compiles at once: -j limits build tasks, and
+# -Xswiftc -j limits the compiler processes each module starts. Uncapped, one
+# build ran about 20 compilers at about 650 MB each and ran a 24 GB Mac out of
+# memory. CI runs uncapped on its own machine. Override with `make test SWIFT_JOBS=`.
+ifdef CI
+SWIFT_JOBS ?=
+else
+SWIFT_JOBS ?= -j 4 -Xswiftc -j2
+endif
+
+# One SwiftPM build or test at a time on this machine: a second waits for the
+# first (several builds at once ran the Mac above out of memory just the same).
+# /usr/bin/lockf ships with macOS; it says when it has to wait, then waits.
+# Override with `make test SWIFTPM_LOCK=`.
+LOCKFILE = /tmp/betterlink-swiftpm.lock
+SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -k -t 0 $(LOCKFILE) true 2>/dev/null || echo "Waiting for another SwiftPM build to finish ($(LOCKFILE))..." >&2; } && /usr/bin/lockf -k $(LOCKFILE))
+
+# With only the Command Line Tools (no Xcode), swift-testing sits outside
+# SwiftPM's default search paths, so `swift test` fails with "no such module
+# 'Testing'". Point it there; with Xcode selected this adds nothing.
+DEVELOPER_DIR ?= $(shell xcode-select -p 2>/dev/null)
+CLT_FRAMEWORKS = $(DEVELOPER_DIR)/Library/Developer/Frameworks
+ifeq ($(DEVELOPER_DIR)$(wildcard $(CLT_FRAMEWORKS)/Testing.framework),/Library/Developer/CommandLineTools$(CLT_FRAMEWORKS)/Testing.framework)
+SWIFT_TEST_FLAGS ?= -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) -Xlinker -F -Xlinker $(CLT_FRAMEWORKS) \
+	-Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) -Xlinker -rpath -Xlinker $(DEVELOPER_DIR)/Library/Developer/usr/lib
+endif
+
 .PHONY: fetch tokens icon cli build test test-cli install run clean
 
 # The TypeScript compiler bundled for config.ts, checksum-pinned.
@@ -14,7 +41,7 @@ tokens:
 
 test: fetch
 	python3 scripts/gen-tokens.py --check
-	swift test
+	$(SWIFTPM_LOCK) swift test $(SWIFT_JOBS) $(SWIFT_TEST_FLAGS)
 
 # The betterlink command (cli/), compiled with Bun into one executable that
 # ships inside the app at Contents/Helpers/betterlink. Apple silicon only,
@@ -35,7 +62,7 @@ test-cli: build
 icon:
 	rm -rf .build/AppIcon.iconset
 	mkdir -p .build/AppIcon.iconset
-	swiftc -O scripts/make-icon.swift -o .build/make-icon
+	$(SWIFTPM_LOCK) swiftc -O scripts/make-icon.swift -o .build/make-icon
 	for s in 16 32 128 256 512; do \
 	  .build/make-icon .build/AppIcon.iconset/icon_$${s}x$${s}.png $$s; \
 	  .build/make-icon .build/AppIcon.iconset/icon_$${s}x$${s}@2x.png $$((s*2)); \
@@ -45,7 +72,7 @@ icon:
 build: fetch icon cli
 	# Only the versions Package.resolved pins (Sparkle, by commit): a tag moved
 	# upstream fails the build instead of being built in.
-	swift build -c release --only-use-versions-from-resolved-file
+	$(SWIFTPM_LOCK) swift build -c release --only-use-versions-from-resolved-file $(SWIFT_JOBS)
 	rm -rf $(APP)
 	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Helpers $(CONTENTS)/Resources/typescript/lib
 	cp .build/release/Betterlink $(CONTENTS)/MacOS/Betterlink
