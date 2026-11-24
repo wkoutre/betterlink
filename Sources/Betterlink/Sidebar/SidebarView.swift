@@ -115,5 +115,7 @@ private struct SidebarTabRow: View {
         .onHover { hovering = $0 }
         .onTapGesture(perform: activate)
         .accessibilityAddTraits(tab.active ? [.isButton, .isSelected] : .isButton)
+        .accessibilityAction { activate() }
+        .accessibilityAction(named: Text("Close")) { close() }
     }
 }

@@ -111,12 +111,16 @@ final class SidebarController: ObservableObject {
         }
         placedSide = p.side
         let panel = self.panel ?? makePanel()
+        panel.attach(to: p.overlaps ? nil : p.side)
         panel.setFrame(p.sidebar, display: true, animate: false)
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
     private func makePanel() -> SidebarPanel {
-        let panel = SidebarPanel(contentView: NSHostingView(rootView: SidebarView().environmentObject(self)))
+        let host = NSHostingView(rootView: SidebarView().environmentObject(self))
+        // The browser window sets the panel's size; the content must never grow it.
+        host.sizingOptions = []
+        let panel = SidebarPanel(contentView: host)
         self.panel = panel
         return panel
     }
@@ -148,11 +152,12 @@ final class SidebarPanel: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
         let effect = NSVisualEffectView()
+        self.effect = effect
         effect.material = .sidebar
         effect.blendingMode = .behindWindow
         effect.state = .active
         effect.wantsLayer = true
-        effect.layer?.cornerRadius = 10
+        effect.layer?.cornerRadius = Self.cornerRadius
         effect.layer?.masksToBounds = true
         content.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(content)
@@ -163,6 +168,22 @@ final class SidebarPanel: NSPanel {
             content.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
         ])
         contentView = effect
+    }
+
+    private var effect: NSVisualEffectView?
+    /// Close to the system's window corner radius.
+    static let cornerRadius: CGFloat = 12
+
+    /// Squares the corners on the side that touches the browser window, so the
+    /// pair reads as one window with no gap at the seam; rounds the outer side.
+    /// nil (the panel sits over the window's edge) rounds all four.
+    func attach(to side: SidebarSide?) {
+        guard let layer = effect?.layer else { return }
+        switch side {
+        case .right: layer.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        case .left: layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner]
+        default: layer.maskedCorners = [.layerMinXMinYCorner, .layerMinXMaxYCorner, .layerMaxXMinYCorner, .layerMaxXMaxYCorner]
+        }
     }
 
     override var canBecomeKey: Bool { true }
