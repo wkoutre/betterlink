@@ -52,6 +52,9 @@ struct SidebarView: View {
                             .padding(.horizontal, DS.Space.space2)
                             .padding(.vertical, 4)
                         }
+                        // A closed folder lists its open items, which come and go
+                        // with tabs: animate those in place too (review F1).
+                        .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
                         Divider().padding(.horizontal, DS.Space.space2)
                         newTabField(m)
                         LazyVStack(alignment: .leading, spacing: 1) {
@@ -115,11 +118,11 @@ struct SidebarView: View {
                         }
                     }
                     Button("New Sidebar Profile") {
-                        lib.change { l in
+                        animate { lib.change { l in
                             let sp = SidebarProfile(name: tabs.profileName(m.session) ?? "Profile \(l.profiles.count + 1)")
                             l.profiles.append(sp)
                             l.link(ref, to: sp.id)
-                        }
+                        } }
                     }
                 } else {
                     Text("Waiting to learn this window's browser profile")
