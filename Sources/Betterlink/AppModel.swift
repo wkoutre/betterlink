@@ -703,4 +703,6 @@ final class AppModel: ObservableObject {
 
 extension Notification.Name {
     static let betterlinkNeedsAttention = Notification.Name("betterlinkNeedsAttention")
+    /// Shows a page of betterlink's window; the object is the page's raw value.
+    static let betterlinkOpenPage = Notification.Name("betterlinkOpenPage")
 }

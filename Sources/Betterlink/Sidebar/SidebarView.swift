@@ -13,6 +13,8 @@ struct SidebarView: View {
     @ObservedObject private var lib = SidebarLibraryModel.shared
     @State private var newURL = ""
     @State private var renaming: UUID?
+    @State private var renamingProfile: UUID?
+    @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
     /// A folder or profile waiting for "Delete" to be confirmed.
     @State private var confirmDelete: (id: UUID, name: String, count: Int)?
@@ -107,37 +109,40 @@ struct SidebarView: View {
 
     private func header(match: Match?, profile: SidebarProfile?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            // Which Sidebar Profile this browser profile shows; pick or make one.
-            Menu {
-                if let m = match, m.certain, let ref = tabs.profileRef(m.session) {
-                    Section("Show for \(tabs.profileName(m.session) ?? "this profile")") {
-                        ForEach(lib.library.profiles) { sp in
-                            Button { animate { lib.change { $0.link(ref, to: sp.id) } } } label: {
-                                if sp.id == profile?.id { Label(sp.name, systemImage: "checkmark") } else { Text(sp.name) }
-                            }
-                        }
-                    }
-                    Button("New Sidebar Profile") {
-                        animate { lib.change { l in
-                            let sp = SidebarProfile(name: tabs.profileName(m.session) ?? "Profile \(l.profiles.count + 1)")
-                            l.profiles.append(sp)
-                            l.link(ref, to: sp.id)
-                        } }
-                    }
+            HStack(spacing: DS.Space.space2) {
+                if let p = profile, renamingProfile == p.id {
+                    TextField("Name", text: $draftName)
+                        .textFieldStyle(.plain)
+                        .font(DS.TextStyle.headline)
+                        .foregroundStyle(pal.text)
+                        .focused($nameFocused)
+                        .onAppear { nameFocused = true }
+                        .onSubmit { renameProfile(p.id) }
+                        .onExitCommand { renamingProfile = nil }
                 } else {
-                    Text("Waiting to learn this window's browser profile")
+                    Text(profile?.name ?? "Sidebar")
+                        .font(DS.TextStyle.headline)
+                        .foregroundStyle(pal.text)
+                        .lineLimit(1)
                 }
-            } label: {
-                HStack(spacing: 4) {
-                    Text(profile?.name ?? "Sidebar").font(DS.TextStyle.headline)
-                    Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                Spacer(minLength: 0)
+                // The Sidebar Profile's settings: which one this browser profile
+                // shows, a new one, rename, delete, and the sidebar's settings page.
+                Menu {
+                    profileMenu(match: match, profile: profile)
+                } label: {
+                    Image(systemName: "gearshape")
+                        .font(.system(size: 13, weight: .regular))
+                        .foregroundStyle(pal.textSecondary)
+                        .frame(width: 24, height: 24)
+                        .contentShape(Rectangle())
                 }
-                .foregroundStyle(pal.textSecondary)
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .help("Sidebar Profile settings")
+                .accessibilityLabel("Sidebar Profile settings")
             }
-            .menuStyle(.borderlessButton)
-            .menuIndicator(.hidden)
-            .fixedSize()
-            .accessibilityLabel("Sidebar Profile: \(profile?.name ?? "none")")
             if let m = match {
                 Text([m.session.browser, m.certain ? tabs.profileName(m.session) : nil].compactMap { $0 }.joined(separator: " · "))
                     .font(DS.TextStyle.caption)
@@ -149,6 +154,51 @@ struct SidebarView: View {
         // Clear of the browser window's traffic lights when bound on the left.
         .padding(.top, 30)
         .padding(.bottom, DS.Space.space2)
+        .confirmationDialog("Delete the Sidebar Profile \"\(confirmProfileDelete?.name ?? "")\"?",
+                            isPresented: Binding(get: { confirmProfileDelete != nil }, set: { if !$0 { confirmProfileDelete = nil } })) {
+            Button("Delete Sidebar Profile", role: .destructive) {
+                if let p = confirmProfileDelete { animate { lib.change { $0.removeProfile(p.id) } } }
+                confirmProfileDelete = nil
+            }
+        } message: {
+            Text("Its favorites and folders are deleted with it. Browser profiles that showed it show another one.")
+        }
+    }
+
+    @ViewBuilder
+    private func profileMenu(match: Match?, profile: SidebarProfile?) -> some View {
+        if let m = match, m.certain, let ref = tabs.profileRef(m.session) {
+            Section("Show for \(tabs.profileName(m.session) ?? "this profile")") {
+                ForEach(lib.library.profiles) { sp in
+                    Button { animate { lib.change { $0.link(ref, to: sp.id) } } } label: {
+                        if sp.id == profile?.id { Label(sp.name, systemImage: "checkmark") } else { Text(sp.name) }
+                    }
+                }
+            }
+            Button("New Sidebar Profile") {
+                animate { lib.change { l in
+                    let sp = SidebarProfile(name: tabs.profileName(m.session) ?? "Profile \(l.profiles.count + 1)")
+                    l.profiles.append(sp)
+                    l.link(ref, to: sp.id)
+                } }
+            }
+        } else {
+            Text("Waiting to learn this window's browser profile")
+        }
+        if let p = profile {
+            Divider()
+            Button("Rename…") { draftName = p.name; renamingProfile = p.id }
+            Button("Delete…", role: .destructive) { confirmProfileDelete = p }
+                .disabled(lib.library.profiles.count <= 1)
+        }
+        Divider()
+        Button("Sidebar Settings…") { BetterlinkWindow.open(.tabs) }
+    }
+
+    private func renameProfile(_ id: UUID) {
+        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !name.isEmpty { lib.change(profile: id) { $0.name = name } }
+        renamingProfile = nil
     }
 
     // MARK: - Favorites

@@ -379,7 +379,7 @@ private struct SidebarProfilesSection: View {
                 }
             }
             if let problem = lib.problem { Text(problem).foregroundStyle(DS.Palette.danger) }
-            Text("Pick which Sidebar Profile a browser profile shows from the title at the top of the sidebar. Saved in sidebar.json in the settings folder.")
+            Text("Pick which Sidebar Profile a browser profile shows from the ⚙ at the top of the sidebar. Saved in sidebar.json in the settings folder.")
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
         } header: {
