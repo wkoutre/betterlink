@@ -363,6 +363,8 @@ final class SidebarController: ObservableObject {
         var frame = p.sidebar
         frame.size.width += reach
         if attached == .right { frame.origin.x -= reach }
+        // Set first: the move notifications arrive inside setFrame.
+        placedPanelFrame = frame
         // A pure move is cheap; only a real resize lays the tab list out again.
         if panel.frame.size == frame.size {
             panel.setFrameOrigin(frame.origin)
@@ -389,7 +391,47 @@ final class SidebarController: ObservableObject {
         let panel = SidebarPanel(contentView: host)
         panel.setTint(tint)
         self.panel = panel
+        for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
+            panelTokens.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
+                MainActor.assumeIsolated { self?.panelFrameChanged() }
+            })
+        }
         return panel
+    }
+
+    // MARK: - Moved from outside
+
+    /// The frame layout() last gave the panel. Any other frame came from
+    /// outside: a window-snapping tool or anything else using Accessibility.
+    private var placedPanelFrame: CGRect?
+    private var panelTokens: [NSObjectProtocol] = []
+    private var outsideMove: DispatchWorkItem?
+
+    /// A snap or move aimed at the sidebar is meant for the pair: once the
+    /// tool is done (it may set the position and the size separately), the
+    /// browser window and the sidebar fill the panel's new frame together, the
+    /// sidebar keeping its width on its side, as snapping the browser does.
+    private func panelFrameChanged() {
+        guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed) else { return }
+        outsideMove?.cancel()
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.movePairToPanel() } }
+        outsideMove = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+    }
+
+    private func movePairToPanel() {
+        guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed),
+              enabled, !collapsed, let t = current, !t.fullScreen else { return }
+        let rect = panel.frame
+        let side: SidebarSide = placedSide == .left ? .left : .right
+        let inner = SidebarGeometry.window(filling: rect, width: width, side: side,
+                                           minWindowWidth: minWidths[t.windowHash] ?? 500)
+        // Hiding the sidebar later gives the browser the whole rect.
+        fits[t.windowHash] = Fit(outer: rect, inner: inner, side: side,
+                                 window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+        askedAt = Date()
+        tracker.setWindowFrame(inner)
+        layout()
     }
 
     // MARK: - Actions from the sidebar

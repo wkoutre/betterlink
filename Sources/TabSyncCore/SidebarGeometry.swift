@@ -59,6 +59,19 @@ public enum SidebarGeometry {
                                 side: resolved, overlaps: x != outside)
     }
 
+    /// The browser window's frame when the pair (window plus sidebar) is to
+    /// fill `rect`, with the sidebar on `side` (left or right) keeping its
+    /// `width`: what a snap or move aimed at the sidebar means. The window never
+    /// goes below `minWindowWidth`; then it overflows `rect` away from the
+    /// sidebar rather than covering it.
+    public static func window(filling rect: CGRect, width: CGFloat, side: SidebarSide,
+                              minWindowWidth: CGFloat = 0) -> CGRect {
+        let r = rect.integral
+        let w = max(r.width - width, minWindowWidth)
+        let x = side == .left ? r.minX + width : r.maxX - width - w
+        return CGRect(x: x, y: r.minY, width: w, height: r.height)
+    }
+
     /// True when every edge of `w` lies on a half, third or quarter line of
     /// `screen` (the visible frame): the window was snapped, not placed by hand.
     /// The tolerance covers the gaps window managers leave around tiles.

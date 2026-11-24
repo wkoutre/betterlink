@@ -9,6 +9,28 @@ struct SidebarGeometryTests {
     // A 1440x900 screen whose visible frame loses 25pt to the menu bar.
     let screen = CGRect(x: 0, y: 0, width: 1440, height: 875)
 
+    // A snap or move aimed at the sidebar moves the pair: the window takes the
+    // rest of the rect, the sidebar keeps its width on its side.
+    @Test func aRectGivenToTheSidebarIsFilledByThePair() {
+        let leftHalf = CGRect(x: 0, y: 0, width: 1028, height: 1259)
+        #expect(SidebarGeometry.window(filling: leftHalf, width: 280, side: .right)
+                == CGRect(x: 0, y: 0, width: 748, height: 1259))
+        #expect(SidebarGeometry.window(filling: leftHalf, width: 280, side: .left)
+                == CGRect(x: 280, y: 0, width: 748, height: 1259))
+        let full = CGRect(x: 0, y: 31, width: 2056, height: 1259)
+        let w = SidebarGeometry.window(filling: full, width: 300, side: .right)
+        #expect(w.maxX + 300 == full.maxX && w.minX == full.minX && w.height == full.height)
+    }
+
+    @Test func aRectTooNarrowForTheBrowserOverflowsAwayFromTheSidebar() {
+        let quarter = CGRect(x: 1542, y: 0, width: 514, height: 1259)
+        // Sidebar on the right stays at the rect's right edge; the window keeps its minimum.
+        let w = SidebarGeometry.window(filling: quarter, width: 280, side: .right, minWindowWidth: 626)
+        #expect(w.width == 626 && w.maxX == quarter.maxX - 280)
+        let l = SidebarGeometry.window(filling: quarter, width: 280, side: .left, minWindowWidth: 626)
+        #expect(l.width == 626 && l.minX == quarter.minX + 280)
+    }
+
     @Test func sitsFlushOutsideTheRightEdgeWhenThereIsRoom() {
         let win = CGRect(x: 100, y: 50, width: 900, height: 700)
         let p = SidebarGeometry.place(window: win, screen: screen, width: 280, side: .right)
