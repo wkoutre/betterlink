@@ -340,7 +340,7 @@ private struct ShortcutRecorder: View {
 
     private func start() {
         recording = true
-        hint = "Use Control or Option with a key. Esc cancels."
+        hint = "Use Control with a key (and Option or Shift if you like). Esc cancels."
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             if e.keyCode == 53 { stop(); return nil } // Escape
             var m: UInt32 = 0
@@ -351,7 +351,7 @@ private struct ShortcutRecorder: View {
             if f.contains(.control) { m |= Shortcut.control }
             let s = Shortcut(keyCode: UInt32(e.keyCode), modifiers: m,
                              key: Shortcut.label(keyCode: UInt32(e.keyCode), typed: e.charactersIgnoringModifiers ?? ""))
-            guard s.isValid else { hint = "Add Control or Option (Command alone would take the browser's shortcuts)."; return nil }
+            guard s.isValid else { hint = "Add Control: without it, the shortcut would take one of the browser's or type a character."; return nil }
             shortcut = s
             stop()
             return nil

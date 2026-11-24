@@ -29,7 +29,7 @@ final class SidebarController: ObservableObject {
     /// back, and showing it again makes room again (like collapsing Arc's sidebar).
     @Published private(set) var collapsed: Bool
     /// Shows and hides the sidebar while an attached browser is in front.
-    @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut } }
+    @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
     /// The browser window the sidebar is bound to right now. Its `frame` is

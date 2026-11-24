@@ -35,12 +35,18 @@ final class SidebarHotKey {
         if handler == nil {
             var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
             let me = Unmanaged.passUnretained(self).toOpaque()
-            InstallEventHandler(GetApplicationEventTarget(), { _, _, refcon in
+            let installed = InstallEventHandler(GetApplicationEventTarget(), { _, _, refcon in
                 guard let refcon else { return noErr }
                 let hk = Unmanaged<SidebarHotKey>.fromOpaque(refcon).takeUnretainedValue()
                 MainActor.assumeIsolated { hk.onPress?() }
                 return noErr
             }, 1, &spec, me, &handler)
+            if installed != noErr {
+                handler = nil
+                refused = shortcut
+                problem = "Couldn't listen for shortcuts (error \(installed))."
+                return
+            }
         }
         let id = EventHotKeyID(signature: OSType(0x626C_7362), id: 1) // "blsb"
         let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref)

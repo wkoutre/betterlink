@@ -20,12 +20,12 @@ public struct Shortcut: Codable, Equatable, Sendable {
     /// Control-Option-S (kVK_ANSI_S is 1).
     public static let sidebarDefault = Shortcut(keyCode: 1, modifiers: control | option, key: "S")
 
-    /// Usable as a system-wide shortcut: a key with Control or Option. Command
-    /// (with or without Shift) alone is refused: those are the browser's own
-    /// shortcuts (⌘T, ⌘W), which this one would take while the browser is in
-    /// front.
+    /// Usable as a system-wide shortcut: a key with Control. Without Control
+    /// it would take something else while the browser is in front: Command
+    /// combinations are the browser's own (⌘T, ⌥⌘I for DevTools), and Option
+    /// combinations type characters (⌥S types ß).
     public var isValid: Bool {
-        !key.isEmpty && modifiers & (Self.option | Self.control) != 0
+        !key.isEmpty && modifiers & Self.control != 0
     }
 
     /// A readable label for keys whose typed character is invisible or private
