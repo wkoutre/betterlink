@@ -38,6 +38,11 @@ public struct SidebarLibrary: Codable, Equatable, Sendable {
         guard let i = profiles.firstIndex(where: { $0.id == id }) else { return }
         change(&profiles[i])
     }
+
+    /// The id of every saved link in every Sidebar Profile.
+    public var allLinkIDs: Set<UUID> {
+        Set(profiles.flatMap { $0.allLinks.map(\.id) })
+    }
 }
 
 public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
@@ -93,6 +98,30 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
             case .link(var l) where l.id == id: l.title = n; return .link(l)
             default: return item
             }
+        }
+    }
+
+    /// A saved link (a Favorite or one in a folder) by id.
+    public func savedLink(_ id: UUID) -> SavedLink? {
+        allLinks.first { $0.id == id }
+    }
+
+    /// Points a saved link at another page: "save the page this tab is on
+    /// here". The name follows when one is given; the icon is replaced, since
+    /// the old one belongs to the old page.
+    public mutating func repoint(_ id: UUID, to url: String, title: String? = nil, icon: String? = nil) {
+        guard !url.isEmpty else { return }
+        func moved(_ l: SavedLink) -> SavedLink {
+            var l = l
+            l.url = url
+            if let t = title?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { l.title = t }
+            l.icon = icon
+            return l
+        }
+        if let i = favorites.firstIndex(where: { $0.id == id }) { favorites[i] = moved(favorites[i]) }
+        items = Self.mapping(items) { item in
+            if case .link(let l) = item, l.id == id { return .link(moved(l)) }
+            return item
         }
     }
 
@@ -351,7 +380,11 @@ public struct SavedLink: Codable, Equatable, Identifiable, Sendable {
     /// #fragment, a trailing slash, and the case of the scheme and host.
     public static func same(_ a: String, _ b: String) -> Bool { key(a) == key(b) }
 
-    static func key(_ s: String) -> String {
+    /// What two addresses of the same page share. Remembered per address
+    /// (PageKeys), so asking again costs a lookup, not a parse.
+    public static func key(_ s: String) -> String { PageKeys.key(s, compute: computeKey) }
+
+    static func computeKey(_ s: String) -> String {
         guard var c = URLComponents(string: s) else { return s }
         c.fragment = nil
         c.scheme = c.scheme?.lowercased()
