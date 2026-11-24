@@ -132,6 +132,36 @@ final class WindowTracker: NSObject {
         if window == nil || observedWindow.map({ CFEqual(win, $0) }) == true { refresh() }
     }
 
+    /// Whether the bound window is the browser's focused, main window: the one
+    /// its menu commands act on.
+    func boundWindowIsFocusedMain() -> Bool {
+        guard let win = observedWindow, let app = appElement,
+              let focused: AXUIElement = copy(app, kAXFocusedWindowAttribute) else { return false }
+        return CFEqual(focused, win) && (copy(win, kAXMainAttribute) as Bool?) == true
+    }
+
+    /// The bound window's vertical tab column, when the browser shows one along
+    /// its left edge (Chrome's collapsed vertical tabs: an AXTabGroup much taller
+    /// than wide): its width and how far below the window's top it starts.
+    func verticalTabStrip() -> CGSize? {
+        guard let win = observedWindow,
+              let wp: AXValue = copy(win, kAXPositionAttribute), let ws: AXValue = copy(win, kAXSizeAttribute) else { return nil }
+        var origin = CGPoint.zero, size = CGSize.zero
+        AXValueGetValue(wp, .cgPoint, &origin); AXValueGetValue(ws, .cgSize, &size)
+        func search(_ e: AXUIElement, _ depth: Int) -> CGSize? {
+            if (copy(e, kAXRoleAttribute) as String?) == (kAXTabGroupRole as String),
+               let pv: AXValue = copy(e, kAXPositionAttribute), let sv: AXValue = copy(e, kAXSizeAttribute) {
+                var p = CGPoint.zero, s = CGSize.zero
+                AXValueGetValue(pv, .cgPoint, &p); AXValueGetValue(sv, .cgSize, &s)
+                if abs(p.x - origin.x) < 2, s.height > s.width * 3, s.width < 120 { return CGSize(width: s.width, height: p.y - origin.y) }
+            }
+            guard depth < 7 else { return nil }
+            for c in (copy(e, kAXChildrenAttribute) as [AXUIElement]?) ?? [] { if let hit = search(c, depth + 1) { return hit } }
+            return nil
+        }
+        return search(win, 0)
+    }
+
     /// Brings the browser back to the front (after a click in the sidebar).
     func activateBrowser() {
         guard let t = target else { return }

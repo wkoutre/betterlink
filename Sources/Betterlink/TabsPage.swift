@@ -308,6 +308,14 @@ private struct SidebarSettings: View {
                         set: { on in if on { sidebar.attachTo.insert(b.bundleId) } else { sidebar.attachTo.remove(b.bundleId) } }))
                 }
             }
+            Toggle(isOn: $sidebar.takeOverTabs) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Take over the browser's tabs")
+                    Text("Collapses the browser's own tab strip to vertical tabs (Chrome: View › Collapse Vertical Tabs). With the sidebar on the left, it covers that column too.")
+                        .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
             LabeledContent("Show or hide") {
                 HStack {
                     ShortcutRecorder(shortcut: $sidebar.shortcut)
