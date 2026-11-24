@@ -53,6 +53,7 @@ final class SidebarController: ObservableObject {
     /// The frame a window would not give up, so it isn't asked again.
     private var refused: CGRect?
     private var trustToken: NSObjectProtocol?
+    private var activationToken: NSObjectProtocol?
     /// A separate domain while `BETTERLINK_HOME` is set, like the menu bar icon.
     private let defaults = MenuBarIcon.defaults()
 
@@ -67,6 +68,12 @@ final class SidebarController: ObservableObject {
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
         // macOS posts this whenever any app's Accessibility permission changes.
+        // betterlink's own window coming forward keeps the sidebar bound (the
+        // tracker ignores it) but must hide the panel, or it floats over that
+        // window; the browser coming back shows it again.
+        activationToken = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.layout() } }
         trustToken = DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -221,7 +228,8 @@ final class SidebarController: ObservableObject {
     }
 
     private func layout() {
-        guard enabled, let t = current, !t.fullScreen else {
+        let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        guard enabled, let t = current, !t.fullScreen, !ownAppInFront else {
             panel?.orderOut(nil)
             return
         }
