@@ -6,14 +6,16 @@
 #   scripts/sign.sh "<identity>" --release   releases (scripts/release.sh): adds
 #       the secure timestamp notarization needs; any failure stops the release.
 #   scripts/sign.sh "<identity>"             local builds (`make build`, Makefile
-#       DEV_SIGN_IDENTITY): a certificate signature is matched by bundle id and
-#       team, which stay the same across rebuilds, so macOS keeps the app's
-#       permissions. If signing fails, the app is signed ad hoc again so it
-#       still runs, and macOS will ask for its permissions again.
+#       DEV_SIGN_IDENTITY, a Developer ID identity): macOS matches a Developer
+#       ID signature by bundle id and team, which stay the same across
+#       rebuilds, so it keeps the app's permissions. If signing fails, the
+#       app is signed ad hoc again so it still runs, and macOS will ask for
+#       its permissions again.
 #   scripts/sign.sh "<identity>" --strict    the local signing alone, failing on
 #       the first error (what the local mode runs).
 set -eu
-cd "$(dirname "$0")/.."
+SELF=$(cd "$(dirname "$0")" && pwd)/$(basename "$0")
+cd "$(dirname "$SELF")/.."
 ID=$1
 MODE=${2:-}
 APP=dist/betterlink.app
@@ -50,7 +52,7 @@ if [ "$MODE" = --release ] || [ "$MODE" = --strict ]; then
   sign
 # A separate process, so `set -e` stops at the first failed step (it doesn't
 # apply inside a function run as an `if` condition).
-elif sh "$0" "$ID" --strict; then
+elif sh "$SELF" "$ID" --strict; then
   echo "Signed $APP with $ID"
 else
   echo "Couldn't sign $APP with $ID (is the keychain locked?). Signing it ad hoc instead: it runs, but macOS will ask for its permissions again." >&2
