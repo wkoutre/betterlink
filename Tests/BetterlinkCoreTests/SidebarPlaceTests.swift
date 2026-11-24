@@ -90,4 +90,43 @@ struct SidebarPlaceTests {
         p.insert(link("far"), at: .items(parent: nil, index: 99)) // clamped to the end
         #expect(p.items.last.map { titles([$0]) } == ["far"])
     }
+
+    // Undo puts back only what was deleted, keeping later changes (review F1).
+    @Test func undoRestoresOnlyTheDeletedItemWhereItWas() {
+        var (p, f, ids) = sample()
+        let r = p.take(ids["x"]!)!
+        p.addLink(link("saved later"), in: f)          // a change made after the delete
+        p.rename(ids["b"]!, to: "B")
+        p.restore(r)
+        #expect(titles(p.children(of: f)) == ["x", "y", "saved later"])
+        #expect(titles(p.items).contains("B"))
+        p.restore(r) // twice changes nothing
+        #expect(titles(p.children(of: f)) == ["x", "y", "saved later"])
+        // A favorite goes back to its place in the grid.
+        let q = p.take(ids["q"]!)!
+        p.restore(q)
+        #expect(p.favorites.map(\.title) == ["p", "q", "r"])
+        // A folder comes back with everything in it.
+        let whole = p.take(f)!
+        #expect(p.parent(of: ids["y"]!) == nil && SidebarProfile.find(ids["y"]!, in: p.items) == nil)
+        p.restore(whole)
+        #expect(p.parent(of: ids["y"]!) == f)
+    }
+
+    @Test func undoIntoAFolderDeletedMeanwhileLandsAtTheTop() {
+        var (p, f, ids) = sample()
+        let r = p.take(ids["x"]!)!
+        p.remove(f)
+        p.restore(r)
+        #expect(p.items.last.map { titles([$0]) } == ["x"])
+    }
+
+    @Test func dropTargetsKnowWhatWouldBeRefused() {
+        var (p, f, ids) = sample()
+        let g = p.addFolder("G", in: f)
+        #expect(!p.canPlace(f, at: .items(parent: g, index: 0)))   // into its own child
+        #expect(!p.canPlace(f, at: .favorites(0)))                  // a folder in the grid
+        #expect(p.canPlace(ids["a"]!, at: .items(parent: f, index: 0)))
+        #expect(p.canPlace(ids["a"]!, at: .items(parent: nil, index: 0))) // onto itself: allowed, no change
+    }
 }

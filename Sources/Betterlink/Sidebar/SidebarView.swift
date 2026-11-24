@@ -20,8 +20,13 @@ struct SidebarView: View {
     /// The row a drag is over, and where in it.
     @State private var dropTarget: DropTarget?
     @State private var rowSizes: [UUID: CGSize] = [:]
-    /// The last delete, for Undo: the Sidebar Profile as it was, and what went.
-    @State private var undo: (profile: SidebarProfile, label: String, at: Date)?
+    /// The last delete, for Undo: which profile, what went and from where.
+    @State private var undo: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)?
+    /// A folder with things in it waiting for its delete to be confirmed.
+    @State private var confirmDelete: (id: UUID, name: String, count: Int)?
+    /// What is being dragged from the sidebar, so a row can refuse a drop
+    /// that wouldn't move anything (a folder into itself, say).
+    @State private var dragging: String?
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -63,7 +68,8 @@ struct SidebarView: View {
                             .padding(.vertical, 4)
                             // Dropped here: the end of the top level.
                             .dropDestination(for: String.self) { keys, _ in
-                                apply(keys, at: .items(parent: nil, index: profile.items.count), profile, windowTabs)
+                                dragging = nil
+                                return apply(keys, at: .items(parent: nil, index: profile.items.count), profile, windowTabs)
                             }
                         }
                         // A closed folder lists its open items, which come and go
@@ -79,7 +85,7 @@ struct SidebarView: View {
                                 } close: {
                                     tabs.close(tab, in: m.session)
                                 }
-                                .draggable(Self.dragKey(tab))
+                                .onDrag { drag(Self.dragKey(tab)) }
                                 .contextMenu { tabMenu(tab, profile) }
                                 .transition(Motion.reveal(reduceMotion))
                             }
@@ -102,6 +108,14 @@ struct SidebarView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         // Undo for the last delete, at the bottom for a few seconds.
         .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
+        // A folder with things in it asks first (review F6), then offers Undo too.
+        .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
+                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
+            Button("Delete \(confirmDelete?.count ?? 0) saved items", role: .destructive) {
+                if let d = confirmDelete, let p = profile { deleteWithUndo(d.id, d.name, p) }
+                confirmDelete = nil
+            }
+        }
         // The browser profile's frame color, like the browser's own window.
         .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
         // Anything left on system colors (text fields, their placeholders,
@@ -221,7 +235,7 @@ struct SidebarView: View {
                             .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
                 }
                 .buttonStyle(PressStyle())
-                .draggable(Self.savedKey(link.id))
+                .onDrag { drag(Self.savedKey(link.id)) }
                 .modifier(dropRow(link.id, horizontal: true, canHold: false, p, open) { zone in
                     let i = p.favorites.firstIndex { $0.id == link.id } ?? p.favorites.count
                     return .favorites(zone == .before ? i : i + 1)
@@ -247,7 +261,10 @@ struct SidebarView: View {
             }
         }
         // Dropped on the grid's empty space: the end of the Favorites.
-        .dropDestination(for: String.self) { keys, _ in apply(keys, at: .favorites(p.favorites.count), p, open) }
+        .dropDestination(for: String.self) { keys, _ in
+            dragging = nil
+            return apply(keys, at: .favorites(p.favorites.count), p, open)
+        }
     }
 
     // MARK: - Folders
@@ -268,7 +285,7 @@ struct SidebarView: View {
                 .padding(.leading, CGFloat(depth) * 14)
                 .rowStyle()
                 .onTapGesture { edit(p.id) { $0.toggleExpanded(f.id) } }
-                .draggable(Self.savedKey(f.id))
+                .onDrag { drag(Self.savedKey(f.id)) }
                 .modifier(dropRow(f.id, canHold: true, p, open) { zone in spot(for: f.id, zone, p) })
                 .accessibilityElement(children: renaming == f.id ? .contain : .ignore)
                 .accessibilityAddTraits(.isButton)
@@ -279,8 +296,10 @@ struct SidebarView: View {
                     Button("Rename") { startRename(f.id, f.name) }
                     moveMenu(f.id, isFolder: true, inFavorites: false, p)
                     Divider()
-                    // Undo brings it back with everything in it.
-                    Button("Delete Folder", role: .destructive) { deleteWithUndo(f.id, f.name, p) }
+                    Button("Delete Folder", role: .destructive) {
+                        let n = SidebarProfile.links(in: f.items).count + Self.folders(f.items, prefix: "").count
+                        if n == 0 { deleteWithUndo(f.id, f.name, p) } else { confirmDelete = (f.id, f.name, n) }
+                    }
                 }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
@@ -312,7 +331,7 @@ struct SidebarView: View {
             .accessibilityLabel(tab == nil ? l.title : "\(l.title), open")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { openOrSwitch(l, m) }
-            .draggable(Self.savedKey(l.id))
+            .onDrag { drag(Self.savedKey(l.id)) }
             .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
             .contextMenu {
                 Button("Rename") { startRename(l.id, l.title) }
@@ -355,6 +374,23 @@ struct SidebarView: View {
     // MARK: - Drag and drop
 
     static func savedKey(_ id: UUID) -> String { "betterlink-saved:\(id.uuidString)" }
+    static func savedID(_ key: String) -> UUID? {
+        key.hasPrefix("betterlink-saved:") ? UUID(uuidString: String(key.dropFirst("betterlink-saved:".count))) : nil
+    }
+
+    /// Whether what is being dragged may land at `spot`: only the sidebar's
+    /// own drags, and only moves that would happen (review F4).
+    private func allowed(_ spot: SidebarProfile.Spot, _ p: SidebarProfile) -> Bool {
+        guard let key = dragging else { return false }
+        if let id = Self.savedID(key) { return p.canPlace(id, at: spot) }
+        return key.hasPrefix("betterlink-tab:")
+    }
+
+    /// Starts a drag of `key`, remembering it for the drop targets.
+    private func drag(_ key: String) -> NSItemProvider {
+        dragging = key
+        return NSItemProvider(object: key as NSString)
+    }
 
     /// Where `zone` of the row for `id` puts what is dropped there.
     private func spot(for id: UUID, _ zone: DropZone, _ p: SidebarProfile) -> SidebarProfile.Spot {
@@ -369,7 +405,9 @@ struct SidebarView: View {
                          spot: @escaping (DropZone) -> SidebarProfile.Spot) -> some ViewModifier {
         DropRowModifier(id: id, horizontal: horizontal, canHold: canHold, color: pal.accent,
                         size: rowSizes[id] ?? .zero, target: $dropTarget,
-                        measured: { rowSizes[id] = $0 }) { keys, zone in
+                        measured: { rowSizes[id] = $0 },
+                        allowed: { zone in allowed(spot(zone), p) }) { keys, zone in
+            dragging = nil
             _ = apply(keys, at: spot(zone), p, open)
         }
     }
@@ -381,13 +419,15 @@ struct SidebarView: View {
         var did = false
         var next = spot
         for k in keys {
+            var changed = false
             if let t = Self.tab(forDragKey: k, in: open) {
                 let at = next
-                edit(p.id) { $0.insert(Self.saved(t), at: at) }
-            } else if k.hasPrefix("betterlink-saved:"), let id = UUID(uuidString: String(k.dropFirst("betterlink-saved:".count))) {
+                edit(p.id) { let before = $0; $0.insert(Self.saved(t), at: at); changed = $0 != before }
+            } else if let id = Self.savedID(k) {
                 let at = next
-                edit(p.id) { $0.place(id, at: at) }
-            } else { continue }
+                edit(p.id) { let before = $0; $0.place(id, at: at); changed = $0 != before }
+            }
+            guard changed else { continue }
             did = true
             // Several at once keep their order.
             switch next {
@@ -408,7 +448,7 @@ struct SidebarView: View {
             .disabled(i == 0)
         Button("Move Down") { edit(p.id) { $0.place(id, at: inFavorites ? .favorites(i + 2) : .items(parent: parent, index: i + 2)) } }
             .disabled(i >= list.count - 1)
-        Menu("Move to") {
+        Menu("Move to…") {
             if !isFolder && !inFavorites {
                 Button("Favorites") { edit(p.id) { $0.place(id, at: .favorites(p.favorites.count)) } }
             }
@@ -425,21 +465,23 @@ struct SidebarView: View {
 
     /// Deletes at once and offers Undo for a few seconds.
     private func deleteWithUndo(_ id: UUID, _ label: String, _ p: SidebarProfile) {
-        let before = p
-        edit(p.id) { $0.remove(id) }
+        var removed: SidebarProfile.Removed?
+        edit(p.id) { removed = $0.take(id) }
+        guard let removed else { return }
         let now = Date()
-        withAnimation(Motion.quick(reduceMotion)) { undo = (before, label, now) }
+        withAnimation(Motion.quick(reduceMotion)) { undo = (p.id, removed, label, now) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
             if undo?.at == now { withAnimation(Motion.quick(reduceMotion)) { undo = nil } }
         }
     }
 
-    private func undoBar(_ u: (profile: SidebarProfile, label: String, at: Date)) -> some View {
+    private func undoBar(_ u: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)) -> some View {
         HStack(spacing: DS.Space.space2) {
             Text("Deleted \u{201C}\(u.label)\u{201D}").lineLimit(1).foregroundStyle(pal.textSecondary)
             Spacer(minLength: 0)
             Button("Undo") {
-                animate { lib.change(profile: u.profile.id) { $0 = u.profile } }
+                // Just what was deleted, where it was; later changes stay (review F1).
+                edit(u.profile) { $0.restore(u.removed) }
                 undo = nil
             }
             .buttonStyle(.plain)

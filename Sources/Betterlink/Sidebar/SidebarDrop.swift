@@ -32,6 +32,7 @@ struct SidebarRowDrop: DropDelegate {
     let horizontal: Bool
     let canHold: Bool
     @Binding var target: DropTarget?
+    let allowed: (DropZone) -> Bool
     let perform: ([String], DropZone) -> Void
 
     private func zone(_ info: DropInfo) -> DropZone {
@@ -42,7 +43,12 @@ struct SidebarRowDrop: DropDelegate {
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        let t = DropTarget(id: id, zone: zone(info))
+        let z = zone(info)
+        guard allowed(z) else {
+            if target?.id == id { target = nil }
+            return DropProposal(operation: .forbidden)
+        }
+        let t = DropTarget(id: id, zone: z)
         if target != t { target = t }
         return DropProposal(operation: .move)
     }
@@ -52,19 +58,21 @@ struct SidebarRowDrop: DropDelegate {
     func performDrop(info: DropInfo) -> Bool {
         let z = zone(info)
         target = nil
+        guard allowed(z) else { return false }
         let providers = info.itemProviders(for: [.plainText])
         guard !providers.isEmpty else { return false }
-        var keys: [String] = []
+        // Each in its provider's slot: several dropped at once keep their order (review F3).
+        var keys = [String?](repeating: nil, count: providers.count)
         let group = DispatchGroup()
         let lock = NSLock()
-        for p in providers {
+        for (i, p) in providers.enumerated() {
             group.enter()
             _ = p.loadObject(ofClass: NSString.self) { s, _ in
-                if let s = s as? String { lock.lock(); keys.append(s); lock.unlock() }
+                if let s = s as? String { lock.lock(); keys[i] = s; lock.unlock() }
                 group.leave()
             }
         }
-        group.notify(queue: .main) { perform(keys, z) }
+        group.notify(queue: .main) { perform(keys.compactMap { $0 }, z) }
         return true
     }
 }
@@ -106,13 +114,14 @@ struct DropRowModifier: ViewModifier {
     let size: CGSize
     @Binding var target: DropTarget?
     let measured: (CGSize) -> Void
+    let allowed: (DropZone) -> Bool
     let perform: ([String], DropZone) -> Void
 
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGSize.self) { $0.size } action: { measured($0) }
             .onDrop(of: [.plainText], delegate: SidebarRowDrop(id: id, size: size, horizontal: horizontal,
-                                                              canHold: canHold, target: $target, perform: perform))
+                                                              canHold: canHold, target: $target, allowed: allowed, perform: perform))
             .overlay { DropMarker(zone: target?.id == id ? target?.zone : nil, horizontal: horizontal, color: color) }
     }
 }

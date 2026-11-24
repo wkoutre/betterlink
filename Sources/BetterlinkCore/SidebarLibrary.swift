@@ -156,6 +156,61 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// What `remove(_:)` took out and where it was, so Undo can put back just
+    /// that, leaving everything changed since alone.
+    public struct Removed: Equatable, Sendable {
+        public var item: SidebarItem
+        public var spot: Spot
+    }
+
+    /// Removes a favorite, saved link or folder (with everything in it) and
+    /// says where it was.
+    @discardableResult
+    public mutating func take(_ id: UUID) -> Removed? {
+        if let i = favorites.firstIndex(where: { $0.id == id }) {
+            return Removed(item: .link(favorites.remove(at: i)), spot: .favorites(i))
+        }
+        guard let item = Self.find(id, in: items) else { return nil }
+        let parent = parent(of: id)
+        let index = children(of: parent).firstIndex { $0.id == id } ?? 0
+        items = Self.removing(id, from: items)
+        return Removed(item: item, spot: .items(parent: parent, index: index))
+    }
+
+    /// Puts back what `take(_:)` removed: where it was, or at the top level
+    /// when its folder is gone meanwhile. Nothing when it is back already.
+    public mutating func restore(_ r: Removed) {
+        guard favorites.first(where: { $0.id == r.item.id }) == nil, Self.find(r.item.id, in: items) == nil else { return }
+        switch (r.spot, r.item) {
+        case (.favorites(let i), .link(let l)):
+            if favorites.contains(where: { SavedLink.same($0.url, l.url) }) { insert(r.item, into: nil, at: .max) }
+            else { favorites.insert(l, at: min(i, favorites.count)) }
+        case (.items(let parent, let i), _):
+            if let parent, !isFolder(parent) { insert(r.item, into: nil, at: .max) } // its folder is gone
+            else { insert(r.item, into: parent, at: i) }
+        default:
+            insert(r.item, into: nil, at: .max)
+        }
+    }
+
+    /// Whether `place(id, at: spot)` would change anything: drop targets
+    /// refuse what it would refuse.
+    public func canPlace(_ id: UUID, at spot: Spot) -> Bool {
+        var copy = self
+        copy.place(id, at: spot)
+        return copy != self || isAt(id, spot)
+    }
+
+    /// True when `id` already sits exactly at `spot` (a drop on itself).
+    private func isAt(_ id: UUID, _ spot: Spot) -> Bool {
+        switch spot {
+        case .favorites(let i): return favorites.indices.contains(i) && favorites[i].id == id || (i > 0 && favorites.indices.contains(i - 1) && favorites[i - 1].id == id)
+        case .items(let parent, let i):
+            let list = children(of: parent)
+            return list.indices.contains(i) && list[i].id == id || (i > 0 && list.indices.contains(i - 1) && list[i - 1].id == id)
+        }
+    }
+
     /// Saves a new link (a tab dragged in) at `spot`.
     public mutating func insert(_ link: SavedLink, at spot: Spot) {
         switch spot {
