@@ -443,6 +443,7 @@ final class AppModel: ObservableObject {
                 if folder != self.paths { self.adoptFolder(folder) }
                 self.reloadRules()
                 self.reloadConfig(force: true)
+                SidebarLibraryModel.shared.reload()
                 self.refreshPermissions()
                 // `betterlink menu-bar set` writes the setting from another process.
                 let shown = MenuBarIcon.isShown(in: MenuBarIcon.defaults())
@@ -487,7 +488,7 @@ final class AppModel: ObservableObject {
                                                  attributes: [.posixPermissions: 0o700])
         try? ConfigLoader.writeEditorSupport(paths: paths, catalog: catalog)
         dirWatcher = PathWatcher(url: paths.directory) { [weak self] in
-            Task { @MainActor in self?.reloadRules(); self?.reloadConfig() }
+            Task { @MainActor in self?.reloadRules(); self?.reloadConfig(); SidebarLibraryModel.shared.reload() }
         }
     }
 
@@ -513,6 +514,7 @@ final class AppModel: ObservableObject {
         watchFolder()
         reloadRules()
         reloadConfig(force: true)
+        SidebarLibraryModel.shared.reload(folder: target)
     }
 
     func revealSettingsFolder() { NSWorkspace.shared.activateFileViewerSelecting([paths.directory]) }
@@ -701,4 +703,6 @@ final class AppModel: ObservableObject {
 
 extension Notification.Name {
     static let betterlinkNeedsAttention = Notification.Name("betterlinkNeedsAttention")
+    /// Shows a page of betterlink's window; the object is the page's raw value.
+    static let betterlinkOpenPage = Notification.Name("betterlinkOpenPage")
 }

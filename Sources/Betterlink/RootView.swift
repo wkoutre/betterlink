@@ -76,6 +76,10 @@ struct RootView: View {
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             .background(DS.Palette.canvas)
         }
+        // The sidebar's "Sidebar Settings…" opens a page here.
+        .onReceive(NotificationCenter.default.publisher(for: .betterlinkOpenPage)) { note in
+            if let raw = note.object as? String, Page(rawValue: raw) != nil { page.wrappedValue = Page(rawValue: raw) }
+        }
         .ignoresSafeArea()
         .buttonStyle(.dsSecondary)
         .toggleStyle(.ds)
@@ -203,5 +207,15 @@ private struct SidebarHeader: View {
             Spacer(minLength: 0)
         }
         .padding(.horizontal, DS.Space.space2)
+    }
+}
+
+/// Opens betterlink's window on a page, from outside it (the sidebar).
+@MainActor
+enum BetterlinkWindow {
+    static func open(_ page: RootView.Page) {
+        UserDefaults.standard.set(page.rawValue, forKey: "page")
+        (NSApp.delegate as? AppDelegate)?.showWindow()
+        NotificationCenter.default.post(name: .betterlinkOpenPage, object: page.rawValue)
     }
 }

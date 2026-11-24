@@ -14,12 +14,32 @@ public struct BrowserSession: Identifiable, Sendable {
     /// The browser's own process id, to match a session to the frontmost app.
     public var browserPid: Int = 0
     public var brands: [String] = []
+    /// The extension's id for its browser profile (see ProfileLocator).
+    public var instance: String?
+    /// The extension's version, from its hello.
+    public var extensionVersion: String?
+    /// The commands this browser's copy of the extension runs.
+    public var ops: Set<String> = Command.Op.original
     public var store = TabStore()
     /// Browser event -> app, measured on the shared machine clock.
     public var lastEventLatencyMs: Double?
     public var lastEventKind: String?
     /// App command -> browser ack, round trip.
     public var lastCommandRoundTripMs: Double?
+
+    public init(socketPath: String) { self.socketPath = socketPath }
+
+    /// Whether the installed extension runs `op`. An older copy keeps working
+    /// with what it has; the sidebar offers only what will happen.
+    public func can(_ op: Command.Op) -> Bool { ops.contains(op.rawValue) }
+
+    /// Takes in the extension's hello.
+    public mutating func greet(_ m: Inbound) {
+        brands = m.brands ?? []
+        instance = m.instance
+        extensionVersion = m.extensionVersion
+        ops = m.ops.map(Set.init) ?? Command.Op.original
+    }
 }
 
 /// Finds every running host (one socket each), connects, keeps a TabStore per
@@ -123,7 +143,7 @@ public final class SyncHub: @unchecked Sendable {
                 s.pid = m.pid ?? s.pid
                 s.browserPid = m.browserPid ?? s.browserPid
             case "hello":
-                s.brands = m.brands ?? []
+                s.greet(m)
             case "ack":
                 if let id = m.id, let sent = pending.removeValue(forKey: id) {
                     s.lastCommandRoundTripMs = receivedAt - sent

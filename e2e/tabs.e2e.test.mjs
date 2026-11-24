@@ -18,6 +18,7 @@ const BIN = process.env.BETTERLINK_TABS_BIN || join(process.cwd(), ".build/debug
 function fakeBrowser() {
   const ev = () => { const f = new Set(); return { addListener: (x) => f.add(x), removeListener: (x) => f.delete(x), fire: (...a) => f.forEach((x) => x(...a)) }; };
   let nextId = 100;
+  const reloads = [];
   const wins = [{ id: 1, focused: true, tabs: [{ id: 1, windowId: 1, index: 0, url: "https://start.test/", title: "Start", active: true }] }];
   const reindex = (w) => w.tabs.forEach((t, i) => { t.index = i; });
   const find = (id) => { for (const w of wins) { const i = w.tabs.findIndex((t) => t.id === id); if (i >= 0) return [w, i]; } return [null, -1]; };
@@ -33,22 +34,42 @@ function fakeBrowser() {
         if (active) chrome.tabs.onActivated.fire({ tabId: tab.id, windowId });
         return tab;
       },
-      async remove(id) {
+      async remove(ids) {
+        for (const id of [].concat(ids)) {
+          const [w, i] = find(id);
+          if (!w) throw new Error("No tab with id: " + id);
+          w.tabs.splice(i, 1); reindex(w);
+          chrome.tabs.onRemoved.fire(id, { windowId: w.id, isWindowClosing: false });
+        }
+      },
+      async update(id, { active, muted, url }) {
         const [w, i] = find(id);
         if (!w) throw new Error("No tab with id: " + id);
-        w.tabs.splice(i, 1); reindex(w);
-        chrome.tabs.onRemoved.fire(id, { windowId: w.id, isWindowClosing: false });
-      },
-      async update(id, { active }) {
-        const [w, i] = find(id);
-        if (active) { w.tabs.forEach((t) => { t.active = false; }); w.tabs[i].active = true; chrome.tabs.onActivated.fire({ tabId: id, windowId: w.id }); }
-        return w.tabs[i];
+        const t = w.tabs[i];
+        if (muted !== undefined) { t.mutedInfo = { muted }; chrome.tabs.onUpdated.fire(id, { mutedInfo: t.mutedInfo }, { ...t }); }
+        if (url !== undefined) { t.url = url; chrome.tabs.onUpdated.fire(id, { url }, { ...t }); }
+        if (active) { w.tabs.forEach((x) => { x.active = false; }); t.active = true; chrome.tabs.onActivated.fire({ tabId: id, windowId: w.id }); }
+        return t;
       },
       async get(id) { const [w, i] = find(id); return w.tabs[i]; },
-      move(id, toIndex) {
+      // Chrome takes { index }; the tests also pass a bare index.
+      move(id, to) {
+        const toIndex = typeof to === "number" ? to : to.index;
         const [w, i] = find(id);
         const [t] = w.tabs.splice(i, 1); w.tabs.splice(toIndex, 0, t); reindex(w);
         chrome.tabs.onMoved.fire(id, { windowId: w.id, fromIndex: i, toIndex });
+      },
+      async duplicate(id) {
+        const [w, i] = find(id);
+        const tab = { ...w.tabs[i], id: nextId++, active: false };
+        w.tabs.splice(i + 1, 0, tab); reindex(w);
+        chrome.tabs.onCreated.fire({ ...tab });
+        return tab;
+      },
+      async reload(id) {
+        const [w, i] = find(id);
+        reloads.push(id);
+        chrome.tabs.onUpdated.fire(id, { status: "complete" }, { ...w.tabs[i] });
       },
     },
     windows: {
@@ -59,7 +80,7 @@ function fakeBrowser() {
       async create() {},
     },
   };
-  return { chrome, wins };
+  return { chrome, wins, reloads };
 }
 
 function frame(obj) {
@@ -91,6 +112,7 @@ function startHost(dir, browser) {
 function startApp(dir) {
   const app = spawn(join(BIN, "betterlink-tabs"), ["--json"], { env: { ...process.env, BETTERLINK_TABS_SOCKET_DIR: dir }, stdio: ["pipe", "pipe", "inherit"] });
   const states = [];
+  const acks = [];
   const waiters = [];
   let rest = "";
   app.stdout.on("data", (c) => {
@@ -98,6 +120,8 @@ function startApp(dir) {
     let i;
     while ((i = rest.indexOf("\n")) >= 0) {
       const s = JSON.parse(rest.slice(0, i)); rest = rest.slice(i + 1);
+      // An answer naming the tab an open or a duplicate made, not a state.
+      if (s.ack) { acks.push(s.ack); continue; }
       states.push(s);
       for (const w of [...waiters]) if (w.pred(s)) { waiters.splice(waiters.indexOf(w), 1); w.resolve(s); }
     }
@@ -109,7 +133,7 @@ function startApp(dir) {
     waiters.push(w);
     setTimeout(() => reject(new Error("timed out waiting for: " + label + "\nlast state: " + JSON.stringify(states.at(-1)))), ms).unref();
   });
-  return { app, until, cmd: (line) => app.stdin.write(line + "\n") };
+  return { app, until, acks, cmd: (line) => app.stdin.write(line + "\n") };
 }
 
 const urls = (s) => (s.sessions[0]?.windows[0]?.tabs || []).map((t) => t.url);
@@ -164,6 +188,52 @@ test("browser <-> app tab sync over the real host, both directions, no polling",
   host.stdin.end();
   await until((s) => s.sessions.length === 0, "session gone after browser quit");
   assert.deepEqual(readdirSync(dir).filter((f) => f.endsWith(".sock")), []);
+});
+
+test("what the sidebar's menus send reaches the browser: move, mute, duplicate, reload, navigate, close several", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bl-tabs-"));
+  const browser = fakeBrowser();
+  const { host } = startHost(dir, browser);
+  t.after(() => host.kill());
+  const { app, until, acks, cmd } = startApp(dir);
+  t.after(() => app.kill());
+  const tabs = (s) => s.sessions[0]?.windows[0]?.tabs || [];
+  await until((s) => urls(s).includes("https://start.test/"), "initial snapshot");
+
+  // An open's answer names the tab it made: how a saved link knows its tab.
+  cmd("open https://saved.test/");
+  let s = await until((s) => urls(s).includes("https://saved.test/"), "opened");
+  const saved = tabs(s).find((x) => x.url === "https://saved.test/");
+  for (let i = 0; i < 100 && !acks.length; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(acks[0], { ok: true, tabId: saved.id });
+
+  cmd(`move ${saved.id} 0`);
+  s = await until((s) => urls(s)[0] === "https://saved.test/", "moved to the front");
+  assert.equal(browser.wins[0].tabs[0].id, saved.id, "the browser really moved it");
+
+  cmd(`mute ${saved.id}`);
+  s = await until((s) => tabs(s).find((x) => x.id === saved.id)?.muted === true, "muted");
+  cmd(`unmute ${saved.id}`);
+  s = await until((s) => tabs(s).find((x) => x.id === saved.id)?.muted === false, "unmuted");
+
+  // The tab moves on to another page and keeps its id: the link still holds it.
+  cmd(`navigate ${saved.id} https://saved.test/inbox`);
+  s = await until((s) => tabs(s).find((x) => x.id === saved.id)?.url === "https://saved.test/inbox", "navigated");
+
+  cmd(`duplicate ${saved.id}`);
+  s = await until((s) => urls(s).filter((u) => u === "https://saved.test/inbox").length === 2, "duplicated");
+  const copy = tabs(s).find((x) => x.url === "https://saved.test/inbox" && x.id !== saved.id);
+  for (let i = 0; i < 100 && acks.length < 2; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(acks[1], { ok: true, tabId: copy.id });
+
+  cmd(`reload ${saved.id}`);
+  for (let i = 0; i < 100 && !browser.reloads.length; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(browser.reloads, [saved.id]);
+
+  // Close Other Tabs: several in one command.
+  cmd(`close ${saved.id} ${copy.id}`);
+  s = await until((s) => urls(s).length === 1 && urls(s)[0] === "https://start.test/", "both closed");
+  assert.equal(browser.wins[0].tabs.length, 1, "the browser really closed them");
 });
 
 test("a stale socket from a crashed host is cleaned up, and a late app still gets a snapshot", async (t) => {

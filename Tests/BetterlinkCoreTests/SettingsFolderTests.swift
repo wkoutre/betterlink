@@ -29,6 +29,14 @@ import Testing
         #expect(try String(contentsOf: folder.configFile, encoding: .utf8) == "// new")
     }
 
+    /// Review F2 (#14): the sidebar's Favorites and folders move with the rules.
+    @Test func switchingFoldersCarriesTheSidebarLibrary() throws {
+        let a = SettingsFolder(directory: try temp()), b = SettingsFolder(directory: try temp())
+        try SidebarStore(folder: a).update { lib in lib.update(lib.profiles[0].id) { $0.addFolder("Travel") } }
+        try a.copySettings(to: b)
+        #expect(try SidebarStore(folder: b).load().profiles[0].items.count == 1)
+    }
+
     @Test func switchingFoldersCopiesSettingsButNeverOverwrites() throws {
         let a = SettingsFolder(directory: try temp()), b = SettingsFolder(directory: try temp())
         try RuleStore(folder: a).save(RuleStore.Contents(rules: [Rule(kind: .domain, pattern: "acme.com", profile: "Default")]))

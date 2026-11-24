@@ -5,6 +5,8 @@ public struct BrowserWindow: Equatable, Identifiable, Sendable {
     public var focused: Bool
     public var incognito: Bool
     public var tabIds: [Int]
+    /// Where it is on screen, when the extension reports it.
+    public var bounds: WindowBounds?
 }
 
 /// The app's mirror of one browser's tabs. It is a pure reducer: feed it the
@@ -75,7 +77,8 @@ public struct TabStore: Equatable, Sendable {
         windows = [:]; windowOrder = []; tabs = [:]
         for w in wins {
             let sorted = w.tabs.sorted { $0.index < $1.index }
-            windows[w.id] = BrowserWindow(id: w.id, focused: w.focused, incognito: w.incognito ?? false, tabIds: sorted.map(\.id))
+            windows[w.id] = BrowserWindow(id: w.id, focused: w.focused, incognito: w.incognito ?? false, tabIds: sorted.map(\.id),
+                                          bounds: w.bounds)
             windowOrder.append(w.id)
             for t in sorted { tabs[t.id] = t }
         }
@@ -156,6 +159,11 @@ public struct TabStore: Equatable, Sendable {
             guard let wid = m.windowId else { return }
             ensureWindow(wid)
             windows[wid]!.incognito = m.incognito ?? false
+            if let b = WindowBounds(left: m.left, top: m.top, width: m.width, height: m.height) { windows[wid]!.bounds = b }
+        case "windowBounds":
+            guard let wid = m.windowId, windows[wid] != nil,
+                  let b = WindowBounds(left: m.left, top: m.top, width: m.width, height: m.height) else { return }
+            windows[wid]!.bounds = b
         case "windowRemoved":
             guard let wid = m.windowId else { return }
             for id in windows[wid]?.tabIds ?? [] { tabs[id] = nil }

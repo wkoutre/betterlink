@@ -63,7 +63,7 @@ Rules and the fallback each name a browser and, where it has them, a profile.
 | Firefox | Firefox, Firefox Developer Edition, Zen | `-P <name> <link>` | Expected to work, not yet tested. |
 | No profiles | Safari, Arc | the link is handed to the browser the ordinary way | Expected to work. |
 
-betterlink finds a browser's profiles in its own files: `Local State` for Chromium and `profiles.ini` for Firefox. Bundle ids and data folders come from [Finicky](https://github.com/johnste/finicky)'s browser list (MIT). Profiles can also be added by hand under **Edit Profiles…**.
+betterlink finds a browser's profiles in its own files: `Local State` for Chromium and `profiles.ini` for Firefox. For the Tabs sidebar's profile color it also reads a Chromium profile's `Preferences` (its theme color) and the frame color in `Local State`. Bundle ids and data folders come from [Finicky](https://github.com/johnste/finicky)'s browser list (MIT). Profiles can also be added by hand under **Edit Profiles…**.
 
 ## Link Rules
 
@@ -128,7 +128,7 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 
 ## Tabs (preview)
 
-A live list of every open tab in your Chromium browsers, synced both ways the instant anything changes, with no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page and connect a browser. See [docs/tabs.md](docs/tabs.md).
+A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page, connect a browser and show the sidebar. See [docs/tabs.md](docs/tabs.md).
 
 ## Accepted risks
 
@@ -207,6 +207,7 @@ For screenshots and manual checks, these environment variables change how better
 | `BETTERLINK_HOME` | Settings folder to use instead of the standard one. Use a temporary folder so tests never touch your real rules. |
 | `BETTERLINK_APPEARANCE` | `light` or `dark`, regardless of the system setting. |
 | `BETTERLINK_PAGE` | Page to open: `rules`, `profiles`, `permissions`, `config`, `general`, `log`, `about`. |
+| `BETTERLINK_TRACE` | `1` logs sidebar diagnostics to `trace.log` in the settings folder: how far the sidebar trailed each window drag, and each show and hide. |
 | `BETTERLINK_SHEET` | `rules` or `profiles` opens that editor sheet. |
 | `BETTERLINK_TEST_LINK` | Pre-fills the link tester. |
 

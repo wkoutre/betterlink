@@ -54,36 +54,11 @@ public struct RuleStore: Sendable {
     }
 
     private func withLock<T>(_ body: () throws -> T) throws -> T {
-        let dir = file.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let fd = open(dir.appendingPathComponent(".rules.lock").path, O_RDWR | O_CREAT, 0o600)
-        guard fd >= 0 else { throw ConfigError.unsafeFile("Couldn't lock rules.json (\(String(cString: strerror(errno)))).") }
-        defer { close(fd) }
-        while flock(fd, LOCK_EX) != 0 {
-            guard errno == EINTR else { throw ConfigError.unsafeFile("Couldn't lock rules.json (\(String(cString: strerror(errno)))).") }
-        }
-        defer { flock(fd, LOCK_UN) }
-        return try body()
+        try SettingsFile.withLock(beside: file, name: ".rules.lock", what: "rules.json", body)
     }
 
     public func save(_ contents: Contents) throws {
-        let dir = file.deletingLastPathComponent()
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        // When rules.json is a symlink (into a dotfiles repo, say), write the
-        // file it points to: an atomic write to the link itself would replace
-        // the link with a plain file and leave its target stale.
-        // A link to a file that isn't there is refused: saving would create
-        // that file wherever the link points, with betterlink's own
-        // permissions, and any program can plant such a link in a settings
-        // folder. (fileExists follows the link, so it is false for one.)
-        let fm = FileManager.default
-        if let destination = try? fm.destinationOfSymbolicLink(atPath: file.path), !fm.fileExists(atPath: file.path) {
-            throw ConfigError.unsafeFile("Refused to save rules.json: it is a link to \(destination), which doesn't exist. Create that file or remove the link.")
-        }
-        let target = file.resolvingSymlinksInPath()
-        try enc.encode(contents).write(to: target, options: [.atomic])
-        try FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: target.path)
+        try SettingsFile.write(contents, to: file, what: "rules.json")
     }
 }
 

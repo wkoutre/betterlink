@@ -9,6 +9,13 @@
 
 export const PROTOCOL = 1;
 
+// Every command this copy runs. Sent in the hello, so the app only offers what
+// the installed extension can do (an older copy keeps working, with less).
+export const OPS = ["snapshot", "open", "close", "activate", "move", "mute", "duplicate", "reload", "navigate", "closeMany", "newWindow"];
+
+// What the app may ask a tab to load. Never javascript: or data:.
+const OPENABLE = /^(https?|chrome|about|file):/i;
+
 export function serializeTab(t) {
   return {
     id: t.id,
@@ -20,6 +27,7 @@ export function serializeTab(t) {
     active: !!t.active,
     pinned: !!t.pinned,
     audible: !!t.audible,
+    muted: !!(t.mutedInfo && t.mutedInfo.muted),
     status: t.status || "",
   };
 }
@@ -27,6 +35,11 @@ export function serializeTab(t) {
 // `favicon(pageUrl)` resolves to a data: URL of the browser's cached icon for
 // that page, or "" (background.js reads Chrome's local favicon store; the app
 // itself never fetches anything from the network).
+// A window's frame in screen points, top-left origin (the same as macOS Accessibility).
+export function bounds(w) {
+  return { left: w.left ?? null, top: w.top ?? null, width: w.width ?? null, height: w.height ?? null };
+}
+
 export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "") {
   let seq = 0;
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
@@ -53,6 +66,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
         id: w.id,
         focused: !!w.focused,
         incognito: !!w.incognito,
+        ...bounds(w),
         tabs: (w.tabs || []).map(serializeTab),
       })),
     });
@@ -80,10 +94,15 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
       try { tab = serializeTab(await chrome.tabs.get(addedTabId)); } catch {}
       emit("tabReplaced", { tabId: addedTabId, removedTabId, tab });
     }],
-    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito })],
+    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, ...bounds(w) })],
     [chrome.windows.onRemoved, (windowId) => emit("windowRemoved", { windowId })],
     [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId })],
   ];
+  // Where each window is on screen, so the app can tell which browser profile
+  // owns the window in front (every profile runs its own copy of this extension).
+  if (chrome.windows.onBoundsChanged) {
+    listeners.push([chrome.windows.onBoundsChanged, (w) => emit("windowBounds", { windowId: w.id, ...bounds(w) })]);
+  }
 
   function attach() {
     for (const [ev, fn] of listeners) ev.addListener(fn);
@@ -102,26 +121,71 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     }
   }
 
+  function tabId(cmd) {
+    if (!Number.isInteger(cmd.tabId)) throw new Error("no tab id");
+    return cmd.tabId;
+  }
+
+  // Runs one command. May return fields for the ack (the tab a command made).
   async function run(cmd) {
     switch (cmd.op) {
       case "snapshot":
-        return snapshot();
+        await snapshot();
+        return;
       case "open": {
         const url = String(cmd.url || "");
-        if (!/^(https?|chrome|about|file):/i.test(url)) throw new Error("refused url: " + url);
+        if (!OPENABLE.test(url)) throw new Error("refused url: " + url);
         const windowId = await targetWindowId(cmd.windowId);
-        if (windowId === undefined) return chrome.windows.create({ url, focused: true });
-        await chrome.tabs.create({ url, windowId, active: cmd.active !== false });
+        if (windowId === undefined) {
+          const w = await chrome.windows.create({ url, focused: true });
+          const first = w && w.tabs && w.tabs[0];
+          return first ? { tabId: first.id } : undefined;
+        }
+        const tab = await chrome.tabs.create({ url, windowId, active: cmd.active !== false });
         if (cmd.focus) await chrome.windows.update(windowId, { focused: true });
-        return;
+        return tab ? { tabId: tab.id } : undefined;
       }
       case "close":
-        return chrome.tabs.remove(cmd.tabId);
+        await chrome.tabs.remove(tabId(cmd));
+        return;
+      case "closeMany": {
+        const ids = Array.isArray(cmd.tabIds) ? cmd.tabIds.filter(Number.isInteger) : [];
+        if (ids.length) await chrome.tabs.remove(ids);
+        return;
+      }
       case "activate": {
-        const tab = await chrome.tabs.update(cmd.tabId, { active: true });
+        const tab = await chrome.tabs.update(tabId(cmd), { active: true });
         if (cmd.focus !== false && tab) await chrome.windows.update(tab.windowId, { focused: true });
         return;
       }
+      case "move": {
+        if (!Number.isInteger(cmd.index)) throw new Error("no index");
+        const to = { index: cmd.index };
+        if (Number.isInteger(cmd.windowId)) to.windowId = cmd.windowId;
+        await chrome.tabs.move(tabId(cmd), to);
+        return;
+      }
+      case "mute":
+        await chrome.tabs.update(tabId(cmd), { muted: cmd.muted !== false });
+        return;
+      case "duplicate": {
+        const tab = await chrome.tabs.duplicate(tabId(cmd));
+        return tab ? { tabId: tab.id } : undefined;
+      }
+      case "reload":
+        await chrome.tabs.reload(tabId(cmd));
+        return;
+      case "navigate": {
+        const url = String(cmd.url || "");
+        if (!OPENABLE.test(url)) throw new Error("refused url: " + url);
+        const tab = await chrome.tabs.update(tabId(cmd), cmd.focus === false ? { url } : { url, active: true });
+        if (cmd.focus !== false && tab) await chrome.windows.update(tab.windowId, { focused: true });
+        return;
+      }
+      case "newWindow":
+        // The tab leaves its window for a new one of its own.
+        await chrome.windows.create({ tabId: tabId(cmd), focused: true });
+        return;
       default:
         throw new Error("unknown op: " + cmd.op);
     }
@@ -130,8 +194,8 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   async function handle(msg) {
     if (!msg || msg.type !== "cmd") return;
     try {
-      await run(msg);
-      send({ type: "ack", id: msg.id, ok: true, t: now() });
+      const extra = await run(msg);
+      send({ type: "ack", id: msg.id, ok: true, t: now(), ...(extra || {}) });
     } catch (e) {
       send({ type: "ack", id: msg.id, ok: false, error: String((e && e.message) || e), t: now() });
     }
