@@ -20,13 +20,16 @@ LOCKFILE = /tmp/betterlink-swiftpm.lock
 SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -k -t 0 $(LOCKFILE) true 2>/dev/null || echo "Waiting for another SwiftPM build to finish ($(LOCKFILE))..." >&2; } && /usr/bin/lockf -k $(LOCKFILE))
 
 # The certificate a local build is signed with, so macOS keeps its
-# Accessibility grant across rebuilds (scripts/sign-dev.sh). The first Developer
-# ID Application or Apple Development identity in the keychain; none, or CI,
-# leaves the build ad-hoc signed. Override with `make build DEV_SIGN_IDENTITY=`.
+# permissions across rebuilds (scripts/sign.sh). A Developer ID Application
+# identity from the keychain, else an Apple Development one; none, or CI, leaves
+# the build ad-hoc signed. Read once per make run. Override with
+# `make build DEV_SIGN_IDENTITY=` (empty: ad hoc).
+ifeq ($(origin DEV_SIGN_IDENTITY),undefined)
 ifdef CI
-DEV_SIGN_IDENTITY ?=
+DEV_SIGN_IDENTITY :=
 else
-DEV_SIGN_IDENTITY ?= $(shell security find-identity -v -p codesigning 2>/dev/null | grep -m1 -oE '"(Developer ID Application|Apple Development): [^"]+"' | tr -d '"')
+DEV_SIGN_IDENTITY := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -oE '"(Developer ID Application|Apple Development): [^"]+"' | sort -r | head -1 | tr -d '"')
+endif
 endif
 
 # With only the Command Line Tools (no Xcode), swift-testing sits outside
@@ -113,7 +116,7 @@ build: fetch icon cli
 	codesign --force --sign - $(APP)
 	# A local build with a certificate is signed with it too; release.sh
 	# (UPDATES=1) signs releases itself.
-	if [ "$(UPDATES)" != 1 ] && [ -n "$(DEV_SIGN_IDENTITY)" ]; then scripts/sign-dev.sh "$(DEV_SIGN_IDENTITY)"; fi
+	if [ "$(UPDATES)" != 1 ] && [ -n "$(DEV_SIGN_IDENTITY)" ]; then scripts/sign.sh "$(DEV_SIGN_IDENTITY)"; fi
 	@echo "Built $(APP)"
 
 # Copies the app to /Applications and registers it as a browser. Then use
