@@ -2,7 +2,7 @@
 // An open native port keeps the service worker alive (Chrome 105+), so events
 // stream for as long as the browser runs. Nothing here polls: the only timer is
 // the reconnect backoff after the host goes away.
-import { createBridge, PROTOCOL } from "./bridge.js";
+import { createBridge, OPS, PROTOCOL } from "./bridge.js";
 
 const HOST = "com.wkoutre.betterlink.tabs";
 let port = null;
@@ -68,6 +68,7 @@ function connect() {
       type: "hello",
       protocol: PROTOCOL,
       extension: chrome.runtime.getManifest().version,
+      ops: OPS,
       userAgent: navigator.userAgent,
       brands: (navigator.userAgentData && navigator.userAgentData.brands || []).map((b) => b.brand),
       instance: id,
