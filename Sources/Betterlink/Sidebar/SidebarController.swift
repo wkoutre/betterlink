@@ -132,13 +132,34 @@ final class SidebarController: ObservableObject {
     func toggleCollapsed() {
         guard enabled else { return }
         DragTrace.log("toggle: collapsed \(collapsed) -> \(!collapsed)")
-        // Hiding gives every narrowed window its space back, not only the one in front (review F1).
-        if !collapsed { giveSpaceBack() }
-        collapsed.toggle()
-        save()
-        if !collapsed, let t = current { settle(t) }
-        layout()
+        let hiding = !collapsed
+        for step in SidebarToggleStep.steps(showing: !hiding) {
+            switch step {
+            case .stopFollowing:
+                // From here layout() only fades; it never moves the panel.
+                collapsed = true
+                save()
+            case .fadeOut:
+                layout()
+            case .giveSpaceBackAfterFade:
+                // Hiding gives every narrowed window its space back, not only
+                // the one in front (review F1), once the panel has faded.
+                DispatchQueue.main.asyncAfter(deadline: .now() + Fade.hideDuration) { [weak self] in
+                    MainActor.assumeIsolated {
+                        guard let self, self.collapsed else { return } // shown again meanwhile
+                        self.giveSpaceBack()
+                    }
+                }
+            case .narrowWindow:
+                collapsed = false
+                save()
+                if let t = current { settle(t) }
+            case .place, .fadeIn:
+                if step == .place { layout() } // places and fades in
+            }
+        }
     }
+
 
     // MARK: - Lifecycle
 
@@ -553,6 +574,8 @@ struct ContinuousCorner {
 /// of that strip is fully transparent, so clicks there reach the browser.
 final class SidebarPanel: NSPanel {
     override func orderOut(_ sender: Any?) {
+        fadeTimer?.invalidate(); fadeTimer = nil
+        fade = Fade(shown: false)
         if DragTrace.enabled {
             let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
             DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
@@ -681,37 +704,51 @@ final class SidebarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    private var fading = false
+    /// The show and hide fade (BetterlinkCore's Fade), stepped by our own
+    /// timer: AppKit's window alpha animation sometimes didn't run on hide,
+    /// leaving the panel to vanish at once (Nick, 2026-11-24).
+    private var fade = Fade(shown: false)
+    private var fadeTimer: Timer?
+
+    private static var now: Double { CACurrentMediaTime() }
 
     /// Shows the panel with a short fade (none with Reduce Motion).
     func fadeIn() {
-        guard !isVisible || fading else { return }
-        DragTrace.log("fadeIn: visible \(isVisible) fading \(fading) alpha \(alphaValue) reduceMotion \(Self.reduceMotion)")
-        fading = false
-        if !isVisible { alphaValue = Self.reduceMotion ? 1 : 0; orderFrontRegardless() }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = Self.reduceMotion ? 0 : 0.14
-            animator().alphaValue = 1
-        }
+        guard fade.phase == .hidden || fade.phase == .hiding || !isVisible else { return }
+        if !isVisible { fade = Fade(shown: false); alphaValue = 0; orderFrontRegardless() }
+        DragTrace.log("fadeIn from alpha \(alphaValue) phase \(fade.phase)")
+        fade.show(at: Self.now, reduceMotion: Self.reduceMotion)
+        runFade()
     }
 
     /// Hides the panel with a short fade; a fadeIn during it wins.
     func fadeOut() {
-        DragTrace.log("fadeOut called: visible \(isVisible) fading \(fading) alpha \(alphaValue)")
-        guard isVisible, !fading else { return }
-        guard !Self.reduceMotion else { orderOut(nil); return }
-        fading = true
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.12
-            animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.fading else { return }
-                self.fading = false
-                DragTrace.log("fadeOut done: orderOut")
-                self.orderOut(nil)
-                self.alphaValue = 1
-            }
-        })
+        guard isVisible, fade.phase == .shown || fade.phase == .showing else { return }
+        DragTrace.log("fadeOut from alpha \(alphaValue) phase \(fade.phase)")
+        fade.hide(at: Self.now, reduceMotion: Self.reduceMotion)
+        runFade()
+    }
+
+    private func runFade() {
+        step()
+        guard fadeTimer == nil, fade.phase == .showing || fade.phase == .hiding else { return }
+        let t = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.step() }
+        }
+        RunLoop.main.add(t, forMode: .common) // keeps stepping during drags and menus
+        fadeTimer = t
+    }
+
+    private func step() {
+        let t = Self.now
+        alphaValue = fade.alpha(at: t)
+        guard fade.done(at: t) else { return }
+        fade.settle(at: t)
+        fadeTimer?.invalidate(); fadeTimer = nil
+        if fade.phase == .hidden {
+            DragTrace.log("fade done: orderOut")
+            super.orderOut(nil)
+            alphaValue = 1
+        }
     }
 }
