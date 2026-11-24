@@ -55,7 +55,7 @@ e2e/                         full pipe test
 2. Tabs page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Remove** deletes it.
 3. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/`.
 
-The extension's id is pinned by the `key` in its manifest (`nakiifbonhngpkpekakimjfgkbbbnjoe`, checked by a test), so `allowed_origins` matches every unpacked copy. Nothing starts until the Tabs page is opened or the sidebar is turned on.
+The extension's id is its Chrome Web Store item id, `gjjllnebeeegbipppiclhlomdppbnljh`. The `key` in its manifest is that item's public key (checked by a test), so an unpacked copy has the same id and `allowed_origins` matches both. A registration written for another id shows as "Set up for an older betterlink": press Set Up Again. Nothing starts until the Tabs page is opened or the sidebar is turned on.
 
 Tests: `make test` covers TabSyncCore; `make test-tabs` runs the extension bridge tests and the full-pipe e2e.
 

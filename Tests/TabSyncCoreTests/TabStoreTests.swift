@@ -122,11 +122,27 @@ struct TabStoreTests {
         let url = HostRegistration.manifestURL(dataFolder: "Google/Chrome", home: home)
         #expect(url.path.hasSuffix("Google/Chrome/NativeMessagingHosts/com.wkoutre.betterlink.tabs.json"))
         let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as! [String: Any]
-        #expect(obj["allowed_origins"] as? [String] == ["chrome-extension://nakiifbonhngpkpekakimjfgkbbbnjoe/"])
+        #expect(obj["allowed_origins"] as? [String] == ["chrome-extension://gjjllnebeeegbipppiclhlomdppbnljh/"])
         #expect(obj["type"] as? String == "stdio")
 
         try HostRegistration.uninstall(dataFolder: "Google/Chrome", home: home)
         #expect(HostRegistration.state(dataFolder: "Google/Chrome", hostPath: "/x/host", home: home) == .notInstalled)
+    }
+
+    @Test func aRegistrationForAnotherExtensionIdIsStale() throws {
+        // Written before the extension took its Chrome Web Store id: the path is
+        // right, but the browser would refuse the extension that asks today.
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("bl-tabs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let url = HostRegistration.manifestURL(dataFolder: "Google/Chrome", home: home)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let old: [String: Any] = ["name": HostRegistration.hostName, "path": "/x/host", "type": "stdio",
+                                  "allowed_origins": ["chrome-extension://nakiifbonhngpkpekakimjfgkbbbnjoe/"]]
+        try JSONSerialization.data(withJSONObject: old).write(to: url)
+        #expect(HostRegistration.state(dataFolder: "Google/Chrome", hostPath: "/x/host", home: home) == .stale(path: "/x/host"))
+
+        try HostRegistration.install(dataFolder: "Google/Chrome", hostPath: "/x/host", home: home)
+        #expect(HostRegistration.state(dataFolder: "Google/Chrome", hostPath: "/x/host", home: home) == .installed)
     }
 
     @Test func extensionManifestPinsTheRegisteredId() throws {
