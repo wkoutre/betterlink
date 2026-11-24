@@ -67,13 +67,15 @@ final class SidebarController: ObservableObject {
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
-        // macOS posts this whenever any app's Accessibility permission changes.
         // betterlink's own window coming forward keeps the sidebar bound (the
-        // tracker ignores it) but must hide the panel, or it floats over that
-        // window; the browser coming back shows it again.
+        // tracker ignores it). The panel then drops to a normal level, just
+        // above the browser window, so it stays beside the browser (the Side
+        // and Width settings preview live) without floating over betterlink's
+        // window; the browser coming back lifts it again.
         activationToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in MainActor.assumeIsolated { self?.layout() } }
+        // macOS posts this whenever any app's Accessibility permission changes.
         trustToken = DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
         ) { [weak self] _ in
@@ -229,7 +231,7 @@ final class SidebarController: ObservableObject {
 
     private func layout() {
         let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        guard enabled, let t = current, !t.fullScreen, !ownAppInFront else {
+        guard enabled, let t = current, !t.fullScreen else {
             panel?.orderOut(nil)
             return
         }
@@ -252,7 +254,16 @@ final class SidebarController: ObservableObject {
         } else {
             panel.setFrame(frame, display: true, animate: false)
         }
-        if !panel.isVisible { panel.orderFrontRegardless() }
+        if ownAppInFront {
+            // Beside the browser window, under betterlink's own windows; with
+            // no window number to order against, hidden rather than on top.
+            guard let n = tracker.boundWindowNumber else { panel.orderOut(nil); return }
+            if panel.level != .normal { panel.level = .normal }
+            panel.order(.above, relativeTo: Int(n))
+        } else {
+            if panel.level != .floating { panel.level = .floating }
+            if !panel.isVisible { panel.orderFrontRegardless() }
+        }
     }
 
     private func makePanel() -> SidebarPanel {
