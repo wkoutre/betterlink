@@ -680,7 +680,8 @@ struct SidebarView: View {
                                size: rowSizes[id] ?? .zero, target: $dropTarget,
                                measured: { rowSizes[id] = $0 },
                                allowed: { zone in
-                                   guard m.session.can(.move), let t = dragged() else { return false }
+                                   // Chrome keeps pinned tabs first: no drop across that line (review F1).
+                                   guard m.session.can(.move), let t = dragged(), t.pinned == target.pinned else { return false }
                                    return TabMove.index(moving: t.index, nextTo: target.index, after: zone == .after) != nil
                                }) { keys, zone in
             dragging = nil
