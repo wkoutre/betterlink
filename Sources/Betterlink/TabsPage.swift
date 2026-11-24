@@ -16,7 +16,7 @@ final class TabsModel: ObservableObject {
 
     @Published private(set) var sessions: [BrowserSession] = []
     /// Browser profiles, by the extension's instance id (see ProfileLocator).
-    @Published private(set) var profiles: [String: (ref: ProfileRef, name: String)] = [:]
+    @Published private(set) var profiles: [String: (ref: ProfileRef, name: String, color: UInt32?)] = [:]
     private var profileLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
@@ -38,6 +38,8 @@ final class TabsModel: ObservableObject {
     func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profiles[$0]?.name } }
     /// Which browser profile a session runs in, once known.
     func profileRef(_ s: BrowserSession) -> ProfileRef? { s.instance.flatMap { profiles[$0]?.ref } }
+    /// The color the browser paints this profile's window frame, when it has one.
+    func profileColor(_ s: BrowserSession) -> UInt32? { s.instance.flatMap { profiles[$0]?.color } }
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the
@@ -59,7 +61,12 @@ final class TabsModel: ObservableObject {
                 let name = state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: browser.bundleId)
                     .profiles.first { $0.directory == dir }?.name } ?? dir
                 let ref = ProfileRef(browser: browser.bundleId, directory: dir)
-                DispatchQueue.main.async { self.profiles[instance] = (ref, name) }
+                // A custom color theme's own color first (it is what the frame
+                // shows), else the frame color Chrome records for the profile.
+                let prefs = FileManager.default.contents(atPath: root.appendingPathComponent(dir).appendingPathComponent("Preferences").path)
+                let color = prefs.flatMap { ProfileCatalog.themeColor(preferencesJSON: $0) }
+                    ?? state.flatMap { ProfileCatalog.frameColor(localStateJSON: $0, directory: dir) }
+                DispatchQueue.main.async { self.profiles[instance] = (ref, name, color) }
             }
         }
     }

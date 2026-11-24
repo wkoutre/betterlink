@@ -338,11 +338,17 @@ final class SidebarController: ObservableObject {
         // The browser window sets the panel's size; the content must never grow it.
         host.sizingOptions = []
         let panel = SidebarPanel(contentView: host)
+        panel.setTint(tint)
         self.panel = panel
         return panel
     }
 
     // MARK: - Actions from the sidebar
+
+    /// Paints the sidebar in the browser profile's frame color (nil: the
+    /// standard sidebar material), so it reads as part of that window.
+    func setTint(_ rgb: UInt32?) { tint = rgb; panel?.setTint(rgb) }
+    private var tint: UInt32?
 
     /// After a click or a typed link in the sidebar, hand the keyboard back to the browser.
     func returnFocusToBrowser() { tracker.activateBrowser() }
@@ -441,6 +447,8 @@ final class SidebarPanel: NSPanel {
 
     private let effect = NSVisualEffectView()
     private let shape = CAShapeLayer()
+    /// The profile color, under the content and inside the same mask.
+    private let tint = NSView()
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
     private var side: SidebarSide?
@@ -465,6 +473,10 @@ final class SidebarPanel: NSPanel {
         effect.state = .active
         effect.wantsLayer = true
         effect.layer?.mask = shape
+        tint.wantsLayer = true
+        tint.isHidden = true
+        tint.autoresizingMask = [.width, .height]
+        effect.addSubview(tint)
         content.translatesAutoresizingMaskIntoConstraints = false
         effect.addSubview(content)
         leading = content.leadingAnchor.constraint(equalTo: effect.leadingAnchor)
@@ -475,6 +487,15 @@ final class SidebarPanel: NSPanel {
             content.bottomAnchor.constraint(equalTo: effect.bottomAnchor),
         ])
         contentView = effect
+    }
+
+    func setTint(_ rgb: UInt32?) {
+        tint.frame = effect.bounds
+        tint.isHidden = rgb == nil
+        if let rgb {
+            tint.layer?.backgroundColor = CGColor(srgbRed: CGFloat((rgb >> 16) & 0xFF) / 255, green: CGFloat((rgb >> 8) & 0xFF) / 255,
+                                                  blue: CGFloat(rgb & 0xFF) / 255, alpha: 1)
+        }
     }
 
     /// Which side of the browser window the panel is on, or nil when it covers

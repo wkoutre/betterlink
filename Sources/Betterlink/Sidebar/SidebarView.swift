@@ -72,6 +72,8 @@ struct SidebarView: View {
                 confirmDelete = nil
             }
         }
+        // The browser profile's frame color, like the browser's own window.
+        .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
     }
 
     // MARK: - Header
