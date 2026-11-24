@@ -22,8 +22,8 @@ final class TabsModel: ObservableObject {
     @Published private(set) var registrationVersion = 0
     private var hub: SyncHub?
 
-    /// Starts listening the first time the Tabs page opens, so betterlink does
-    /// no tab work at all for anyone who never opens it.
+    /// Starts listening the first time the Tabs page opens or the sidebar
+    /// turns on, so betterlink does no tab work for anyone who uses neither.
     func start() {
         guard hub == nil else { return }
         let hub = SyncHub(onChange: { [weak self] s in
@@ -80,8 +80,7 @@ final class TabsModel: ObservableObject {
         }
     }
 
-    func open(_ text: String, in session: BrowserSession? = nil, windowId: Int? = nil) {
-        guard let s = session ?? sessions.first else { return }
+    func open(_ text: String, in s: BrowserSession, windowId: Int? = nil) {
         hub?.send(.open(Self.normalize(text), windowId: windowId), to: s.socketPath)
     }
     func activate(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.activate(tab.id), to: s.socketPath) }
