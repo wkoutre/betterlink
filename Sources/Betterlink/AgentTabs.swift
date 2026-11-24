@@ -106,13 +106,18 @@ extension AgentCommand {
 
     /// The tabs Close Other Tabs / Below leave open in `tabs`: saved links'
     /// tabs and held tabs (Agent.sparedTabs).
-    private static func spared(_ tabs: [BrowserTab]) -> Set<Int> {
-        let lib = (try? SidebarStore(folder: SettingsFolder.resolve()).load()) ?? SidebarLibrary()
+    private static func spared(_ tabs: [BrowserTab]) throws -> Set<Int> {
+        // Unreadable, it can't say which tabs are saved links': close nothing.
+        let lib: SidebarLibrary
+        do { lib = try SidebarStore(folder: SettingsFolder.resolve()).load() } catch {
+            throw TabError(message: "Can't read sidebar.json (\(error)), so this can't tell which tabs saved links hold; nothing was closed.")
+        }
         let remembered = MenuBarIcon.defaults().dictionary(forKey: "sidebar.heldTabs") as? [String: [String: [String]]] ?? [:]
         return Agent.sparedTabs(tabs.map { (id: $0.id, url: $0.url) }, library: lib, remembered: remembered)
     }
 
     private static func tabCommand(_ command: String, _ input: [String: Any], _ hub: SyncHub, _ sessions: [BrowserSession]) throws -> [String: Any] {
+        if let b = input["browser"], !(b is NSNull), !(b is String) { throw TabError(message: "browser must be text: a name or bundle id.") }
         func tab() throws -> (Int, BrowserSession, Int) {
             guard let id = try int(input, "tab") else { throw TabError(message: "Give tab: a tab id (tabs list).") }
             let (s, w) = try find(id, in: sessions, browser: input["browser"] as? String)
@@ -124,10 +129,15 @@ extension AgentCommand {
         case "tabs.open":
             let url = try webURL(input)
             let windowId = try int(input, "window")
+            let browser = input["browser"] as? String
             let s = try windowId.map { w in
-                guard let s = sessions.first(where: { $0.store.orderedWindows.contains { $0.window.id == w } }) else {
-                    throw TabError(message: "No open window \(w) (tabs list).")
+                let hits = sessions.filter { s in
+                    s.store.orderedWindows.contains { $0.window.id == w }
+                        && (browser == nil || s.browser.lowercased() == browser!.lowercased()
+                            || Browser.known.first(where: { $0.name == s.browser })?.bundleId.lowercased() == browser!.lowercased())
                 }
+                if hits.count > 1 { throw TabError(message: "Window \(w) is open in more than one browser; give browser.") }
+                guard let s = hits.first else { throw TabError(message: "No open window \(w) (tabs list).") }
                 return s
             } ?? sessions.first(where: { $0.store.orderedWindows.contains { $0.window.focused } }) ?? sessions[0]
             hub.send(.open(url, windowId: windowId), to: s.socketPath)
@@ -196,7 +206,7 @@ extension AgentCommand {
             let (id, s, w) = try tab()
             guard let window = s.store.orderedWindows.first(where: { $0.window.id == w }) else { return ["closed": []] }
             let tabs = window.tabs
-            let held = spared(tabs)
+            let held = try spared(tabs)
             let index = tabs.firstIndex { $0.id == id } ?? 0
             let candidates = command == "tabs.close-below" ? Array(tabs.dropFirst(index + 1)) : tabs.filter { $0.id != id }
             let close = candidates.map(\.id).filter { !held.contains($0) }

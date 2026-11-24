@@ -27,7 +27,9 @@ extension Agent {
             // gets a new id in every process, so a listed id wouldn't work
             // in the next command.
             let store = SidebarStore(folder: env.folder)
-            let lib = FileManager.default.fileExists(atPath: store.file.path) ? try store.load() : try store.update { _ in }
+            // A file with no profiles loads as the starter too, unsaved.
+            let saved = FileManager.default.contents(atPath: store.file.path).flatMap { try? JSONDecoder().decode(SidebarLibrary.self, from: $0) }
+            let lib = (saved?.profiles.isEmpty ?? true) ? try store.update { _ in } : try store.load()
             return .success(lib.profiles.map(describeProfile))
         case "sidebar.profiles.add": return try profilesAddSidebar(input, env)
         case "sidebar.profiles.rename": return try edit(input, env) { lib, p in

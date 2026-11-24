@@ -164,5 +164,9 @@ struct AgentSidebarTests {
         #expect(FileManager.default.fileExists(atPath: saved.path))
         #expect(try SidebarStore(folder: f).load().profiles.first?.id.uuidString == first)
         #expect(call("sidebar.folders.add", ["profile": first, "name": "F"], in: f).ok)
+        // A file with an empty profile list is the same case.
+        try #"{"version":1,"profiles":[]}"#.write(to: saved, atomically: true, encoding: .utf8)
+        let again = try #require((call("sidebar.list", in: f).data as? [[String: Any]])?.first?["id"] as? String)
+        #expect(try SidebarStore(folder: f).load().profiles.first?.id.uuidString == again)
     }
 }

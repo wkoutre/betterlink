@@ -387,8 +387,11 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
   .command('open', {
     description: 'Open a page in a new tab',
     args: z.object({ url: z.string() }),
-    options: z.object({ window: z.number().int().optional().describe('Window id; default is the focused window') }),
-    run: (c) => core('tabs.open', { url: c.args.url, window: c.options.window }),
+    options: z.object({
+      window: z.number().int().optional().describe('Window id; default is the focused window'),
+      browser: z.string().optional().describe('Only when two browsers have a window with this id'),
+    }),
+    run: (c) => core('tabs.open', { url: c.args.url, window: c.options.window, browser: c.options.browser }),
   })
   .command('close', {
     description: 'Close tabs',
