@@ -45,10 +45,14 @@ final class TabsModel: ObservableObject {
     /// in a profile folder's extension storage, then that folder's name in the
     /// browser's Local State. Retried at most every 5 s until found (the
     /// browser writes the storage a moment after the extension starts).
+    /// The color comes from the profile's Preferences (a custom theme) or
+    /// Local State (the frame color).
     private func lookUpProfiles(_ sessions: [BrowserSession]) {
         for s in sessions {
-            guard let instance = s.instance, profiles[instance] == nil,
-                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > 5,
+            // Unknown profiles retry every 5 s; known ones are read again every
+            // 30 s, so a name or color changed in the browser shows up.
+            guard let instance = s.instance,
+                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > (profiles[instance] == nil ? 5 : 30),
                   let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
                   let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
                   let folder = browser.dataFolder else { continue }

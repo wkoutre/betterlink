@@ -47,6 +47,10 @@ public struct SidebarPalette: Equatable, Sendable {
         foreground = fg
     }
 
+    /// True when the text is light, so the system's dark scheme (its text
+    /// fields, placeholders and labels) reads on this background.
+    public var wantsDarkScheme: Bool { Self.luminance(foreground) > 0.5 }
+
     public func level(_ opacity: Double) -> RGB { Self.blend(foreground, opacity, over: background) }
 
     // MARK: - WCAG math

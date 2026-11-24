@@ -75,6 +75,11 @@ struct SidebarView: View {
         }
         // The browser profile's frame color, like the browser's own window.
         .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
+        // Anything left on system colors (text fields, their placeholders,
+        // the folder names) follows the palette: its text color by default and
+        // a light or dark scheme matching the profile color (review F1).
+        .foregroundStyle(pal.text)
+        .modifier(SchemeOverride(scheme: pal.scheme))
         .environment(\.sidebarColors, pal)
     }
 
@@ -232,13 +237,14 @@ struct SidebarView: View {
         if renaming == id {
             TextField("Name", text: $draftName)
                 .textFieldStyle(.plain)
+                .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($nameFocused)
                 .onAppear { nameFocused = true }
                 .onSubmit { lib.change(profile: p.id) { $0.rename(id, to: draftName) }; renaming = nil }
                 .onExitCommand { renaming = nil }
         } else {
-            Text(name).font(DS.TextStyle.body).lineLimit(1)
+            Text(name).font(DS.TextStyle.body).lineLimit(1).foregroundStyle(pal.text)
         }
     }
 
@@ -276,6 +282,7 @@ struct SidebarView: View {
             Image(systemName: "plus").foregroundStyle(pal.textTertiary)
             TextField("New Tab", text: $newURL)
                 .textFieldStyle(.plain)
+                .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .onSubmit {
                     guard !newURL.isEmpty else { return }
@@ -456,20 +463,33 @@ private extension View {
 /// profile color, the readable palette made for it (SidebarPalette, WCAG AA).
 struct SidebarColors {
     var text, textSecondary, textTertiary, hover, selected, accent: Color
+    /// On a profile color, the scheme whose system colors read on it: dark for
+    /// light text, light for dark text. Nil keeps the app's own appearance.
+    var scheme: ColorScheme?
 
     init(_ p: SidebarPalette?) {
         guard let p else {
+            scheme = nil
             text = DS.Palette.text; textSecondary = DS.Palette.textSecondary; textTertiary = DS.Palette.textTertiary
             hover = DS.Palette.hover; selected = DS.Palette.selected; accent = DS.Palette.accent
             return
         }
         func c(_ v: SidebarPalette.RGB, _ a: Double = 1) -> Color { Color(.sRGB, red: v.r, green: v.g, blue: v.b, opacity: a) }
         text = c(p.foreground)
+        scheme = p.wantsDarkScheme ? .dark : .light
         textSecondary = c(p.level(SidebarPalette.secondaryOpacity))
         textTertiary = c(p.level(SidebarPalette.tertiaryOpacity))
         hover = c(p.foreground, SidebarPalette.hoverOpacity)
         selected = c(p.foreground, SidebarPalette.selectedOpacity)
         accent = c(p.foreground)
+    }
+}
+
+/// Sets the color scheme only when there is one to set.
+private struct SchemeOverride: ViewModifier {
+    var scheme: ColorScheme?
+    func body(content: Content) -> some View {
+        if let scheme { content.environment(\.colorScheme, scheme) } else { content }
     }
 }
 

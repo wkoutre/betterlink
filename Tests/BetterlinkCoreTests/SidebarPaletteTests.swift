@@ -6,6 +6,12 @@ struct SidebarPaletteTests {
     // The two Chrome profiles on the Mac mini, plus pale, saturated and grey colors.
     let colors: [UInt32] = [0xB71C1C, 0x2F1B0C, 0x6D1212, 0xFF8000, 0xFFE082, 0x1565C0, 0x00C853, 0xFFFFFF, 0x000000, 0x808080, 0xE91E63]
 
+    @Test func theSystemSchemeFollowsTheTextColor() {
+        // Light text (dark profile) wants the dark scheme, so system text fields read.
+        #expect(SidebarPalette(profileColor: 0x2F1B0C).wantsDarkScheme)
+        #expect(!SidebarPalette(profileColor: 0xFFE082).wantsDarkScheme)
+    }
+
     @Test func everyTextLevelMeetsWCAG_AA() {
         for c in colors {
             let p = SidebarPalette(profileColor: c)

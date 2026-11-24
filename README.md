@@ -63,7 +63,7 @@ Rules and the fallback each name a browser and, where it has them, a profile.
 | Firefox | Firefox, Firefox Developer Edition, Zen | `-P <name> <link>` | Expected to work, not yet tested. |
 | No profiles | Safari, Arc | the link is handed to the browser the ordinary way | Expected to work. |
 
-betterlink finds a browser's profiles in its own files: `Local State` for Chromium and `profiles.ini` for Firefox. Bundle ids and data folders come from [Finicky](https://github.com/johnste/finicky)'s browser list (MIT). Profiles can also be added by hand under **Edit Profiles…**.
+betterlink finds a browser's profiles in its own files: `Local State` for Chromium and `profiles.ini` for Firefox. For the Tabs sidebar's profile color it also reads a Chromium profile's `Preferences` (its theme color) and the frame color in `Local State`. Bundle ids and data folders come from [Finicky](https://github.com/johnste/finicky)'s browser list (MIT). Profiles can also be added by hand under **Edit Profiles…**.
 
 ## Link Rules
 
