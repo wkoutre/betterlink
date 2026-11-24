@@ -141,7 +141,6 @@ final class WindowTracker: NSObject {
         if growing { move(); resize() } else { resize(); move() }
     }
 
-
     /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.
     func setWindowFrame(_ frame: CGRect, of window: AXUIElement? = nil) {
         guard let win = window ?? observedWindow, let h = NSScreen.screens.first?.frame.height else { return }

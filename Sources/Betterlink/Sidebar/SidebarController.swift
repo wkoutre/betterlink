@@ -243,7 +243,8 @@ final class SidebarController: ObservableObject {
         if run.fitted {
             if let win = run.window {
                 // Hiding widens the window; showing narrows it.
-                tracker.slideWindow(win, to: f.window, moveOrigin: run.side == .left, growing: run.slide.phase == .hiding)
+                tracker.slideWindow(win, to: f.window, moveOrigin: run.side == .left,
+                                    growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
             }
             if let n = run.windowNumber, let real = tracker.windowServerFrame(n) {
                 let edge = run.side == .left ? real.minX : real.maxX
@@ -290,13 +291,6 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
-        // Turned off mid-slide: the window goes back to its full frame.
-        if let run = slideRun {
-            run.timer?.invalidate()
-            slideRun = nil
-            if run.fitted, let win = run.window { tracker.setWindowFrame(run.hiddenWindow, of: win) }
-            panel?.reveal = nil
-        }
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
@@ -306,7 +300,18 @@ final class SidebarController: ObservableObject {
 
     /// Gives every window the sidebar narrowed, not only the one in front, its
     /// space back, if it is still as narrowed. Also called when the app quits.
-    func giveSpaceBack() { giveSpaceBack(where: { _ in true }) }
+    func giveSpaceBack() {
+        // Turned off or quit mid-slide: the window goes back to its full
+        // frame first, since it is at neither the narrowed nor the full width.
+        if let run = slideRun {
+            run.timer?.invalidate()
+            slideRun = nil
+            if run.fitted, let win = run.window { tracker.setWindowFrame(run.hiddenWindow, of: win) }
+            fits[run.windowHash] = nil
+            panel?.reveal = nil
+        }
+        giveSpaceBack(where: { _ in true })
+    }
 
     private func giveSpaceBack(where include: (Fit) -> Bool) {
         for (k, f) in fits where include(f) {
