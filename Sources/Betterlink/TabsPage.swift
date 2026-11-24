@@ -275,7 +275,7 @@ private struct SidebarSettings: View {
             Toggle(isOn: $sidebar.takeOverTabs) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Take over the browser's tabs")
-                    Text("Collapses the browser's own tab strip to vertical tabs (Chrome: View › Collapse Vertical Tabs). With the sidebar on the left, it covers that column too. Turning this off leaves the browser's tabs as they are.")
+                    Text("Collapses the browser's own tab strip to vertical tabs (Chrome: View › Collapse Vertical Tabs). The sidebar sits beside that column. Turning this off leaves the browser's tabs as they are.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

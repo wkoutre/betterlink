@@ -29,9 +29,9 @@ final class SidebarController: ObservableObject {
     /// back, and showing it again makes room again (like collapsing Arc's sidebar).
     @Published private(set) var collapsed: Bool
     /// The sidebar takes over the browser's tabs: its own tab strip is switched
-    /// to collapsed vertical tabs (see TabStripTakeover), and with the sidebar
-    /// on the left, the sidebar covers that column too.
-    @Published var takeOverTabs: Bool { didSet { save(); stripCover = nil; takenOver = [:]; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
+    /// to collapsed vertical tabs (see TabStripTakeover); the sidebar sits
+    /// beside that column, never over it.
+    @Published var takeOverTabs: Bool { didSet { save(); takenOver = []; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
     /// Shows and hides the sidebar while an attached browser is in front.
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
@@ -365,10 +365,9 @@ final class SidebarController: ObservableObject {
         let newWindow = t != nil && t?.windowHash != current?.windowHash
         current = t
         if newWindow, let t {
-            // A window already taken over keeps its measurement: coming back
-            // from another app neither drops the cover nor presses again.
-            stripCover = takenOver[t.windowHash] ?? nil
-            if takeOverTabs, takenOver[t.windowHash] == nil { takeOver(t) }
+            // A window already taken over isn't pressed again on coming back
+            // from another app.
+            if takeOverTabs, !takenOver.contains(t.windowHash) { takeOver(t) }
         }
         var shown = t
         if let old = target { shown?.frame = old.frame }
@@ -376,15 +375,11 @@ final class SidebarController: ObservableObject {
         layout()
     }
 
-    /// The browser's collapsed vertical tab column, as (width, distance from
-    /// the window's top), measured from the window; nil when there is none.
-    private var stripCover: CGSize?
-    /// Windows already taken over, with their measured column (nil inside
-    /// when the window shows none), by window hash.
-    private var takenOver: [Int: CGSize?] = [:]
+    /// Windows already taken over, by window hash.
+    private var takenOver: Set<Int> = []
 
-    /// Collapses the bound window's tab strip (Chromium browsers), then
-    /// measures the column it leaves, so the sidebar can cover it.
+    /// Collapses the bound window's tab strip (Chromium browsers). The sidebar
+    /// sits beside the collapsed column and never covers it (Nick, 2026-11-24).
     ///
     /// The browser's menu acts on whichever of its windows is focused and only
     /// catches up a moment after a window comes forward, so nothing is pressed
@@ -397,9 +392,7 @@ final class SidebarController: ObservableObject {
             guard let self, self.takeOverTabs, self.current?.windowHash == t.windowHash else { return }
             guard self.tracker.boundWindowIsFocusedMain() else { return self.takeOver(t, pass: pass + 1) }
             if TabStripTakeover.apply(pid: t.pid) != nil { return self.takeOver(t, pass: pass + 1) }
-            self.stripCover = self.tracker.verticalTabStrip()
-            self.takenOver[t.windowHash] = .some(self.stripCover)
-            self.layout()
+            self.takenOver.insert(t.windowHash)
         }
     }
 
@@ -417,13 +410,6 @@ final class SidebarController: ObservableObject {
     private func settle(_ t: WindowTracker.Target) {
         // The tab list matches the window by its frame: refresh it now that it is still.
         if target != t { target = t }
-        // Every mouse-up settles: the user may have expanded the tab column or
-        // turned vertical tabs off, so measure it again (review F3).
-        if takeOverTabs, takenOver[t.windowHash] != nil {
-            let now = tracker.verticalTabStrip()
-            takenOver[t.windowHash] = .some(now)
-            if now != stripCover { stripCover = now; layout() }
-        }
         guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         var outer = t.frame
@@ -529,8 +515,7 @@ final class SidebarController: ObservableObject {
         if placedSide != p.side { placedSide = p.side }
         let panel = self.panel ?? makePanel()
         let attached: SidebarSide? = p.overlaps ? nil : p.side
-        // On the left, it also covers the browser's collapsed tab column.
-        panel.attach(to: attached, cover: attached == .left && takeOverTabs ? stripCover : nil)
+        panel.attach(to: attached)
         // Beside the window, the panel reaches under the window's rounded
         // corners to fill them (see SidebarPanel), so it is that much wider.
         let reach = attached == nil ? 0 : panel.reach
@@ -738,10 +723,8 @@ final class SidebarPanel: NSPanel {
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
     private var side: SidebarSide?
-    private var cover: CGSize?
-    /// How far the panel reaches under the browser window: the corner's curve,
-    /// or the tab column it covers when wider.
-    var reach: CGFloat { max(Self.browserCornerRadius, cover?.width ?? 0) }
+    /// How far the panel reaches under the browser window: the corner's curve.
+    var reach: CGFloat { Self.browserCornerRadius }
 
     init(contentView content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 280, height: 600),
@@ -792,9 +775,8 @@ final class SidebarPanel: NSPanel {
 
     /// Which side of the browser window the panel is on, or nil when it covers
     /// the window's edge instead (all four corners rounded, nothing to fill).
-    func attach(to side: SidebarSide?, cover: CGSize? = nil) {
+    func attach(to side: SidebarSide?) {
         self.side = side
-        self.cover = side == .left ? cover : nil
         let r = side == nil ? 0 : reach
         leading?.constant = side == .right ? r : 0
         trailing?.constant = side == .left ? -r : 0
@@ -846,10 +828,6 @@ final class SidebarPanel: NSPanel {
             let body = c.rect(CGRect(x: 0, y: 0, width: edge, height: b.height), corners: [0, 3])
             path = body.union(c.notch(edgeX: edge, windowLeft: false, top: true, height: b.height))
                 .union(c.notch(edgeX: edge, windowLeft: false, top: false, height: b.height))
-            // The browser's collapsed tab column, from its top to the window's bottom.
-            if let cover, cover.height < b.height {
-                path = path.union(CGPath(rect: CGRect(x: edge, y: 0, width: cover.width, height: b.height - cover.height), transform: nil))
-            }
         default:
             path = c.rect(b, corners: [0, 1, 2, 3])
         }
