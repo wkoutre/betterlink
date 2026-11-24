@@ -69,4 +69,58 @@ public enum WindowMatch {
         }
         return best?.0
     }
+
+    /// What the sidebar may show for the browser window in front.
+    public enum Found: Equatable, Sendable {
+        case window(Hit)
+        /// No copy of the extension is connected for this browser.
+        case notConnected
+        /// The browser is connected, but this window is not one the extension
+        /// reports: an Incognito window it isn't allowed in, or a window of a
+        /// profile without the extension.
+        case unseen
+    }
+
+    /// The browser window behind the window in front, or the reason there is
+    /// none. Never a guess: a click in the sidebar switches, closes and opens
+    /// tabs, and doing that in another window than the one beside it is worse
+    /// than showing nothing.
+    ///
+    /// 1. The browser's one focused window (see `front`).
+    /// 2. With no single focused window (betterlink's own window is in front,
+    ///    or an event is still on its way): the one window at this frame whose
+    ///    active tab titles the window. An Incognito window the extension
+    ///    can't see often sits exactly on a regular one, so the frame alone
+    ///    isn't enough when there is a title to compare.
+    /// - Parameters:
+    ///   - sessions: this browser's sessions (every profile's copy of the extension).
+    ///   - title: the window's title, which Chromium starts with the active tab's.
+    public static func find(frame: WindowBounds?, title: String, in sessions: [BrowserSession],
+                            tolerance: Double = 40) -> Found {
+        guard !sessions.isEmpty else { return .notConnected }
+        let all = sessions.flatMap { s in s.store.orderedWindows.map { (hit: Hit(session: s.id, windowId: $0.id), entry: $0) } }
+        let focused = all.filter(\.entry.window.focused)
+        if focused.count == 1 { return .window(focused[0].hit) }
+
+        func titled(_ e: TabStore.WindowEntry) -> Bool? {
+            guard !title.isEmpty, let active = e.tabs.first(where: \.active)?.title, !active.isEmpty else { return nil }
+            return title.hasPrefix(active)
+        }
+        let atFrame = all.filter { w in
+            guard let frame, let b = w.entry.window.bounds else { return false }
+            return b.distance(to: frame) <= tolerance
+        }
+        // At this frame and titled by it; or, when a title can't be compared
+        // (a page still loading), the only window at this frame.
+        let both = atFrame.filter { titled($0.entry) == true }
+        if both.count == 1 { return .window(both[0].hit) }
+        if atFrame.count == 1, titled(atFrame[0].entry) == nil { return .window(atFrame[0].hit) }
+        // No frames to go by (the browser never reported them): the title alone,
+        // when exactly one window has it.
+        if frame == nil || all.allSatisfy({ $0.entry.window.bounds == nil }) {
+            let byTitle = all.filter { titled($0.entry) == true }
+            if byTitle.count == 1 { return .window(byTitle[0].hit) }
+        }
+        return .unseen
+    }
 }
