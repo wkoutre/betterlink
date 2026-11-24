@@ -1,17 +1,16 @@
 import AppKit
 import CoreGraphics
+import BetterlinkCore
 import Foundation
 
 /// Diagnostics, on only with BETTERLINK_TRACE=1: during a real window drag,
 /// samples the window server every 4 ms off the main thread and reports how far
 /// the sidebar panel trailed the browser window; logs every show and hide.
-/// Lines go to $BETTERLINK_HOME/trace.log (or /tmp/betterlink-trace.log).
+/// Lines go to trace.log in betterlink's settings folder.
 enum DragTrace {
     static let enabled = ProcessInfo.processInfo.environment["BETTERLINK_TRACE"] == "1"
-    private static let file: URL = {
-        if let h = ProcessInfo.processInfo.environment["BETTERLINK_HOME"] { return URL(fileURLWithPath: h).appendingPathComponent("trace.log") }
-        return URL(fileURLWithPath: "/tmp/betterlink-trace.log")
-    }()
+    /// trace.log in betterlink's settings folder (review F2).
+    private static let file: URL = SettingsFolder.resolve().directory.appendingPathComponent("trace.log")
     private static let queue = DispatchQueue(label: "betterlink.dragtrace")
     nonisolated(unsafe) private static var timer: DispatchSourceTimer?
     nonisolated(unsafe) private static var samples: [(t: Double, browser: CGRect, panel: CGRect)] = []
@@ -34,8 +33,11 @@ enum DragTrace {
             let t = DispatchSource.makeTimerSource(queue: queue)
             t.schedule(deadline: .now(), repeating: .milliseconds(4))
             t.setEventHandler {
-                let ids = [browser, UInt32(panel)] as CFArray
-                guard let info = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]] else { return }
+                // The API takes raw CGWindowIDs in the array's pointer slots, not
+                // NSNumbers (a bridged Swift array returns nothing; review F1).
+                var raw: [UnsafeRawPointer?] = [browser, UInt32(panel)].map { UnsafeRawPointer(bitPattern: UInt($0)) }
+                guard let ids = CFArrayCreate(nil, &raw, raw.count, nil),
+                      let info = CGWindowListCreateDescriptionFromArray(ids) as? [[String: Any]] else { return }
                 var b: CGRect?, p: CGRect?
                 for w in info {
                     let n = (w[kCGWindowNumber as String] as? NSNumber)?.uint32Value

@@ -55,15 +55,3 @@ struct FadeTests {
     }
 }
 
-struct SidebarToggleTests {
-    @Test func hidingFreezesAndFadesBeforeTheWindowWidens() {
-        let s = SidebarToggleStep.steps(showing: false)
-        #expect(s == [.stopFollowing, .fadeOut, .giveSpaceBackAfterFade])
-        #expect(s.firstIndex(of: .giveSpaceBackAfterFade)! > s.firstIndex(of: .fadeOut)!)
-    }
-
-    @Test func showingNarrowsTheWindowBeforeThePanelAppears() {
-        let s = SidebarToggleStep.steps(showing: true)
-        #expect(s == [.narrowWindow, .place, .fadeIn])
-    }
-}

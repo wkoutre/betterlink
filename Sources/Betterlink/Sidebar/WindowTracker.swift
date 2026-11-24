@@ -118,6 +118,26 @@ final class WindowTracker: NSObject {
     /// A window's frame now, in Cocoa coordinates.
     func currentFrame(of win: AXUIElement) -> CGRect? { frame(of: win) }
 
+    /// The bound window's frame as the window server has it right now (what
+    /// is on screen), Cocoa coordinates. Cheap enough to call every frame.
+    func windowServerFrame() -> CGRect? {
+        guard let n = windowNumber, let h = NSScreen.screens.first?.frame.height,
+              let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first,
+              let b = Self.axBounds(info) else { return nil }
+        return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
+    }
+
+    /// One step of a slide: sets the bound window's size, and its position
+    /// only when the left edge moves (the sidebar on the left), so a frame
+    /// costs one or two Accessibility calls rather than three.
+    func slideWindow(to frame: CGRect, moveOrigin: Bool) {
+        guard let win = observedWindow, let h = NSScreen.screens.first?.frame.height else { return }
+        let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
+        var origin = ax.origin, size = ax.size
+        if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
+        if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) }
+    }
+
     /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.
     func setWindowFrame(_ frame: CGRect, of window: AXUIElement? = nil) {
         guard let win = window ?? observedWindow, let h = NSScreen.screens.first?.frame.height else { return }

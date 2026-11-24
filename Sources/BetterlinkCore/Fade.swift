@@ -65,16 +65,3 @@ public struct Fade: Equatable, Sendable {
     }
 }
 
-/// What showing or hiding the sidebar does, in order. Hiding stops the
-/// sidebar following the window first, fades it where it is, and only then
-/// gives the window its width back, so the panel never jumps to the window's
-/// new edge on its way out (Nick, 2026-11-24). Showing narrows the window
-/// first, then places the panel and fades it in.
-public enum SidebarToggleStep: Equatable, Sendable {
-    case stopFollowing, fadeOut, giveSpaceBackAfterFade
-    case narrowWindow, place, fadeIn
-
-    public static func steps(showing: Bool) -> [SidebarToggleStep] {
-        showing ? [.narrowWindow, .place, .fadeIn] : [.stopFollowing, .fadeOut, .giveSpaceBackAfterFade]
-    }
-}
