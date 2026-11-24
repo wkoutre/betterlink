@@ -17,7 +17,7 @@ endif
 # /usr/bin/lockf ships with macOS; it says when it has to wait, then waits.
 # Override with `make test SWIFTPM_LOCK=`.
 LOCKFILE = /tmp/betterlink-swiftpm.lock
-SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -t 0 $(LOCKFILE) true 2>/dev/null || echo "Waiting for another SwiftPM build to finish ($(LOCKFILE))..." >&2; } && /usr/bin/lockf -k $(LOCKFILE))
+SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),{ /usr/bin/lockf -k -t 0 $(LOCKFILE) true 2>/dev/null || echo "Waiting for another SwiftPM build to finish ($(LOCKFILE))..." >&2; } && /usr/bin/lockf -k $(LOCKFILE))
 
 # With only the Command Line Tools (no Xcode), swift-testing sits outside
 # SwiftPM's default search paths, so `swift test` fails with "no such module
