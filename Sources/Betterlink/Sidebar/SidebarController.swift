@@ -158,9 +158,10 @@ final class SidebarController: ObservableObject {
 
     private func giveSpaceBack(where include: (Fit) -> Bool) {
         for (k, f) in fits where include(f) {
-            if let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) {
-                tracker.setWindowFrame(f.outer, of: win)
-            }
+            // A window that can't be read now (a hung browser) keeps its record,
+            // so it is recognised later instead of narrowed again.
+            guard let win = f.window, let now = tracker.currentFrame(of: win) else { continue }
+            if Self.same(now, f.inner) { tracker.setWindowFrame(f.outer, of: win) }
             fits[k] = nil
         }
         // Removing a window from `fits` forgets its record. A window narrowed

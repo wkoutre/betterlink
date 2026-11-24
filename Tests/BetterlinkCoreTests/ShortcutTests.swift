@@ -26,6 +26,14 @@ struct ShortcutTests {
         #expect(Shortcut(keyCode: 1, modifiers: Shortcut.control | Shortcut.shift, key: "S").isValid)
     }
 
+    @Test func theBrowsersOwnControlShortcutsAreRefused() {
+        #expect(!Shortcut(keyCode: 121, modifiers: Shortcut.control, key: "⇟").isValid) // next tab
+        #expect(!Shortcut(keyCode: 116, modifiers: Shortcut.control | Shortcut.shift, key: "⇞").isValid) // move tab
+        #expect(!Shortcut(keyCode: 13, modifiers: Shortcut.control | Shortcut.command, key: "W").isValid) // tab group
+        #expect(Shortcut(keyCode: 13, modifiers: Shortcut.control | Shortcut.option, key: "W").isValid)
+        #expect(Shortcut.sidebarDefault.isValid)
+    }
+
     @Test func specialKeysGetReadableLabels() {
         #expect(Shortcut.label(keyCode: 49, typed: " ") == "Space")
         #expect(Shortcut.label(keyCode: 122, typed: "\u{F704}") == "F1")

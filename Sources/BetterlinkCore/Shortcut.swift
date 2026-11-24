@@ -1,8 +1,8 @@
 import Foundation
 
-/// A keyboard shortcut the user picked: a key plus at least one of Control,
-/// Option or Command (Shift alone would take ordinary typing). Stored per Mac,
-/// like the menu bar icon.
+/// A keyboard shortcut the user picked: a key with Control (see `isValid`),
+/// never one of the browser's own Control shortcuts. Stored per Mac, like the
+/// menu bar icon.
 public struct Shortcut: Codable, Equatable, Sendable {
     /// The macOS virtual key code (kVK_*).
     public var keyCode: UInt32
@@ -25,7 +25,17 @@ public struct Shortcut: Codable, Equatable, Sendable {
     /// combinations are the browser's own (⌘T, ⌥⌘I for DevTools), and Option
     /// combinations type characters (⌥S types ß).
     public var isValid: Bool {
-        !key.isEmpty && modifiers & Self.control != 0
+        !key.isEmpty && modifiers & Self.control != 0 && !isBrowserShortcut
+    }
+
+    /// The Control shortcuts Chromium browsers define themselves
+    /// (chrome/browser/global_keyboard_shortcuts_mac.mm): ⌃PageUp/⌃PageDown
+    /// (with or without Shift) switch and move tabs, ⌃⌘C/P/W/X/Z act on tab groups.
+    public var isBrowserShortcut: Bool {
+        let pageUpDown: Set<UInt32> = [116, 121]
+        if pageUpDown.contains(keyCode), modifiers & ~Self.shift == Self.control { return true }
+        let groupKeys: Set<UInt32> = [8, 35, 13, 7, 6] // C, P, W, X, Z
+        return groupKeys.contains(keyCode) && modifiers == Self.control | Self.command
     }
 
     /// A readable label for keys whose typed character is invisible or private

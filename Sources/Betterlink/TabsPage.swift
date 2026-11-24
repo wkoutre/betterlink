@@ -320,8 +320,8 @@ private struct LatencyFooter: View {
     }
 }
 
-/// Click, then press the new shortcut. Escape cancels. It needs Control,
-/// Option or Command, so it never takes ordinary typing.
+/// Click, then press the new shortcut. Escape cancels. It needs Control and
+/// must not be one of the browser's own (Shortcut.isValid).
 private struct ShortcutRecorder: View {
     @Binding var shortcut: Shortcut
     @State private var recording = false
@@ -351,7 +351,11 @@ private struct ShortcutRecorder: View {
             if f.contains(.control) { m |= Shortcut.control }
             let s = Shortcut(keyCode: UInt32(e.keyCode), modifiers: m,
                              key: Shortcut.label(keyCode: UInt32(e.keyCode), typed: e.charactersIgnoringModifiers ?? ""))
-            guard s.isValid else { hint = "Add Control: without it, the shortcut would take one of the browser's or type a character."; return nil }
+            guard s.isValid else {
+                hint = s.isBrowserShortcut ? "That one is the browser's own. Pick another."
+                    : "Add Control: without it, the shortcut would take one of the browser's or type a character."
+                return nil
+            }
             shortcut = s
             stop()
             return nil
