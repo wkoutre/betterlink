@@ -96,7 +96,7 @@ struct TabsPage: View {
 
             if tabs.sessions.isEmpty {
                 DSSection {
-                    Text("No browser connected. Connect a browser below, load the Tabs extension in it, then open the browser.")
+                    Text("No browser connected yet. Set up a browser below, load the Tabs extension in it, then open the browser.")
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -129,7 +129,7 @@ struct TabsPage: View {
                     if let err = tabs.registrationError {
                         Text(err).foregroundStyle(DS.Palette.danger)
                     }
-                    Text("Connecting writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then load the Tabs extension in that browser (chrome://extensions › Developer mode › Load unpacked › browser-extension).")
+                    Text("Set Up writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then load the Tabs extension in that browser (chrome://extensions › Developer mode › Load unpacked › browser-extension).")
                         .foregroundStyle(DS.Palette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -199,16 +199,16 @@ private struct BrowserRegistrationRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(browser.name)
                 switch state {
-                case .installed: Text("Connected").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.success)
-                case .notInstalled: Text("Not connected").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                case .stale: Text("Points at an older betterlink. Reconnect.").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                case .installed: Text("Set up").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.success)
+                case .notInstalled: Text("Not set up").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                case .stale: Text("Set up for an older betterlink. Set up again.").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 }
             }
             Spacer()
             if state == .installed {
-                Button("Disconnect") { tabs.setRegistered(false, browser) }
+                Button("Remove") { tabs.setRegistered(false, browser) }
             } else {
-                Button(state == .notInstalled ? "Connect" : "Reconnect") { tabs.setRegistered(true, browser) }
+                Button(state == .notInstalled ? "Set Up" : "Set Up Again") { tabs.setRegistered(true, browser) }
             }
         }
     }

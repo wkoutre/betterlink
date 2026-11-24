@@ -23,6 +23,8 @@ func log(_ s: String) { FileHandle.standardError.write(("[betterlink-tabhost] " 
 // MARK: - Who launched us
 
 func parentAppName() -> String? {
+    // Tests name the "browser" themselves; a real browser never sets this.
+    if let n = ProcessInfo.processInfo.environment["BETTERLINK_TABS_BROWSER_NAME"], !n.isEmpty { return n }
     #if canImport(Darwin)
     var buf = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
     guard proc_pidpath(getppid(), &buf, UInt32(buf.count)) > 0 else { return nil }
@@ -33,7 +35,7 @@ func parentAppName() -> String? {
     }
     return (path as NSString).lastPathComponent
     #else
-    return ProcessInfo.processInfo.environment["BETTERLINK_TABS_BROWSER_NAME"]
+    return nil
     #endif
 }
 

@@ -51,7 +51,7 @@ e2e/                         full pipe test
 ## Try it
 
 1. Build and run betterlink (CONTRIBUTING.md: use a `BETTERLINK_HOME` temp folder).
-2. Tabs page › Browsers › **Connect** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Disconnect** removes it.
+2. Tabs page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Remove** deletes it.
 3. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/`.
 
 The extension's id is pinned by the `key` in its manifest (`nakiifbonhngpkpekakimjfgkbbbnjoe`, checked by a test), so `allowed_origins` matches every unpacked copy. Nothing starts until the Tabs page is opened.
