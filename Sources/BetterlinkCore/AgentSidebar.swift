@@ -22,7 +22,13 @@ extension Agent {
 
     static func sidebarRun(_ command: String, _ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse? {
         switch command {
-        case "sidebar.list": return .success(try SidebarStore(folder: env.folder).load().profiles.map(describeProfile))
+        case "sidebar.list":
+            // With no sidebar.json yet, save the starter first: unsaved, it
+            // gets a new id in every process, so a listed id wouldn't work
+            // in the next command.
+            let store = SidebarStore(folder: env.folder)
+            let lib = FileManager.default.fileExists(atPath: store.file.path) ? try store.load() : try store.update { _ in }
+            return .success(lib.profiles.map(describeProfile))
         case "sidebar.profiles.add": return try profilesAddSidebar(input, env)
         case "sidebar.profiles.rename": return try edit(input, env) { lib, p in
             guard let name = try nonEmpty(input, "name") else { throw fail("Give name: the new name.") }
@@ -40,6 +46,21 @@ extension Agent {
         case "sidebar.import": return try importSidebar(input, env)
         default: return nil
         }
+    }
+
+    // MARK: Tabs a close spares
+
+    /// The tabs Close Other Tabs and Close Tabs Below leave open: any tab at a
+    /// saved link's address in any Sidebar Profile (the sidebar's menu spares
+    /// the tabs its saved links claim, LinkResolution), and any tab at an
+    /// address the app remembers a saved link holding (HoldLedger.remembered:
+    /// profile key -> link id -> addresses). Sparing too much is safe;
+    /// closing a held tab is not.
+    public static func sparedTabs(_ tabs: [(id: Int, url: String)], library: SidebarLibrary,
+                                  remembered: [String: [String: [String]]]) -> Set<Int> {
+        var keys = Set(library.profiles.flatMap { $0.allLinks.map { SavedLink.key($0.url) } })
+        for byLink in remembered.values { for addresses in byLink.values { for a in addresses { keys.insert(SavedLink.key(a)) } } }
+        return Set(tabs.filter { !$0.url.isEmpty && keys.contains(SavedLink.key($0.url)) }.map(\.id))
     }
 
     // MARK: Reading

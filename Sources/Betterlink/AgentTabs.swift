@@ -85,12 +85,17 @@ extension AgentCommand {
         return s
     }
 
-    /// The session and window holding tab `id`.
-    private static func find(_ id: Int, in sessions: [BrowserSession]) throws -> (BrowserSession, Int) {
+    /// The session and window holding tab `id`. Two browsers can each have a
+    /// tab with the same id: then `browser` (a name or bundle id) says which.
+    private static func find(_ id: Int, in sessions: [BrowserSession], browser: String? = nil) throws -> (BrowserSession, Int) {
+        var hits: [(BrowserSession, Int)] = []
         for s in sessions {
-            for w in s.store.orderedWindows where w.tabs.contains(where: { $0.id == id }) { return (s, w.window.id) }
+            if let browser, s.browser.lowercased() != browser.lowercased(), Browser.known.first(where: { $0.name == s.browser })?.bundleId.lowercased() != browser.lowercased() { continue }
+            for w in s.store.orderedWindows where w.tabs.contains(where: { $0.id == id }) { hits.append((s, w.window.id)) }
         }
-        throw TabError(message: "No open tab \(id) (tabs list).")
+        if hits.count == 1 { return hits[0] }
+        if hits.isEmpty { throw TabError(message: "No open tab \(id)\(browser.map { " in \($0)" } ?? "") (tabs list).") }
+        throw TabError(message: "Tab \(id) is open in more than one browser (\(hits.map(\.0.browser).joined(separator: ", "))); give browser.")
     }
 
     private static func need(_ s: BrowserSession, _ op: Command.Op) throws {
@@ -99,18 +104,18 @@ extension AgentCommand {
         }
     }
 
-    /// Tabs saved links hold (the app remembers them, SidebarHoldsModel):
-    /// Close Other Tabs and Close Tabs Below leave them open, as the sidebar's
-    /// menu does.
-    private static func heldTabs() -> Set<Int> {
+    /// The tabs Close Other Tabs / Below leave open in `tabs`: saved links'
+    /// tabs and held tabs (Agent.sparedTabs).
+    private static func spared(_ tabs: [BrowserTab]) -> Set<Int> {
+        let lib = (try? SidebarStore(folder: SettingsFolder.resolve()).load()) ?? SidebarLibrary()
         let remembered = MenuBarIcon.defaults().dictionary(forKey: "sidebar.heldTabs") as? [String: [String: [String]]] ?? [:]
-        return Set(remembered.values.flatMap { $0.values.flatMap { $0 } }.compactMap(Int.init))
+        return Agent.sparedTabs(tabs.map { (id: $0.id, url: $0.url) }, library: lib, remembered: remembered)
     }
 
     private static func tabCommand(_ command: String, _ input: [String: Any], _ hub: SyncHub, _ sessions: [BrowserSession]) throws -> [String: Any] {
         func tab() throws -> (Int, BrowserSession, Int) {
             guard let id = try int(input, "tab") else { throw TabError(message: "Give tab: a tab id (tabs list).") }
-            let (s, w) = try find(id, in: sessions)
+            let (s, w) = try find(id, in: sessions, browser: input["browser"] as? String)
             return (id, s, w)
         }
         switch command {
@@ -128,12 +133,21 @@ extension AgentCommand {
             hub.send(.open(url, windowId: windowId), to: s.socketPath)
             return ["opened": url, "browser": s.browser]
         case "tabs.close":
-            var ids = (input["tabs"] as? [Any])?.compactMap { ($0 as? NSNumber)?.intValue } ?? []
+            var ids: [Int] = []
+            if let list = input["tabs"] {
+                guard let items = list as? [Any] else { throw TabError(message: "tabs must be a list of tab ids.") }
+                for item in items {
+                    guard let n = item as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), !CFNumberIsFloatType(n), let i = Int(exactly: n) else {
+                        throw TabError(message: "tabs must be whole-number tab ids (tabs list).")
+                    }
+                    ids.append(i)
+                }
+            }
             if let one = try int(input, "tab") { ids.append(one) }
             guard !ids.isEmpty else { throw TabError(message: "Give tab (one id) or tabs (a list of ids).") }
             var bySession: [String: (BrowserSession, [Int])] = [:]
             for id in ids {
-                let (s, _) = try find(id, in: sessions)
+                let (s, _) = try find(id, in: sessions, browser: input["browser"] as? String)
                 bySession[s.socketPath, default: (s, [])].1.append(id)
             }
             for (s, list) in bySession.values {
@@ -181,8 +195,8 @@ extension AgentCommand {
         case "tabs.close-others", "tabs.close-below":
             let (id, s, w) = try tab()
             guard let window = s.store.orderedWindows.first(where: { $0.window.id == w }) else { return ["closed": []] }
-            let held = heldTabs()
             let tabs = window.tabs
+            let held = spared(tabs)
             let index = tabs.firstIndex { $0.id == id } ?? 0
             let candidates = command == "tabs.close-below" ? Array(tabs.dropFirst(index + 1)) : tabs.filter { $0.id != id }
             let close = candidates.map(\.id).filter { !held.contains($0) }

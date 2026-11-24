@@ -136,4 +136,33 @@ struct AgentSidebarTests {
         #expect(Set(SidebarProfile.links(in: imported.items).map(\.url)) == ["https://a.example", "https://b.example"])
         #expect(!call("sidebar.import", ["from": "nowhere"], in: f).ok)
     }
+
+    // MARK: Review round 1
+
+    @Test func closeOthersSparesSavedLinksTabsAndHeldTabs() {
+        var p = SidebarProfile(name: "P")
+        p.addFavorite(SavedLink(title: "Mail", url: "https://mail.example.com/"))
+        p.addLink(SavedLink(title: "Docs", url: "https://docs.example.com/start"))
+        let lib = SidebarLibrary(profiles: [p])
+        let tabs: [(id: Int, url: String)] = [
+            (1, "https://mail.example.com"),          // a Favorite's page (trailing slash aside)
+            (2, "https://docs.example.com/start"),    // a saved link's page
+            (3, "https://news.example.com/today"),    // a held tab that navigated away
+            (4, "https://random.example.com"),        // nobody's
+        ]
+        // The app remembers held tabs by address (HoldLedger.remembered), not by tab id.
+        let remembered: [String: [String: [String]]] = ["profile-key": [UUID().uuidString: ["https://news.example.com/today"]]]
+        #expect(Agent.sparedTabs(tabs, library: lib, remembered: remembered) == [1, 2, 3])
+    }
+
+    @Test func theStarterProfileKeepsItsIdBetweenCalls() throws {
+        let f = try folder()
+        // Each CLI call is a new process, where the unsaved starter would get a
+        // new id; the id listed must be the one saved in sidebar.json.
+        let first = try #require((call("sidebar.list", in: f).data as? [[String: Any]])?.first?["id"] as? String)
+        let saved = f.directory.appendingPathComponent("sidebar.json")
+        #expect(FileManager.default.fileExists(atPath: saved.path))
+        #expect(try SidebarStore(folder: f).load().profiles.first?.id.uuidString == first)
+        #expect(call("sidebar.folders.add", ["profile": first, "name": "F"], in: f).ok)
+    }
 }

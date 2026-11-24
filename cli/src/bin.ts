@@ -256,7 +256,7 @@ const updates = Cli.create('updates', { description: 'Automatic update checks (t
     run: (c) => core('updates.set', { automatic: isOn(c.options.automatic) }),
   })
 
-export // The sidebar's saved things (sidebar.json): Sidebar Profiles, Favorites,
+// The sidebar's saved things (sidebar.json): Sidebar Profiles, Favorites,
 // folders, saved links, which browser profile shows which, imports. Ids come
 // from `sidebar list`; the first 4+ characters of an id are enough.
 const sidebarProfileOption = {
@@ -378,7 +378,10 @@ const sidebar = Cli.create('sidebar', {
   .command(sidebarSettings)
 
 // Live tabs, through the browser's Tabs extension. Tab and window ids come from `tabs list`.
-const tabId = z.object({ tab: z.number().int().describe('Tab id from tabs list') })
+const tabId = z.object({
+  tab: z.number().int().describe('Tab id from tabs list'),
+  browser: z.string().optional().describe('Only when two browsers have a tab with this id'),
+})
 const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the betterlink Tabs extension: list, open, close, move and more' })
   .command('list', { description: 'Every connected browser window and its tabs', run: () => core('tabs.list') })
   .command('open', {
@@ -390,12 +393,13 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
   .command('close', {
     description: 'Close tabs',
     args: z.object({ tabs: z.string().describe('Tab ids, comma separated') }),
+    options: z.object({ browser: z.string().optional().describe('Only when two browsers have a tab with one of these ids') }),
     run: (c) => {
       const ids = c.args.tabs.split(',').map((t) => t.trim()).filter(Boolean).map(Number)
       if (ids.length === 0 || ids.some((n) => !Number.isInteger(n))) {
         throw new Errors.IncurError({ code: 'REFUSED', message: 'Give tab ids from tabs list, comma separated, such as 12,34.' })
       }
-      return core('tabs.close', { tabs: ids })
+      return core('tabs.close', { tabs: ids, browser: c.options.browser })
     },
   })
   .command('activate', { description: 'Switch to a tab', options: tabId, run: (c) => core('tabs.activate', c.options) })
@@ -425,7 +429,7 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     run: (c) => core('tabs.close-below', c.options),
   })
 
-const cli = Cli.create('betterlink', {
+export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
     'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders, saved links, imports and settings; ' +
