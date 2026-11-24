@@ -264,6 +264,9 @@ private struct SidebarSettings: View {
                         Button("Reset") { sidebar.shortcut = .sidebarDefault }
                     }
                 }
+                if let problem = sidebar.hotKeyProblem {
+                    Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
+                }
             }
             LabeledContent("Width") {
                 HStack {
@@ -337,7 +340,7 @@ private struct ShortcutRecorder: View {
 
     private func start() {
         recording = true
-        hint = "Use Control, Option or Command with a key. Esc cancels."
+        hint = "Use Control or Option with a key. Esc cancels."
         monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
             if e.keyCode == 53 { stop(); return nil } // Escape
             var m: UInt32 = 0
@@ -346,8 +349,9 @@ private struct ShortcutRecorder: View {
             if f.contains(.shift) { m |= Shortcut.shift }
             if f.contains(.option) { m |= Shortcut.option }
             if f.contains(.control) { m |= Shortcut.control }
-            let s = Shortcut(keyCode: UInt32(e.keyCode), modifiers: m, key: (e.charactersIgnoringModifiers ?? "").uppercased())
-            guard s.isValid else { hint = "Add Control, Option or Command."; return nil }
+            let s = Shortcut(keyCode: UInt32(e.keyCode), modifiers: m,
+                             key: Shortcut.label(keyCode: UInt32(e.keyCode), typed: e.charactersIgnoringModifiers ?? ""))
+            guard s.isValid else { hint = "Add Control or Option (Command alone would take the browser's shortcuts)."; return nil }
             shortcut = s
             stop()
             return nil

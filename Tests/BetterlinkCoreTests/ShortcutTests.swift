@@ -13,10 +13,22 @@ struct ShortcutTests {
         #expect(s.display == "⌃⌥⇧⌘A")
     }
 
-    @Test func shiftAloneOrNoKeyIsRefused() {
+    @Test func shiftAloneNoKeyOrTheBrowsersCommandShortcutsAreRefused() {
         #expect(!Shortcut(keyCode: 0, modifiers: Shortcut.shift, key: "A").isValid)
         #expect(!Shortcut(keyCode: 0, modifiers: 0, key: "A").isValid)
-        #expect(!Shortcut(keyCode: 0, modifiers: Shortcut.command, key: "").isValid)
+        #expect(!Shortcut(keyCode: 0, modifiers: Shortcut.control, key: "").isValid)
+        // ⌘T and ⇧⌘T are the browser's own (review F4).
+        #expect(!Shortcut(keyCode: 17, modifiers: Shortcut.command, key: "T").isValid)
+        #expect(!Shortcut(keyCode: 17, modifiers: Shortcut.command | Shortcut.shift, key: "T").isValid)
+        #expect(Shortcut(keyCode: 17, modifiers: Shortcut.command | Shortcut.option, key: "T").isValid)
+    }
+
+    @Test func specialKeysGetReadableLabels() {
+        #expect(Shortcut.label(keyCode: 49, typed: " ") == "Space")
+        #expect(Shortcut.label(keyCode: 122, typed: "\u{F704}") == "F1")
+        #expect(Shortcut.label(keyCode: 126, typed: "\u{F700}") == "↑")
+        #expect(Shortcut.label(keyCode: 1, typed: "s") == "S")
+        #expect(Shortcut.label(keyCode: 200, typed: "\u{F750}") == "")
     }
 
     @Test func itRoundTripsThroughDefaultsAndIgnoresJunk() throws {

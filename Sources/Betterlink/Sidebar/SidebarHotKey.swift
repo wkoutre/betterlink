@@ -9,7 +9,11 @@ import Foundation
 final class SidebarHotKey {
     /// Changing it re-registers at once when it is registered.
     var shortcut = Shortcut.sidebarDefault {
-        didSet { if ref != nil, shortcut != oldValue { unregister(); register() } }
+        didSet {
+            guard shortcut != oldValue else { return }
+            refused = nil; problem = nil
+            if ref != nil { unregister(); register() }
+        }
     }
 
     var onPress: (() -> Void)?
@@ -17,13 +21,17 @@ final class SidebarHotKey {
     private var handler: EventHandlerRef?
 
     var isRegistered: Bool { ref != nil }
+    /// Why macOS refused the shortcut, or nil. A refused shortcut is not tried
+    /// again until it changes (review F3).
+    private(set) var problem: String?
+    private var refused: Shortcut?
 
     func setRegistered(_ on: Bool) {
         on ? register() : unregister()
     }
 
     private func register() {
-        guard ref == nil else { return }
+        guard ref == nil, refused != shortcut else { return }
         if handler == nil {
             var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
             let me = Unmanaged.passUnretained(self).toOpaque()
@@ -35,7 +43,12 @@ final class SidebarHotKey {
             }, 1, &spec, me, &handler)
         }
         let id = EventHotKeyID(signature: OSType(0x626C_7362), id: 1) // "blsb"
-        RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        if status != noErr {
+            ref = nil
+            refused = shortcut
+            problem = "macOS refused \(shortcut.display) (error \(status)); another app may use it. Pick another."
+        }
     }
 
     private func unregister() {

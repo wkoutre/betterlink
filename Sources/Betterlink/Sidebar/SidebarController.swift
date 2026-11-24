@@ -15,7 +15,15 @@ final class SidebarController: ObservableObject {
     @Published var width: Double { didSet { save(); refit() } }
     /// The browsers the sidebar attaches to, by bundle id.
     @Published var attachTo: Set<String> {
-        didSet { save(); tracker.browserBundleIds = attachTo; tracker.frontAppMayHaveChanged() }
+        didSet {
+            // Saved only once the user changes it, so until then every browser
+            // installed later is attached too (review F5).
+            defaults.set(Array(attachTo).sorted(), forKey: "sidebar.browsers")
+            // A browser no longer attached gets its windows' space back (review F1).
+            giveSpaceBack { !attachTo.contains($0.bundleId) }
+            tracker.browserBundleIds = attachTo
+            tracker.frontAppMayHaveChanged()
+        }
     }
     /// Hidden for now with the shortcut or the menu: the window gets its space
     /// back, and showing it again makes room again (like collapsing Arc's sidebar).
@@ -82,6 +90,9 @@ final class SidebarController: ObservableObject {
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
         hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
+        frontToken = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.updateHotKey() } }
         hotKey.shortcut = shortcut
         // betterlink's own window coming forward keeps the sidebar bound (the
         // tracker ignores it). The panel then drops to a normal level, just
@@ -116,10 +127,8 @@ final class SidebarController: ObservableObject {
     /// space back, or show it and make room again.
     func toggleCollapsed() {
         guard enabled else { return }
-        if !collapsed, let t = current, let f = fits[t.windowHash], Self.same(t.frame, f.inner) {
-            fits[t.windowHash] = nil
-            tracker.setWindowFrame(f.outer)
-        }
+        // Hiding gives every narrowed window its space back, not only the one in front (review F1).
+        if !collapsed { giveSpaceBack() }
         collapsed.toggle()
         save()
         if !collapsed, let t = current { settle(t) }
@@ -145,15 +154,32 @@ final class SidebarController: ObservableObject {
 
     /// Gives every window the sidebar narrowed, not only the one in front, its
     /// space back, if it is still as narrowed. Also called when the app quits.
-    func giveSpaceBack() {
-        for f in fits.values {
-            guard let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) else { continue }
-            tracker.setWindowFrame(f.outer, of: win)
+    func giveSpaceBack() { giveSpaceBack(where: { _ in true }) }
+
+    private func giveSpaceBack(where include: (Fit) -> Bool) {
+        for (k, f) in fits where include(f) {
+            if let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) {
+                tracker.setWindowFrame(f.outer, of: win)
+            }
+            fits[k] = nil
         }
-        // Removing them from `fits` forgets their records; windows narrowed
-        // before a relaunch that weren't reached keep theirs (still narrowed).
-        fits = [:]
+        // Removing a window from `fits` forgets its record. A window narrowed
+        // before a relaunch that hasn't been reached again keeps its record
+        // (it is still narrowed), so it is never narrowed twice (review N1).
     }
+
+    /// The shortcut is registered only while an attached browser is the front
+    /// app, so it never takes the keys from another app, betterlink's own
+    /// shortcut setting included (review F2).
+    private func updateHotKey() {
+        let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        hotKey.setRegistered(enabled && current != nil && front == current?.pid)
+        if hotKeyProblem != hotKey.problem { hotKeyProblem = hotKey.problem }
+    }
+
+    /// Why the shortcut couldn't be registered, for the setting.
+    @Published private(set) var hotKeyProblem: String?
+    private var frontToken: NSObjectProtocol?
 
     private func saveMemory() {
         if let d = try? JSONEncoder().encode(memory) { defaults.set(d, forKey: "sidebar.fitMemory") }
@@ -170,7 +196,6 @@ final class SidebarController: ObservableObject {
         defaults.set(enabled, forKey: "sidebar.enabled")
         defaults.set(side.rawValue, forKey: "sidebar.side")
         defaults.set(width, forKey: "sidebar.width")
-        defaults.set(Array(attachTo).sorted(), forKey: "sidebar.browsers")
         defaults.set(collapsed, forKey: "sidebar.collapsed")
         shortcut.save(defaults, key: "sidebar.shortcut")
     }
@@ -270,7 +295,7 @@ final class SidebarController: ObservableObject {
 
     private func layout() {
         // The shortcut works only while an attached browser is in front.
-        hotKey.setRegistered(enabled && current != nil)
+        updateHotKey()
         let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         guard enabled, !collapsed, let t = current, !t.fullScreen else {
             panel?.orderOut(nil)

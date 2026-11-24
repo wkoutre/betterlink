@@ -20,9 +20,26 @@ public struct Shortcut: Codable, Equatable, Sendable {
     /// Control-Option-S (kVK_ANSI_S is 1).
     public static let sidebarDefault = Shortcut(keyCode: 1, modifiers: control | option, key: "S")
 
-    /// Usable as a system-wide shortcut: a key and Control, Option or Command.
+    /// Usable as a system-wide shortcut: a key with Control or Option. Command
+    /// (with or without Shift) alone is refused: those are the browser's own
+    /// shortcuts (⌘T, ⌘W), which this one would take while the browser is in
+    /// front.
     public var isValid: Bool {
-        !key.isEmpty && modifiers & (Self.command | Self.option | Self.control) != 0
+        !key.isEmpty && modifiers & (Self.option | Self.control) != 0
+    }
+
+    /// A readable label for keys whose typed character is invisible or private
+    /// (Space, Return, arrows, F-keys), else `typed` upper-cased.
+    public static func label(keyCode: UInt32, typed: String) -> String {
+        let named: [UInt32: String] = [49: "Space", 36: "↩", 48: "⇥", 51: "⌫", 117: "⌦", 53: "⎋", 123: "←", 124: "→",
+                                       125: "↓", 126: "↑", 115: "↖", 119: "↘", 116: "⇞", 121: "⇟",
+                                       122: "F1", 120: "F2", 99: "F3", 118: "F4", 96: "F5", 97: "F6", 98: "F7", 100: "F8",
+                                       101: "F9", 109: "F10", 103: "F11", 111: "F12"]
+        if let n = named[keyCode] { return n }
+        let t = typed.uppercased()
+        // Function keys type characters in the private-use area.
+        if t.unicodeScalars.contains(where: { (0xF700...0xF8FF).contains($0.value) }) { return "" }
+        return t
     }
 
     /// "⌃⌥⇧⌘S", in the order macOS menus use.
