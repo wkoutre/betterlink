@@ -26,8 +26,19 @@ final class TabsModel: ObservableObject {
     /// turns on, so betterlink does no tab work for anyone who uses neither.
     func start() {
         guard hub == nil else { return }
-        let hub = SyncHub(onChange: { [weak self] s in
-            DispatchQueue.main.async { self?.sessions = s; self?.lookUpProfiles(s) }
+        let hub = SyncHub(onLine: { path, m in
+            // Two things saved links' held tabs need the moment the browser says
+            // them: the tab an open made (its ack), and a tab closed on its own.
+            if m.type == "ack", let id = m.id, let tab = m.tabId {
+                DispatchQueue.main.async { SidebarHoldsModel.shared.opened(command: id, tab: tab) }
+            } else if m.type == "event", m.kind == "tabRemoved", m.isWindowClosing != true, let tab = m.tabId {
+                DispatchQueue.main.async { SidebarHoldsModel.shared.closed(tab: tab, socketPath: path) }
+            }
+        }, onChange: { [weak self] s in
+            DispatchQueue.main.async {
+                SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
+                self?.sessions = s; self?.lookUpProfiles(s)
+            }
         })
         self.hub = hub
         hub.start()
@@ -83,6 +94,13 @@ final class TabsModel: ObservableObject {
     func open(_ text: String, in s: BrowserSession, windowId: Int? = nil) {
         hub?.send(.open(Self.normalize(text), windowId: windowId), to: s.socketPath)
     }
+    /// Sends any command to a browser; its id comes back for matching the ack.
+    /// The tab actions built on this are in TabActions.swift.
+    @discardableResult
+    func send(_ cmd: Command, to s: BrowserSession) -> String {
+        hub?.send(cmd, to: s.socketPath)
+        return cmd.id
+    }
     func activate(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.activate(tab.id), to: s.socketPath) }
     func close(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.close(tab.id), to: s.socketPath) }
 
@@ -129,6 +147,7 @@ struct TabsPage: View {
                        subtitle: "Preview. The sidebar beside your browser window: its settings, Sidebar Profiles, and the browsers it connects to.")
             SidebarSettings(sidebar: sidebar)
             SidebarProfilesSection()
+            SidebarImportSection()
             if tabs.sessions.isEmpty {
                 DSSection {
                     Text("No browser connected yet. Set up a browser below, load the Tabs extension in it, then open the browser.")
@@ -176,11 +195,23 @@ struct Favicon: View {
         .accessibilityHidden(true)
     }
 
+    /// Decoded icons by their data: URL. Every row redraws on every tab event,
+    /// and decoding the same icon each time was the sidebar's largest cost with
+    /// many tabs open. A miss is remembered too.
+    private static var decoded: [String: NSImage?] = [:]
+
     static func inlineImage(_ url: String) -> NSImage? {
-        guard url.hasPrefix("data:image/"), let comma = url.firstIndex(of: ","),
-              url[..<comma].hasSuffix(";base64"),
-              let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return nil }
-        return NSImage(data: data)
+        guard url.hasPrefix("data:image/") else { return nil }
+        if let hit = decoded[url] { return hit }
+        var image: NSImage?
+        if let comma = url.firstIndex(of: ","), url[..<comma].hasSuffix(";base64"),
+           let data = Data(base64Encoded: String(url[url.index(after: comma)...])) {
+            image = NSImage(data: data)
+        }
+        // Far more than one session shows; past it the table starts over.
+        if decoded.count >= 800 { decoded.removeAll(keepingCapacity: true) }
+        decoded[url] = .some(image)
+        return image
     }
 }
 

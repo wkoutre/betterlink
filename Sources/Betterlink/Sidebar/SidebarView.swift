@@ -11,6 +11,8 @@ struct SidebarView: View {
     @ObservedObject private var tabs = TabsModel.shared
     private var pal: SidebarColors { SidebarColors(sidebar.palette) }
     @ObservedObject private var lib = SidebarLibraryModel.shared
+    /// The tabs saved links hold (a saved link keeps its tab as it navigates).
+    @ObservedObject private var holds = SidebarHoldsModel.shared
     @State private var newURL = ""
     @State private var renaming: UUID?
     @State private var renamingProfile: UUID?
@@ -44,9 +46,12 @@ struct SidebarView: View {
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        let match = Self.match(target: sidebar.target, sessions: tabs.sessions)
-        let profile = lib.library.profile(for: match.flatMap { $0.certain ? tabs.profileRef($0.session) : nil })
+        let look = Self.look(target: sidebar.target, sessions: tabs.sessions)
+        let profile = lib.library.profile(for: look.match.flatMap { $0.certain ? tabs.profileRef($0.session) : nil })
+        // Which tab each saved link stands for, worked out once for this redraw.
+        let match = look.match.map { $0.resolving(profile, holds: holds.holds(in: $0.session)) }
         let windowTabs = match?.window?.tabs ?? []
+        let iconsToLearn = Self.iconsToLearn(profile, match)
         VStack(alignment: .leading, spacing: 0) {
             header(match: match, profile: profile)
                 // Another profile now: an open rename belonged to the last one.
@@ -79,14 +84,16 @@ struct SidebarView: View {
                         newTabField(m)
                         LazyVStack(alignment: .leading, spacing: 1) {
                             // Tabs that are open saved links show in their folder instead.
-                            ForEach(windowTabs.filter { !Self.claimed(by: profile, in: windowTabs).contains($0.id) }) { tab in
-                                SidebarTabRow(tab: tab) {
+                            ForEach(windowTabs.filter { !m.links.claimed.contains($0.id) }) { tab in
+                                SidebarTabRow(tab: tab, canMute: m.session.can(.mute)) {
                                     tabs.activate(tab, in: m.session)
                                 } close: {
                                     tabs.close(tab, in: m.session)
+                                } mute: {
+                                    tabs.setMuted(!tab.muted, tab, in: m.session)
                                 }
                                 .onDrag { drag(Self.dragKey(tab)) }
-                                .contextMenu { tabMenu(tab, profile) }
+                                .contextMenu { tabMenu(tab, profile, m, windowTabs) }
                                 .transition(Motion.reveal(reduceMotion))
                             }
                         }
@@ -97,7 +104,7 @@ struct SidebarView: View {
                     .padding(.bottom, DS.Space.space4)
                 }
             } else {
-                Text(emptyText)
+                Text(emptyText(look))
                     .font(DS.TextStyle.caption)
                     .foregroundStyle(pal.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -118,6 +125,10 @@ struct SidebarView: View {
         }
         // The browser profile's frame color, like the browser's own window.
         .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
+        // A saved link with no icon (an imported one) takes its open tab's, once.
+        .onChange(of: iconsToLearn, initial: true) { _, icons in
+            if let p = profile, !icons.isEmpty { lib.change(profile: p.id) { $0.learnIcons(icons) } }
+        }
         // Anything left on system colors (text fields, their placeholders,
         // the folder names) follows the palette: its text color by default and
         // a light or dark scheme matching the profile color (review F1).
@@ -227,9 +238,10 @@ struct SidebarView: View {
     private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 64), spacing: 6)], spacing: 6) {
             ForEach(p.favorites) { link in
-                let isOpen = open.contains { SavedLink.same($0.url, link.url) }
+                let tab = m.tab(for: link)
+                let isOpen = tab != nil
                 Button { openOrSwitch(link, m) } label: {
-                    Favicon(url: link.icon ?? "")
+                    SavedIcon(icons: [link.icon, tab?.favIconUrl], title: link.title)
                         .frame(maxWidth: .infinity, minHeight: 40)
                         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
@@ -242,8 +254,9 @@ struct SidebarView: View {
                 })
                 .transition(Motion.pop(reduceMotion))
                 .help(link.title)
-                .accessibilityLabel(link.title)
+                .accessibilityLabel(isOpen ? "\(link.title), open" : link.title)
                 .contextMenu {
+                    heldMenu(link, tab, p, m)
                     moveMenu(link.id, isFolder: false, inFavorites: true, p)
                     Divider()
                     Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p) }
@@ -308,34 +321,52 @@ struct SidebarView: View {
                     .transition(Motion.reveal(reduceMotion))
                 } else {
                     // Closed, it still lists its open items, as Arc and Dia do.
-                    ForEach(SidebarProfile.links(in: f.items).filter { l in open.contains { SavedLink.same($0.url, l.url) } }) { l in
+                    ForEach(SidebarProfile.links(in: f.items).filter { m.links.tab(for: $0.id) != nil }) { l in
                         node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
                     }
                 }
             }
             .clipped())
         case .link(let l):
-            let tab = open.first { SavedLink.same($0.url, l.url) }
+            let tab = m.tab(for: l)
+            // Like Arc: the link's tab has moved on to another page.
+            let away = tab != nil && m.links.isAway(l.id)
             return AnyView(HStack(spacing: DS.Space.space2) {
-                Favicon(url: tab?.favIconUrl ?? l.icon ?? "")
+                SavedIcon(icons: [tab?.favIconUrl, l.icon], title: l.title)
                 nameOrField(l.id, l.title, p)
                     .foregroundStyle(tab == nil ? pal.textSecondary : pal.text)
+                if away, let tab, renaming != l.id {
+                    Text("/ \(tab.title.isEmpty ? tab.url : tab.title)")
+                        .font(DS.TextStyle.body).lineLimit(1)
+                        .foregroundStyle(pal.textTertiary)
+                        .layoutPriority(-1)
+                }
                 Spacer(minLength: 0)
-                // Open: like Arc, the saved link stands for its tab.
-                if tab != nil { Circle().fill(pal.accent).frame(width: 5, height: 5).accessibilityLabel("open") }
+                if away, let tab, m.session.can(.navigate) {
+                    Button { backToSaved(l, tab, m) } label: {
+                        Image(systemName: "arrow.uturn.backward").font(.system(size: 10, weight: .semibold))
+                            .frame(width: 16, height: 16).contentShape(Rectangle())
+                    }
+                    .buttonStyle(PressStyle())
+                    .foregroundStyle(pal.textSecondary)
+                    .help("Back to \(l.title)")
+                } else if tab != nil {
+                    // Open: like Arc, the saved link stands for its tab.
+                    Circle().fill(pal.accent).frame(width: 5, height: 5).accessibilityLabel("open")
+                }
             }
             .padding(.leading, CGFloat(depth) * 14 + 18)
             .rowStyle(selected: tab?.active == true)
             .onTapGesture { openOrSwitch(l, m) }
             .accessibilityElement(children: renaming == l.id ? .contain : .ignore)
-            .accessibilityLabel(tab == nil ? l.title : "\(l.title), open")
+            .accessibilityLabel(tab == nil ? l.title : (away ? "\(l.title), open on another page" : "\(l.title), open"))
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { openOrSwitch(l, m) }
             .onDrag { drag(Self.savedKey(l.id)) }
             .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
             .contextMenu {
                 Button("Rename") { startRename(l.id, l.title) }
-                if let tab { Button("Close Tab") { tabs.close(tab, in: m.session) } }
+                heldMenu(l, tab, p, m)
                 moveMenu(l.id, isFolder: false, inFavorites: false, p)
                 Divider()
                 Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, p) }
@@ -421,8 +452,9 @@ struct SidebarView: View {
         for k in keys {
             var changed = false
             if let t = Self.tab(forDragKey: k, in: open) {
-                let at = next
-                edit(p.id) { let before = $0; $0.insert(Self.saved(t), at: at); changed = $0 != before }
+                let at = next, link = Self.saved(t)
+                edit(p.id) { let before = $0; $0.insert(link, at: at); changed = $0 != before }
+                if changed { holdIfSaved(t, link) }
             } else if let id = Self.savedID(k) {
                 let at = next
                 edit(p.id) { let before = $0; $0.place(id, at: at); changed = $0 != before }
@@ -517,34 +549,102 @@ struct SidebarView: View {
     }
 
     @ViewBuilder
-    private func tabMenu(_ tab: BrowserTab, _ p: SidebarProfile) -> some View {
-        Button("Add to Favorites") { edit(p.id) { $0.addFavorite(Self.saved(tab)) } }
+    private func tabMenu(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
+        Button("Add to Favorites") { save(tab, p) { $0.addFavorite($1) } }
         Menu("Save to Folder") {
             ForEach(Self.folders(p.items, prefix: "")) { f in
-                Button(f.label) { edit(p.id) { $0.addLink(Self.saved(tab), in: f.id) } }
+                Button(f.label) { save(tab, p) { $0.addLink($1, in: f.id) } }
             }
             Button("New Folder…") {
                 var made: UUID?
-                edit(p.id) {
+                save(tab, p) {
                     made = $0.addFolder("New Folder")
-                    if let made { $0.addLink(Self.saved(tab), in: made) }
+                    if let made { $0.addLink($1, in: made) }
                 }
                 if let made { startRename(made, "New Folder") }
             }
         }
+        Divider()
+        // What the browser's own tab strip offers, for when the sidebar stands
+        // in for it. Each shows only when the installed extension can do it.
+        Button("Copy Link") { TabsModel.copy(tab.url) }
+        if m.session.can(.reload) { Button("Reload") { tabs.reload(tab, in: m.session) } }
+        if m.session.can(.duplicate) { Button("Duplicate") { tabs.duplicate(tab, in: m.session) } }
+        if m.session.can(.mute) {
+            Button(tab.muted ? "Unmute Tab" : "Mute Tab") { tabs.setMuted(!tab.muted, tab, in: m.session) }
+        }
+        if m.session.can(.newWindow), open.count > 1 {
+            Button("Move to New Window") { tabs.moveToNewWindow(tab, in: m.session) }
+        }
+        Divider()
+        Button("Close Tab") { tabs.close(tab, in: m.session) }
+        // Only the plain tabs: a saved link's tab is closed from its link.
+        let loose = open.filter { !m.links.claimed.contains($0.id) }
+        let below = Array(loose.drop { $0.id != tab.id }.dropFirst())
+        Button("Close Other Tabs") { tabs.close(loose.filter { $0.id != tab.id }, in: m.session) }
+            .disabled(loose.count < 2)
+        Button("Close Tabs Below") { tabs.close(below, in: m.session) }
+            .disabled(below.isEmpty)
     }
 
-    /// Switches to the saved link's tab when it is open in this window (or
-    /// another window of the same profile), else opens it here.
+    /// What a saved link's row or Favorite offers for its tab.
+    @ViewBuilder
+    private func heldMenu(_ l: SavedLink, _ tab: BrowserTab?, _ p: SidebarProfile, _ m: Match) -> some View {
+        if let tab {
+            if m.links.isAway(l.id) {
+                if m.session.can(.navigate) { Button("Back to Saved Page") { backToSaved(l, tab, m) } }
+                Button("Save This Page Here") {
+                    edit(p.id) { $0.repoint(l.id, to: tab.url, icon: tab.favIconUrl.hasPrefix("data:") ? tab.favIconUrl : nil) }
+                    holds.hold(tab, for: l.id, in: m.session)
+                }
+            }
+            Button("Close Tab") { tabs.close(tab, in: m.session) }
+        }
+        Button("Copy Link") { TabsModel.copy(l.url) }
+    }
+
+    /// Sends a link's tab back to the page the link saves.
+    private func backToSaved(_ l: SavedLink, _ tab: BrowserTab, _ m: Match) {
+        tabs.navigate(tab, to: l.url, in: m.session)
+        sidebar.returnFocusToBrowser()
+    }
+
+    /// Saves a tab as a new link and makes it that link's tab.
+    private func save(_ tab: BrowserTab, _ p: SidebarProfile, _ add: (inout SidebarProfile, SavedLink) -> Void) {
+        let link = Self.saved(tab)
+        edit(p.id) { add(&$0, link) }
+        holdIfSaved(tab, link)
+    }
+
+    /// After a save: the tab it came from is the new link's tab from now on
+    /// (nothing when the save was refused, such as a Favorite already there).
+    private func holdIfSaved(_ tab: BrowserTab, _ link: SavedLink) {
+        guard lib.library.allLinkIDs.contains(link.id),
+              let s = Self.look(target: sidebar.target, sessions: tabs.sessions).match?.session else { return }
+        holds.hold(tab, for: link.id, in: s)
+    }
+
+    /// Switches to the saved link's tab when it has one in this window (or in
+    /// another window of the same profile), else opens it here. Either way
+    /// that tab is the link's from now on, wherever it navigates.
     private func openOrSwitch(_ link: SavedLink, _ m: Match) {
-        let here = m.window?.tabs ?? []
-        let anywhere = m.session.store.orderedWindows.flatMap(\.tabs)
-        if let t = here.first(where: { SavedLink.same($0.url, link.url) }) ?? anywhere.first(where: { SavedLink.same($0.url, link.url) }) {
+        if let t = m.tab(for: link) {
+            holds.hold(t, for: link.id, in: m.session)
+            tabs.activate(t, in: m.session)
+        } else if let t = elsewhere(link, m) {
             tabs.activate(t, in: m.session)
         } else {
-            tabs.open(link.url, in: m.session, windowId: m.window?.id)
+            tabs.open(link, in: m.session, windowId: m.window?.id)
         }
         sidebar.returnFocusToBrowser()
+    }
+
+    /// The link's tab in another window of this browser profile: one it holds
+    /// there, else one at its address.
+    private func elsewhere(_ link: SavedLink, _ m: Match) -> BrowserTab? {
+        let all = m.session.store.orderedWindows.flatMap(\.tabs)
+        let held = Set(holds.holds(in: m.session).tabs(heldBy: link.id))
+        return all.first { held.contains($0.id) } ?? all.first { SavedLink.same($0.url, link.url) }
     }
 
     // MARK: - Helpers
@@ -562,17 +662,6 @@ struct SidebarView: View {
         SavedLink(title: t.title.isEmpty ? t.url : t.title, url: t.url, icon: t.favIconUrl.hasPrefix("data:") ? t.favIconUrl : nil)
     }
 
-    /// The tabs saved links stand for: for each saved link, its first matching
-    /// tab. Those show with their link; every other tab, a second tab at the
-    /// same address included, shows in the tab list (review F5).
-    static func claimed(by p: SidebarProfile, in tabs: [BrowserTab]) -> Set<Int> {
-        var taken = Set<Int>()
-        for l in p.allLinks {
-            if let t = tabs.first(where: { !taken.contains($0.id) && SavedLink.same($0.url, l.url) }) { taken.insert(t.id) }
-        }
-        return taken
-    }
-
     static func dragKey(_ t: BrowserTab) -> String { "betterlink-tab:\(t.id)" }
 
     static func tab(forDragKey k: String, in tabs: [BrowserTab]) -> BrowserTab? {
@@ -580,54 +669,103 @@ struct SidebarView: View {
         return tabs.first { $0.id == id }
     }
 
-    private var emptyText: String {
+    private func emptyText(_ look: Look) -> String {
         guard let t = sidebar.target else { return "" }
-        return "Tabs aren't set up for \(t.appName). In betterlink, open Tabs and choose Set Up next to \(t.appName), then load the Tabs extension in it."
+        switch look {
+        case .window, .connecting:
+            return ""
+        case .unseen:
+            return "betterlink can't see this window's tabs. For an Incognito window, turn on Allow in Incognito for the betterlink Tabs extension in \(t.appName). For another profile, load the extension in that profile too."
+        case .notConnected:
+            return "Tabs aren't set up for \(t.appName). In betterlink, open Tabs and choose Set Up next to \(t.appName), then load the Tabs extension in it."
+        }
+    }
+
+    /// Inline icons of open tabs for saved links that have none yet. Not from
+    /// a private window, and not from a tab that has moved on to another page.
+    static func iconsToLearn(_ p: SidebarProfile?, _ m: Match?) -> [UUID: String] {
+        guard let p, let m, !m.incognito, !m.links.tabs.isEmpty else { return [:] }
+        var have: [UUID: String] = [:]
+        for (link, tab) in m.links.tabs where !m.links.isAway(link) {
+            if let icon = m.byId[tab]?.favIconUrl, icon.hasPrefix("data:image/") { have[link] = icon }
+        }
+        return p.iconsToLearn(from: have)
     }
 
     struct Match {
         var session: BrowserSession
         var window: TabStore.WindowEntry?
-        /// False for a best guess between profiles: its profile isn't named.
+        /// Always true: the window in front is found for certain or not shown
+        /// at all (WindowMatch.find).
         var certain = true
+        /// Which tab each saved link stands for in this window.
+        var links = LinkResolution()
+        var byId: [Int: BrowserTab] = [:]
+
+        var incognito: Bool { window?.window.incognito ?? false }
+
+        func tab(for link: SavedLink) -> BrowserTab? { links.tab(for: link.id).flatMap { byId[$0] } }
+
+        /// This match with its saved links resolved against the window's tabs.
+        func resolving(_ p: SidebarProfile?, holds: LinkHolds) -> Match {
+            var m = self
+            let open = window?.tabs ?? []
+            m.byId = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            if let p {
+                m.links = LinkResolution(links: p.allLinks, tabs: open.map { OpenTab(id: $0.id, url: $0.url) }, holds: holds)
+            }
+            return m
+        }
     }
 
-    /// The browser session (profile) and window behind the bound window: the
-    /// browser's focused window, else its frame (WindowMatch.front), else the
-    /// one window across every profile whose active tab titles it.
-    static func match(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Match? {
-        guard let t = target else { return nil }
-        // Each browser profile is its own session. The browser's focused window
-        // is the one in front; its frame is the fallback (see WindowMatch.front).
+    /// What the sidebar can show for the window it is bound to.
+    enum Look {
+        case window(Match)
+        /// The browser is connected, but this window isn't one the extension
+        /// reports (Incognito without permission, a profile without it).
+        case unseen
+        /// Connected, with the first list of tabs still on its way.
+        case connecting
+        case notConnected
+
+        var match: Match? {
+            if case .window(let m) = self { return m }
+            return nil
+        }
+    }
+
+    /// The browser session (profile) and window behind the bound window, or
+    /// why there is none. Never a guess (see WindowMatch.find): a click here
+    /// switches, closes and opens tabs, so the wrong window is worse than none.
+    static func look(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Look {
+        guard let t = target else { return .notConnected }
+        // Each browser profile is its own session. One whose browser process
+        // isn't known yet is matched by the browser's name.
         let mine = sessions.filter { $0.browserPid == Int(t.pid) }
+        let candidates = mine.isEmpty ? sessions.filter { $0.browser == t.appName } : mine
         let frame = NSScreen.screens.first.map { screen -> WindowBounds in
             let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: screen.frame.height)
             return WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height)
         }
-        if let hit = WindowMatch.front(frame: frame, in: mine), let s = mine.first(where: { $0.id == hit.session }) {
-            return Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId })
+        switch WindowMatch.find(frame: frame, title: t.title, in: candidates) {
+        case .window(let hit):
+            guard let s = candidates.first(where: { $0.id == hit.session }) else { return .unseen }
+            return .window(Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId }))
+        case .notConnected:
+            return .notConnected
+        case .unseen:
+            return candidates.contains { !$0.store.hasSnapshot } ? .connecting : .unseen
         }
-        // Not settled yet (no single focused window, no frame match): the one
-        // window, across every profile, whose active tab titles the window in
-        // front. Anything less certain is a guess, shown without a profile name.
-        let candidates = mine.isEmpty ? sessions.filter { $0.browser == t.appName } : mine
-        let byTitle = candidates.flatMap { s in
-            s.store.orderedWindows.filter { w in
-                guard let title = w.tabs.first(where: \.active)?.title, !title.isEmpty else { return false }
-                return t.title.hasPrefix(title)
-            }.map { (s, $0) }
-        }
-        if byTitle.count == 1 { return Match(session: byTitle[0].0, window: byTitle[0].1) }
-        guard let s = candidates.first else { return nil }
-        return Match(session: s, window: s.store.orderedWindows.first { $0.window.focused } ?? s.store.orderedWindows.first,
-                     certain: false)
     }
 }
 
 private struct SidebarTabRow: View {
     let tab: BrowserTab
+    /// Whether the installed extension can mute: the speaker is a button then.
+    let canMute: Bool
     let activate: () -> Void
     let close: () -> Void
+    let mute: () -> Void
     @State private var hovering = false
 
     @Environment(\.sidebarColors) private var pal
@@ -641,8 +779,18 @@ private struct SidebarTabRow: View {
                 .lineLimit(1)
                 .foregroundStyle(pal.text)
             Spacer(minLength: 0)
-            if tab.audible {
-                Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(pal.textTertiary)
+            if tab.audible || tab.muted {
+                // Playing sound, or silenced: click the speaker to mute or unmute.
+                let speaker = Image(systemName: tab.muted ? "speaker.slash.fill" : "speaker.wave.2.fill").font(.caption)
+                if canMute {
+                    Button(action: mute) { speaker.frame(width: 16, height: 16).contentShape(Rectangle()) }
+                        .buttonStyle(PressStyle())
+                        .foregroundStyle(pal.textTertiary)
+                        .help(tab.muted ? "Unmute tab" : "Mute tab")
+                        .accessibilityLabel(tab.muted ? "Unmute \(tab.title)" : "Mute \(tab.title)")
+                } else {
+                    speaker.foregroundStyle(pal.textTertiary)
+                }
             }
             if hovering {
                 Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
