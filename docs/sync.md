@@ -23,8 +23,7 @@ A new Mac: install betterlink, turn on Sync and pick the folder, and the synced 
 ```
 <sync folder>/betterlink-sync/v1/
   devices/<device-id>.json      one per Mac, written only by that Mac
-  config/<device-id>.ts         that Mac's latest config.ts, when Global settings sync
-```
+  ```
 
 - Each Mac writes only its own file, so the sync provider never sees two writers on one file and never makes "conflicted copy" files.
 - Each file holds that Mac's whole merged state, not just its own edits. So losing one file (a Mac retired, a file deleted) loses nothing that another Mac has seen.
@@ -62,7 +61,7 @@ Edits made at nearly the same time:
 
 config.ts is code and can't be merged field by field.
 
-- The newest version wins (its stamp is when it was last saved).
+- It syncs as one field of the global settings: the newest version wins (its stamp is when it was last saved).
 - The version it replaces is saved beside it as `config.ts.<Mac name>.<date>.bak`, and the Log links to it.
 
 ## Live
@@ -93,6 +92,6 @@ config.ts is code and can't be merged field by field.
   - selective sync (an unsynced profile never leaves this Mac or changes there)
 - **Live:** two copies of betterlink on the Mac mini, each with its own settings folder and device id, pointed at one Dropbox folder. Edits on both at once must converge.
 
-## Open question for Nick
+## Rules on another Mac
 
-Link Rules and the fallback point at a browser profile by its folder name in the browser ("Default", "Profile 1"). The same Chrome profile can have a different folder name on another Mac. Proposal: a synced rule also carries the profile's display name ("Work"). Each Mac matches by display name. A rule whose profile isn't on this Mac opens in the fallback, and the Rules page marks it. (A Sidebar Profile's browser-profile link doesn't sync at all, so it needs no matching.)
+Link Rules, modifier rules and the fallback point at a browser profile by its folder in the browser ("Default", "Profile 1"), and the same Chrome profile can sit in a different folder on another Mac. So a synced rule also carries the profile's signed-in Google account and display name, from the browser's Local State. Each Mac finds the profile by account first, then by display name (Nick, 2026-11-24). A rule whose profile isn't on this Mac opens in the fallback, and the Link Rules page marks it.
