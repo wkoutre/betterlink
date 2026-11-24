@@ -49,8 +49,9 @@ final class TabsModel: ObservableObject {
     /// Local State (the frame color).
     private func lookUpProfiles(_ sessions: [BrowserSession]) {
         for s in sessions {
-            // Unknown profiles retry every 5 s; known ones are read again every
-            // 30 s, so a name or color changed in the browser shows up.
+            // Unknown profiles retry every 5 s; known ones are read again at most
+            // every 30 s, on the next tab change, so a name or color changed in
+            // the browser shows up.
             guard let instance = s.instance,
                   Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > (profiles[instance] == nil ? 5 : 30),
                   let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
@@ -70,7 +71,12 @@ final class TabsModel: ObservableObject {
                 let prefs = FileManager.default.contents(atPath: root.appendingPathComponent(dir).appendingPathComponent("Preferences").path)
                 let color = prefs.flatMap { ProfileCatalog.themeColor(preferencesJSON: $0) }
                     ?? state.flatMap { ProfileCatalog.frameColor(localStateJSON: $0, directory: dir) }
-                DispatchQueue.main.async { self.profiles[instance] = (ref, name, color) }
+                DispatchQueue.main.async {
+                    // Publish only a change: a re-read that finds the same
+                    // profile must not redraw everything watching it.
+                    if let old = self.profiles[instance], old.ref == ref, old.name == name, old.color == color { return }
+                    self.profiles[instance] = (ref, name, color)
+                }
             }
         }
     }

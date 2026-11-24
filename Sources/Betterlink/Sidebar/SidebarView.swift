@@ -244,7 +244,7 @@ struct SidebarView: View {
                 .onSubmit { lib.change(profile: p.id) { $0.rename(id, to: draftName) }; renaming = nil }
                 .onExitCommand { renaming = nil }
         } else {
-            Text(name).font(DS.TextStyle.body).lineLimit(1).foregroundStyle(pal.text)
+            Text(name).font(DS.TextStyle.body).lineLimit(1) // color: the caller's, else the sidebar's default
         }
     }
 
