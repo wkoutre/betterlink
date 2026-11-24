@@ -24,9 +24,22 @@ export function serializeTab(t) {
   };
 }
 
-export function createBridge(chrome, send, now = () => Date.now()) {
+// `favicon(pageUrl)` resolves to a data: URL of the browser's cached icon for
+// that page, or "" (background.js reads Chrome's local favicon store; the app
+// itself never fetches anything from the network).
+export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "") {
   let seq = 0;
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
+  const iconSent = new Map(); // tabId -> page URL whose icon was last sent
+
+  async function sendFavicon(tab) {
+    const page = tab.url || tab.pendingUrl || "";
+    if (!/^https?:/.test(page) || iconSent.get(tab.id) === page) return;
+    iconSent.set(tab.id, page);
+    let data = "";
+    try { data = await favicon(page); } catch {}
+    if (data) emit("tabFavicon", { tabId: tab.id, favicon: data });
+  }
 
   async function snapshot() {
     const wins = await chrome.windows.getAll({ populate: true, windowTypes: ["normal", "popup", "app"] });
@@ -43,12 +56,21 @@ export function createBridge(chrome, send, now = () => Date.now()) {
         tabs: (w.tabs || []).map(serializeTab),
       })),
     });
+    // Icons follow the snapshot, one event per tab, so the list appears at once.
+    iconSent.clear();
+    for (const w of wins) for (const t of w.tabs || []) sendFavicon(t);
   }
 
   const listeners = [
     [chrome.tabs.onCreated, (tab) => emit("tabCreated", { tab: serializeTab(tab) })],
-    [chrome.tabs.onUpdated, (tabId, changes, tab) => emit("tabUpdated", { tab: serializeTab(tab), changes: Object.keys(changes) })],
-    [chrome.tabs.onRemoved, (tabId, info) => emit("tabRemoved", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing })],
+    [chrome.tabs.onUpdated, (tabId, changes, tab) => {
+      emit("tabUpdated", { tab: serializeTab(tab), changes: Object.keys(changes) });
+      if (changes.favIconUrl || changes.status === "complete") sendFavicon(tab);
+    }],
+    [chrome.tabs.onRemoved, (tabId, info) => {
+      iconSent.delete(tabId);
+      emit("tabRemoved", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing });
+    }],
     [chrome.tabs.onMoved, (tabId, info) => emit("tabMoved", { tabId, windowId: info.windowId, fromIndex: info.fromIndex, toIndex: info.toIndex })],
     [chrome.tabs.onActivated, (info) => emit("tabActivated", { tabId: info.tabId, windowId: info.windowId })],
     [chrome.tabs.onDetached, (tabId, info) => emit("tabDetached", { tabId, windowId: info.oldWindowId, fromIndex: info.oldPosition })],

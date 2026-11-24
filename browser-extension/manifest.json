@@ -5,6 +5,6 @@
   "description": "Pushes tab and window events to betterlink over native messaging, and runs the app's open, close and activate commands.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtZbDsAbKucZFzG8uUPWnQ8rKK8wsjAz9G5UGDuQFFiw0Pt+c/ipFbwWEUEhKvLDui7HLPNXRI79q0RZp9D24gEVWRnHIHEHMvvvMoTd3mwLCzV0tJcnKRUZey+7tImDCBj23+BwvpQxbxy4UertvYWqRTfshomKiq9MzuaTyN2GHT4jQ7C5oEVYGrB8MbpQhHmDStah4u0mLsceg9dqVzLauBjYBxnd5xkwKOsMoPYnb0072ausvaAR1xdp1j0JfAiAOedtE3cE5D5JUiFhFDRRZSqWMr5WAr/NVX5ZdUgyJJsibD68ZHqbSgylSF4e8TjVvgQWbTP4iaeEvBirMOwIDAQAB",
   "minimum_chrome_version": "116",
-  "permissions": ["tabs", "nativeMessaging"],
+  "permissions": ["tabs", "nativeMessaging", "favicon"],
   "background": { "service_worker": "background.js", "type": "module" }
 }

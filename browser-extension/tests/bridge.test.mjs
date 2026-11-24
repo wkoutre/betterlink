@@ -103,3 +103,29 @@ test("detach removes every listener", () => {
   assert.equal(chrome.tabs.onCreated.size(), 0);
   assert.equal(chrome.windows.onFocusChanged.size(), 0);
 });
+
+test("a loaded page's cached icon follows as its own event, once per page", async () => {
+  const chrome = fakeChrome();
+  const out = [];
+  const asked = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1, async (page) => { asked.push(page); return "data:image/png;base64,AAAA"; });
+  b.attach();
+  const tab = { id: 10, windowId: 1, index: 0, url: "https://a.test/", status: "complete" };
+  chrome.tabs.onUpdated.fire(10, { status: "complete" }, tab);
+  chrome.tabs.onUpdated.fire(10, { title: "A" }, tab); // no icon change: no second lookup
+  chrome.tabs.onUpdated.fire(10, { favIconUrl: "https://a.test/i.png" }, tab); // same page: already sent
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(asked, ["https://a.test/"]);
+  const icon = out.find((m) => m.kind === "tabFavicon");
+  assert.deepEqual([icon.tabId, icon.favicon], [10, "data:image/png;base64,AAAA"]);
+});
+
+test("pages without a web URL never ask for an icon", async () => {
+  const chrome = fakeChrome();
+  const asked = [];
+  const b = createBridge(chrome, () => {}, () => 1, async (p) => { asked.push(p); return "x"; });
+  b.attach();
+  chrome.tabs.onUpdated.fire(5, { status: "complete" }, { id: 5, windowId: 1, url: "chrome://settings/" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(asked, []);
+});

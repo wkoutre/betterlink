@@ -11,6 +11,8 @@ public struct BrowserSession: Identifiable, Sendable {
     public var socketPath: String
     public var browser: String = "Browser"
     public var pid: Int = 0
+    /// The browser's own process id, to match a session to the frontmost app.
+    public var browserPid: Int = 0
     public var brands: [String] = []
     public var store = TabStore()
     /// Browser event -> app, measured on the shared machine clock.
@@ -119,6 +121,7 @@ public final class SyncHub: @unchecked Sendable {
             case "host":
                 s.browser = m.browser ?? s.browser
                 s.pid = m.pid ?? s.pid
+                s.browserPid = m.browserPid ?? s.browserPid
             case "hello":
                 s.brands = m.brands ?? []
             case "ack":

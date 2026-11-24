@@ -47,6 +47,8 @@ public struct Inbound: Codable, Sendable {
     public var incognito: Bool?
     public var windows: [SnapshotWindow]?
     public var changes: [String]?
+    /// tabFavicon: the icon as a data: URL.
+    public var favicon: String?
     // hello
     public var protocolVersion: Int?
     public var extensionVersion: String?
@@ -59,10 +61,12 @@ public struct Inbound: Codable, Sendable {
     // host
     public var browser: String?
     public var pid: Int?
+    /// The browser process that launched the host (matches NSRunningApplication.processIdentifier).
+    public var browserPid: Int?
 
     enum CodingKeys: String, CodingKey {
         case type, kind, seq, t, tab, tabId, removedTabId, windowId, fromIndex, toIndex,
-             isWindowClosing, focused, incognito, windows, changes, userAgent, brands, id, ok, error, browser, pid
+             isWindowClosing, focused, incognito, windows, changes, favicon, userAgent, brands, id, ok, error, browser, pid, browserPid
         case protocolVersion = "protocol"
         case extensionVersion = "extension"
     }

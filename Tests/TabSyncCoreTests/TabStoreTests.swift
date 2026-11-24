@@ -155,3 +155,19 @@ private func sha256Hex(_ d: Data) -> String {
     return String(String(data: o.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)!.prefix(64))
 }
 #endif
+
+struct FaviconStoreTests {
+    func decode(_ s: String) -> Inbound { try! JSONDecoder().decode(Inbound.self, from: Data(s.utf8)) }
+
+    @Test func inlineIconSticksUntilTheBrowserReportsANewOne() {
+        var s = TabStore()
+        s.apply(decode(#"{"type":"snapshot","seq":1,"windows":[{"id":1,"focused":true,"tabs":[{"id":10,"windowId":1,"index":0,"title":"A","url":"https://a/","favIconUrl":"https://a/i.png","active":true,"pinned":false,"audible":false,"status":"complete"}]}]}"#))
+        s.apply(decode(#"{"type":"event","kind":"tabFavicon","seq":2,"tabId":10,"favicon":"data:image/png;base64,AAAA"}"#))
+        #expect(s.tabs[10]?.favIconUrl == "data:image/png;base64,AAAA")
+        s.apply(decode(#"{"type":"event","kind":"tabUpdated","seq":3,"changes":["title"],"tab":{"id":10,"windowId":1,"index":0,"title":"A2","url":"https://a/","favIconUrl":"https://a/i.png","active":true,"pinned":false,"audible":false,"status":"complete"}}"#))
+        #expect(s.tabs[10]?.favIconUrl == "data:image/png;base64,AAAA")
+        #expect(s.tabs[10]?.title == "A2")
+        s.apply(decode(#"{"type":"event","kind":"tabUpdated","seq":4,"changes":["favIconUrl"],"tab":{"id":10,"windowId":1,"index":0,"title":"A2","url":"https://b/","favIconUrl":"https://b/i.png","active":true,"pinned":false,"audible":false,"status":"loading"}}"#))
+        #expect(s.tabs[10]?.favIconUrl == "https://b/i.png")
+    }
+}

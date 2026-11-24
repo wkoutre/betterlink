@@ -115,9 +115,16 @@ public struct TabStore: Equatable, Sendable {
             tabs[t.id] = t
             insert(t.id, window: t.windowId, at: t.index)
             if t.active { setActive(t.id, window: t.windowId) }
+        case "tabFavicon":
+            guard let id = m.tabId, let icon = m.favicon else { return }
+            tabs[id]?.favIconUrl = icon
         case "tabUpdated":
-            guard let t = m.tab else { return }
+            guard var t = m.tab else { return }
             let known = tabs[t.id] != nil
+            // Keep the inline icon we already have until a new one arrives.
+            if let old = tabs[t.id]?.favIconUrl, old.hasPrefix("data:"), !(m.changes ?? []).contains("favIconUrl") {
+                t.favIconUrl = old
+            }
             tabs[t.id] = t
             if !known { insert(t.id, window: t.windowId, at: t.index) }
         case "tabRemoved":

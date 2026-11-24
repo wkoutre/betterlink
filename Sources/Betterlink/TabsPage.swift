@@ -1,3 +1,4 @@
+import AppKit
 import BetterlinkCore
 import SwiftUI
 import TabSyncCore
@@ -30,9 +31,9 @@ final class TabsModel: ObservableObject {
         hub.start()
     }
 
-    func open(_ text: String) {
-        guard let s = sessions.first else { return }
-        hub?.send(.open(Self.normalize(text)), to: s.socketPath)
+    func open(_ text: String, in session: BrowserSession? = nil, windowId: Int? = nil) {
+        guard let s = session ?? sessions.first else { return }
+        hub?.send(.open(Self.normalize(text), windowId: windowId), to: s.socketPath)
     }
     func activate(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.activate(tab.id), to: s.socketPath) }
     func close(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.close(tab.id), to: s.socketPath) }
@@ -73,12 +74,14 @@ final class TabsModel: ObservableObject {
 struct TabsPage: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var tabs = TabsModel.shared
+    @ObservedObject private var sidebar = SidebarController.shared
     @State private var newURL = ""
 
     var body: some View {
         PageForm {
             PageHeader(title: "Tabs",
                        subtitle: "Preview. Every open tab in your browsers, live. Click a tab to switch to it, ✕ to close it.")
+            SidebarSettings(sidebar: sidebar)
             DSSection {
                 HStack(spacing: DS.Space.space2) {
                     DSTextField(label: "Open a tab", text: $newURL, prompt: "Open a link or search")
@@ -172,20 +175,80 @@ private struct TabRow: View {
     }
 }
 
-private struct Favicon: View {
+/// A tab's site icon, only when the browser handed it over inline (a data:
+/// URL). betterlink makes no network requests, so a remote icon URL shows the
+/// globe instead of being fetched.
+struct Favicon: View {
     let url: String
     var body: some View {
         Group {
-            if let u = URL(string: url), ["http", "https"].contains(u.scheme ?? "") {
-                AsyncImage(url: u) { $0.resizable() } placeholder: { globe }
+            if let img = Self.inlineImage(url) {
+                Image(nsImage: img).resizable()
             } else {
-                globe
+                Image(systemName: "globe").resizable().foregroundStyle(DS.Palette.textTertiary)
             }
         }
         .frame(width: 16, height: 16)
         .accessibilityHidden(true)
     }
-    private var globe: some View { Image(systemName: "globe").resizable().foregroundStyle(DS.Palette.textTertiary) }
+
+    static func inlineImage(_ url: String) -> NSImage? {
+        guard url.hasPrefix("data:image/"), let comma = url.firstIndex(of: ","),
+              url[..<comma].hasSuffix(";base64"),
+              let data = Data(base64Encoded: String(url[url.index(after: comma)...])) else { return nil }
+        return NSImage(data: data)
+    }
+}
+
+/// The sidebar that binds to the front browser window.
+private struct SidebarSettings: View {
+    @ObservedObject var sidebar: SidebarController
+
+    var body: some View {
+        DSSection {
+            Toggle(isOn: $sidebar.enabled) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Show the sidebar")
+                    Text("Sits against the front browser window's edge and moves with it.")
+                        .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            if sidebar.enabled && !sidebar.trusted {
+                HStack {
+                    Text("betterlink needs Accessibility access to follow your browser windows.")
+                        .foregroundStyle(DS.Palette.textSecondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer()
+                    Button("Allow…") { sidebar.requestTrust() }
+                }
+            }
+            LabeledContent("Side") {
+                Picker("Side", selection: $sidebar.side) {
+                    Text("Left").tag(SidebarSide.left)
+                    Text("Right").tag(SidebarSide.right)
+                    Text("Whichever has room").tag(SidebarSide.auto)
+                }
+                .labelsHidden()
+                .pickerStyle(.segmented)
+                .frame(maxWidth: 360)
+            }
+            LabeledContent("Width") {
+                HStack {
+                    Slider(value: $sidebar.width, in: 200...440, step: 10).frame(maxWidth: 220)
+                    Text("\(Int(sidebar.width)) pt").monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
+                }
+            }
+            Toggle(isOn: $sidebar.makeRoom) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Make room")
+                    Text("Narrows the browser window when it fills the screen, instead of covering its edge.")
+                        .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+        } header: {
+            Text("Sidebar")
+        }
+    }
 }
 
 private struct BrowserRegistrationRow: View {

@@ -13,7 +13,19 @@ function send(msg) {
   try { port.postMessage(msg); } catch { port = null; }
 }
 
-const bridge = createBridge(chrome, send);
+// The browser's own cached icon for a page, as a data: URL. Served by the
+// browser from its local favicon store ("favicon" permission); no network.
+async function favicon(pageUrl) {
+  const u = new URL(chrome.runtime.getURL("/_favicon/"));
+  u.searchParams.set("pageUrl", pageUrl);
+  u.searchParams.set("size", "32");
+  const buf = new Uint8Array(await (await fetch(u)).arrayBuffer());
+  let bin = "";
+  for (let i = 0; i < buf.length; i += 0x8000) bin += String.fromCharCode(...buf.subarray(i, i + 0x8000));
+  return "data:image/png;base64," + btoa(bin);
+}
+
+const bridge = createBridge(chrome, send, () => Date.now(), favicon);
 // Listeners must be registered synchronously at top level so they also wake the worker.
 bridge.attach();
 

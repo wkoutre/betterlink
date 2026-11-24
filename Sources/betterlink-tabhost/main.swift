@@ -132,7 +132,7 @@ func toApps(_ line: Data) {
 
 @Sendable func json(_ obj: [String: Any]) -> Data { (try? JSONSerialization.data(withJSONObject: obj)) ?? Data() }
 
-let hostHello = json(["type": "host", "browser": browserName, "pid": myPid, "origin": origin])
+let hostHello = json(["type": "host", "browser": browserName, "pid": myPid, "browserPid": Int(getppid()), "origin": origin])
 var lastHello: Data? // the extension's hello, replayed to apps that connect later
 let helloLock = NSLock()
 

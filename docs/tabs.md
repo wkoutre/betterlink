@@ -58,6 +58,16 @@ The extension's id is pinned by the `key` in its manifest (`nakiifbonhngpkpekaki
 
 Tests: `make test` covers TabSyncCore; `make test-tabs` runs the extension bridge tests and the full-pipe e2e.
 
+## The sidebar
+
+Tabs page › Sidebar › **Show the sidebar** puts a panel flush against the front browser window's left or right edge (or whichever side has room), the window's full height, showing that window's tabs. It follows the window as it moves, resizes, changes focus, minimises or goes full screen (hidden there), and hides when a non-browser app is in front.
+
+- **Tracking** (`Sidebar/WindowTracker.swift`) is event-driven: NSWorkspace says which app is in front; an `AXObserver` on that app reports focused-window changes, moves and resizes. Only while the mouse button is held after a move or resize (a live drag) does it also read the frame once per display refresh, so the panel keeps up frame for frame; that stops on mouse up. Needs the Accessibility permission; the page asks for it.
+- **Placement** (`TabSyncCore/SidebarGeometry.swift`, unit tested) is pure math over Cocoa frames: flush outside the edge when there is room; with **Make room** on, a window that fills the screen is narrowed once, when the sidebar binds to it (never while you drag it); otherwise the panel covers the window's edge.
+- **Which tabs**: the browser session whose process is the front app, then the window whose active tab title the window title starts with, else the browser's focused window.
+- **Icons** come from the browser's own favicon cache through the extension (`favicon` permission), as data: URLs. betterlink itself fetches nothing.
+- The panel is non-activating: clicking it never takes the browser out of the front.
+
 ## Browser coverage
 
 - Chromium family (Chrome, Brave, Edge, Arc, Vivaldi, Dia): this extension as is. Each browser keeps its own `NativeMessagingHosts` folder under the data folder betterlink already knows (`Browser.dataFolder`).

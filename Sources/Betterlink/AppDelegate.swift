@@ -36,6 +36,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.listenForCLIChanges()
         setupMainMenu()
         _ = Updater.shared  // starts Sparkle's daily check when it is on
+        SidebarController.shared.restore()  // the Tabs sidebar, if it was on
         // Adds the menu bar icon now (unless it is turned off) and whenever
         // the setting changes, from the window or the CLI.
         menuBarSetting = model.$showsMenuBarIcon.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] shown in
