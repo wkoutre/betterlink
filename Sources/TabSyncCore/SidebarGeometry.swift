@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CoreGraphics)
+import CoreGraphics
+#endif
 
 /// Where the betterlink sidebar goes next to a browser window. Pure math, so it
 /// is unit tested; the app feeds it frames from the Accessibility API.
