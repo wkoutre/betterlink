@@ -119,15 +119,37 @@ public final class SyncSession {
     private var sidebar: SidebarStore { SidebarStore(folder: settings) }
     private var configText: String? { try? String(contentsOf: settings.configFile, encoding: .utf8) }
 
-    /// This Mac's settings as entities. An unreadable sidebar.json or
-    /// rules.json throws and stops the sync: reading it as empty would delete
-    /// everything in it on every Mac.
-    private func local() throws -> [String: [String: SyncValue]] {
-        var out = SyncModel.project(rules: try rules.load(), library: try sidebar.load(), selection: selection,
-                                    identity: identity, state: state, applied: applied)
-        if selection.global { out[SyncModel.configID] = ["text": .of(configText)] }
-        return out
+    /// This Mac's settings files as one sync sees them, and when each was
+    /// saved. Reading throws when rules.json or sidebar.json is unreadable,
+    /// which stops the sync: reading it as empty would delete everything in it
+    /// on every Mac.
+    private struct Snapshot {
+        var rules: RuleStore.Contents
+        var library: SidebarLibrary
+        var config: String?
+        var rulesSaved: Date?, librarySaved: Date?, configSaved: Date?
     }
+
+    /// A settings file changed while a sync ran.
+    private struct ChangedMeanwhile: LocalizedError {
+        var errorDescription: String? { "Settings kept changing during the sync. It runs again after the next change." }
+    }
+
+    private func snapshot() throws -> Snapshot {
+        func saved(_ url: URL) -> Date? {
+            // From the path, not the URL, which caches what it read before.
+            (try? FileManager.default.attributesOfItem(atPath: url.resolvingSymlinksInPath().path))?[.modificationDate] as? Date
+        }
+        // Dates first: an edit landing in between is then recorded by the next
+        // sync with its own date.
+        let r = saved(settings.rulesFile), l = saved(sidebar.file), c = saved(settings.configFile)
+        return Snapshot(rules: try rules.load(), library: try sidebar.load(), config: configText,
+                        rulesSaved: r, librarySaved: l, configSaved: c)
+    }
+
+    private static func isRules(_ id: String) -> Bool { id == SyncModel.globalID || id.hasPrefix("rule:") || id.hasPrefix("mod:") }
+    private static func isLibrary(_ id: String) -> Bool { id.hasPrefix("sp:") || id.hasPrefix("node:") }
+    private static func isConfig(_ id: String) -> Bool { id == SyncModel.configID }
 
     /// Records local changes and writes this Mac's file whenever its state
     /// differs from what the file holds: this Mac's own edits, and what it
@@ -135,7 +157,13 @@ public final class SyncSession {
     /// seen. Returns whether it wrote.
     @discardableResult
     public func push(now: Date = Date()) throws -> Bool {
-        let local = try local()
+        try push(try snapshot(), now: now)
+    }
+
+    private func push(_ snap: Snapshot, now: Date) throws -> Bool {
+        var local = SyncModel.project(rules: snap.rules, library: snap.library, selection: selection,
+                                      identity: identity, state: state, applied: applied)
+        if selection.global { local[SyncModel.configID] = ["text": .of(snap.config)] }
         let scope = SyncModel.scope(selection, state: state)
         // Joining means this Mac has never written a file here. One that is
         // there but couldn't be read (half-downloaded, refused) doesn't count:
@@ -152,15 +180,12 @@ public final class SyncSession {
             // Stamp an edit with when its file was saved, not when it was
             // noticed, so of two saves moments apart on two Macs the later
             // one wins. Each file stamps only its own settings.
-            let sidebarFile = settings.directory.appendingPathComponent("sidebar.json")
-            let groups: [(URL, (String) -> Bool)] = [
-                (settings.rulesFile, { $0 == SyncModel.globalID || $0.hasPrefix("rule:") || $0.hasPrefix("mod:") }),
-                (settings.configFile, { $0 == SyncModel.configID }),
-                (sidebarFile, { $0.hasPrefix("sp:") || $0.hasPrefix("node:") }),
+            let groups: [(Date?, (String) -> Bool)] = [
+                (snap.rulesSaved, Self.isRules), (snap.configSaved, Self.isConfig), (snap.librarySaved, Self.isLibrary),
             ]
-            for (file, mine) in groups {
-                let saved = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { min($0, now) }
-                state.record(local.filter { mine($0.key) }, scope: { mine($0) && scope($0) }, clock: &clock, now: Self.ms(saved ?? now))
+            for (saved, mine) in groups {
+                state.record(local.filter { mine($0.key) }, scope: { mine($0) && scope($0) }, clock: &clock,
+                             now: Self.ms(saved.map { min($0, now) } ?? now))
             }
         }
         guard state != written || applied != (writtenApplied ?? [:])
@@ -174,39 +199,80 @@ public final class SyncSession {
     /// Reads every Mac's file, merges, and brings this Mac's settings in line:
     /// rules.json, sidebar.json and config.ts. A config.ts replaced by a newer
     /// one from another Mac is kept beside it as a .bak. Then pushes.
+    ///
+    /// The CLI, an editor and the app can write those files at any moment. A
+    /// file is written only if it is still what this sync read (checked under
+    /// its store's lock); if not, the sync starts over with the new contents.
     @discardableResult
     public func pull(now: Date = Date()) throws -> Report {
         var report = Report()
-        // Local edits first, so they are stamped before anything newer lands.
-        try push(now: now)
-        let read = folder.readAll()
-        report.skipped = read.skipped; report.newer = read.newer; report.unsafe = read.unsafe
-        for f in read.files where f.device != device { state = state.merged(with: f.state) }
-        otherDevices = read.files.filter { $0.device != device }.map(\.name)
-        if let m = state.maxStamp { clock.observe(m) }
-
-        let before = (try rules.load(), try sidebar.load())
-        let r = SyncModel.materialize(state, rules: before.0, library: before.1, selection: selection, resolve: resolve)
-        report.notes = r.notes
-        applied = r.applied
-        if r.rules != before.0 { _ = try rules.update { $0 = r.rules }; report.changedSettings = true }
-        if r.library != before.1 { _ = try sidebar.update { $0 = r.library }; report.changedSettings = true }
-        if selection.global, let synced = state.value(SyncModel.configID, "text") {
-            let mine = configText
-            if synced.string != mine {
-                if let mine, !mine.isEmpty {
-                    let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
-                    let bak = settings.directory.appendingPathComponent("config.ts.\(Self.safe(name)).\(stamp).bak")
-                    try mine.write(to: bak, atomically: true, encoding: .utf8)
-                    report.configReplaced = bak
-                }
-                if let text = synced.string { try text.write(to: settings.configFile, atomically: true, encoding: .utf8) }
-                else { try? FileManager.default.removeItem(at: settings.configFile) }
-                report.changedSettings = true
-            }
+        for attempt in 1... {
+            do { try pullOnce(now: now, &report); break }
+            catch let e as ChangedMeanwhile { if attempt == 10 { throw e } }
         }
         try push(now: now)
         return report
+    }
+
+    private func pullOnce(now: Date, _ report: inout Report) throws {
+        // Local edits first, so they are stamped before anything newer lands.
+        let snap = try snapshot()
+        _ = try push(snap, now: now)
+        let read = folder.readAll()
+        report.skipped = read.skipped; report.newer = read.newer; report.unsafe = read.unsafe
+        var merged = state
+        for f in read.files where f.device != device { merged = merged.merged(with: f.state) }
+        otherDevices = read.files.filter { $0.device != device }.map(\.name)
+        if let m = merged.maxStamp { clock.observe(m) }
+
+        // `state` takes the merge one file at a time, once that file holds it:
+        // the next push records whatever the files say that `state` doesn't,
+        // so merging ahead of a file that isn't written would stamp this Mac's
+        // old values as new edits and revert the other Mac's.
+        func adopt(_ mine: (String) -> Bool) {
+            for (id, fields) in merged.entities where mine(id) { state.entities[id] = fields }
+        }
+        let r = SyncModel.materialize(merged, rules: snap.rules, library: snap.library, selection: selection, resolve: resolve)
+        report.notes = r.notes
+
+        try replace(snap.rules, with: r.rules, in: rules.update, &report)
+        applied = r.applied
+        adopt(Self.isRules)
+
+        try replace(snap.library, with: r.library, in: sidebar.update, &report)
+        adopt(Self.isLibrary)
+
+        if selection.global, let synced = merged.value(SyncModel.configID, "text"), synced.string != snap.config {
+            if let mine = snap.config, !mine.isEmpty {
+                let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
+                let bak = settings.directory.appendingPathComponent("config.ts.\(Self.safe(name)).\(stamp).bak")
+                try mine.write(to: bak, atomically: true, encoding: .utf8)
+                // Editors take no lock, so this is checked as late as it can be.
+                guard configText == snap.config else {
+                    try? FileManager.default.removeItem(at: bak)
+                    throw ChangedMeanwhile()
+                }
+                report.configReplaced = bak
+            } else if configText != snap.config {
+                throw ChangedMeanwhile()
+            }
+            if let text = synced.string { try text.write(to: settings.configFile, atomically: true, encoding: .utf8) }
+            else { try? FileManager.default.removeItem(at: settings.configFile) }
+            report.changedSettings = true
+        }
+        state = merged
+    }
+
+    /// Writes `new` over `old` under the store's lock, unless the file is no
+    /// longer `old`.
+    private func replace<T: Equatable>(_ old: T, with new: T, in update: ((inout T) throws -> Void) throws -> T,
+                                       _ report: inout Report) throws {
+        guard new != old else { return }
+        _ = try update { now in
+            guard now == old else { throw ChangedMeanwhile() }
+            now = new
+        }
+        report.changedSettings = true
     }
 
     /// Sidebar Profiles other Macs share that aren't in this Mac's selection,

@@ -68,6 +68,7 @@ config.ts is code and can't be merged field by field.
 
 - Every Mac watches the sync folder (FSEvents; the existing PathWatcher, 0.3 s debounce) and its settings folder (0.5 s), and syncs 0.2 s after either changes. It also checks every 30 s, since a cloud app can replace a file without the folder noticing. Live, a change reached the other copy in about a second.
 - A Mac rewrites its own file only when its state changed.
+- The CLI, an editor and the app can write the settings files while a sync runs. A sync works from one reading of them and writes rules.json or sidebar.json only if, under that file's lock, it is still what the sync read; otherwise it starts over. It keeps the other Macs' changes to a file only once that file holds them. Editors take no lock, so config.ts is compared right before it is replaced, and what is replaced is kept as a .bak.
 - A merge that changes anything saves rules.json and sidebar.json as usual. So the rest of betterlink, the CLI and the folder watch see ordinary file changes.
 
 ## Failure and edge cases
