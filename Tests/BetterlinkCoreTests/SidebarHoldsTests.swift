@@ -149,6 +149,126 @@ struct SidebarHoldsTests {
         #expect(SidebarLibrary(profiles: [p]).allLinkIDs == [mail.id, docs.id])
     }
 
+    // MARK: - HoldLedger: across a browser restart
+
+    func browser(_ session: String, _ tabs: [OpenTab], key: String = "profile-A") -> HoldLedger.Browser {
+        HoldLedger.Browser(key: key, session: session, tabs: tabs)
+    }
+
+    @Test func quittingTheBrowserKeepsWhatWasHeldAndARestartBringsItBack() {
+        let links: Set<UUID> = [mail.id, docs.id]
+        let t0 = Date(timeIntervalSince1970: 1000)
+        var ledger = HoldLedger()
+        ledger.settle([browser("s1", [tab(1, "https://mail.example/")])], links: links, now: t0)
+        ledger.hold(1, for: mail.id, in: "profile-A")
+        let saved = ledger.settle([browser("s1", [tab(1, "https://mail.example/inbox/7")])], links: links, now: t0 + 5)
+        #expect(saved)
+        #expect(ledger.remembered == ["profile-A": [mail.id.uuidString: ["https://mail.example/inbox/7"]]])
+
+        // Quit: the window's tabs go, then the browser. Nothing is forgotten.
+        ledger.settle([browser("s1", [])], links: links, now: t0 + 500)
+        ledger.settle([], links: links, now: t0 + 501)
+        #expect(ledger.holds.isEmpty)
+        #expect(ledger.remembered["profile-A"]?[mail.id.uuidString] == ["https://mail.example/inbox/7"])
+
+        // Relaunch (a new HoldLedger, as after betterlink restarts too): the
+        // extension connects before the tabs are back, then they arrive.
+        var next = HoldLedger(remembered: ledger.remembered)
+        next.settle([browser("s2", [])], links: links, now: t0 + 600)
+        #expect(next.holds(for: "profile-A").isEmpty)
+        next.settle([browser("s2", [tab(41, "https://other.example/"), tab(42, "https://mail.example/inbox/7")])], links: links, now: t0 + 603)
+        #expect(next.holds(for: "profile-A").link(holding: 42) == mail.id)
+        #expect(next.holds(for: "profile-A").link(holding: 41) == nil)
+    }
+
+    @Test func aTabThatDidNotComeBackIsForgottenAfterTheGracePeriod() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        var ledger = HoldLedger(remembered: ["profile-A": [mail.id.uuidString: ["https://mail.example/inbox/7"]]])
+        ledger.settle([browser("s2", [tab(1, "https://x.example/")])], links: [mail.id], now: t0)
+        #expect(ledger.remembered["profile-A"] != nil)
+        let changed = ledger.settle([browser("s2", [tab(1, "https://x.example/")])], links: [mail.id], now: t0 + HoldLedger.grace + 1)
+        #expect(changed)
+        #expect(ledger.remembered.isEmpty)
+        // Much later a tab at that address is just a tab.
+        ledger.settle([browser("s2", [tab(1, "https://x.example/"), tab(2, "https://mail.example/inbox/7")])], links: [mail.id], now: t0 + 900)
+        #expect(ledger.holds(for: "profile-A").isEmpty)
+    }
+
+    @Test func closingTheHeldTabByHandForgetsItButClosingItsWindowDoesNot() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        var ledger = HoldLedger()
+        let open = [tab(1, "https://mail.example/a"), tab(2, "https://docs.example/b")]
+        ledger.settle([browser("s1", open)], links: [mail.id, docs.id], now: t0)
+        ledger.hold(1, for: mail.id, in: "profile-A")
+        ledger.hold(2, for: docs.id, in: "profile-A")
+        ledger.settle([browser("s1", open)], links: [mail.id, docs.id], now: t0 + 100)
+        #expect(ledger.remembered["profile-A"]?.count == 2)
+
+        // Tab 1 is closed on its own: the app hears that before the tab list changes.
+        let forgot = ledger.closed(tab: 1, in: "profile-A")
+        #expect(forgot)
+        // Tab 2 goes with its window: no word of a single close.
+        ledger.settle([browser("s1", [])], links: [mail.id, docs.id], now: t0 + 101)
+        #expect(ledger.remembered == ["profile-A": [docs.id.uuidString: ["https://docs.example/b"]]])
+        let nothing = ledger.closed(tab: 99, in: "profile-A")
+        #expect(!nothing)
+    }
+
+    @Test func aRemovedLinkAndAPrivateTabAreNeverRemembered() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        var ledger = HoldLedger()
+        // Tab 2 is in a private window: known as open, but not offered for holding.
+        let b = HoldLedger.Browser(key: "profile-A", session: "s1", tabs: [tab(1, "https://mail.example/a")], allTabs: [1, 2])
+        ledger.settle([b], links: [mail.id, docs.id], now: t0)
+        ledger.hold(1, for: mail.id, in: "profile-A")
+        ledger.hold(2, for: docs.id, in: "profile-A")
+        ledger.settle([b], links: [mail.id, docs.id], now: t0 + 1)
+        #expect(ledger.remembered == ["profile-A": [mail.id.uuidString: ["https://mail.example/a"]]])
+        // The link is deleted from the sidebar.
+        ledger.settle([b], links: [docs.id], now: t0 + 2)
+        #expect(ledger.remembered.isEmpty)
+        #expect(ledger.holds(for: "profile-A").link(holding: 1) == nil)
+    }
+
+    @Test func twoBrowserProfilesKeepTheirOwnHolds() {
+        let t0 = Date(timeIntervalSince1970: 1000)
+        var ledger = HoldLedger()
+        let a = browser("s1", [tab(1, "https://mail.example/")], key: "A"), b = browser("s2", [tab(1, "https://docs.example/home")], key: "B")
+        ledger.settle([a, b], links: [mail.id, docs.id], now: t0)
+        ledger.hold(1, for: mail.id, in: "A")
+        ledger.hold(1, for: docs.id, in: "B")
+        ledger.settle([a, b], links: [mail.id, docs.id], now: t0 + 1)
+        #expect(ledger.holds(for: "A").link(holding: 1) == mail.id)
+        #expect(ledger.holds(for: "B").link(holding: 1) == docs.id)
+        // B quits; A is untouched and B's address is kept for later.
+        ledger.settle([a], links: [mail.id, docs.id], now: t0 + 2)
+        #expect(ledger.holds(for: "B").isEmpty)
+        #expect(ledger.holds(for: "A").link(holding: 1) == mail.id)
+        #expect(ledger.remembered["B"]?[docs.id.uuidString] == ["https://docs.example/home"])
+    }
+
+    @Test func aLinkWithoutAnIconLearnsItFromItsOpenTabOnce() {
+        var p = SidebarProfile(name: "Primary")
+        let folder = p.addFolder("Work")
+        p.addLink(docs, in: folder)
+        p.addFavorite(mail)
+        let kept = SavedLink(title: "Has one", url: "https://kept.example/", icon: "data:image/png;base64,KEPT")
+        p.addLink(kept)
+        let fromTabs = [docs.id: "data:image/png;base64,DOCS", mail.id: "https://mail.example/favicon.ico",
+                        kept.id: "data:image/png;base64,NEW", UUID(): "data:image/png;base64,GONE"]
+        // Only an inline icon, only for a link that has none.
+        let todo = p.iconsToLearn(from: fromTabs)
+        #expect(todo == [docs.id: "data:image/png;base64,DOCS"])
+        let changed = p.learnIcons(todo)
+        #expect(changed)
+        #expect(p.savedLink(docs.id)?.icon == "data:image/png;base64,DOCS")
+        #expect(p.savedLink(mail.id)?.icon == nil)
+        #expect(p.savedLink(kept.id)?.icon == "data:image/png;base64,KEPT")
+        #expect(p.iconsToLearn(from: fromTabs).isEmpty, "nothing left to learn, so nothing is written again")
+        let again = p.learnIcons(todo)
+        #expect(!again)
+    }
+
     @Test func anAddressIsParsedOnceHoweverOftenItIsCompared() {
         var parses = 0
         let address = "https://Count.Example/once/#\(UUID().uuidString)"

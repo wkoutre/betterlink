@@ -155,3 +155,108 @@ enum PageKeys {
         return known.count
     }
 }
+
+/// Every browser profile's held tabs, and what is remembered of them across a
+/// browser restart. A value with no clock or storage of its own: the app feeds
+/// it the browsers' tabs as they change and saves `remembered` when told to.
+public struct HoldLedger: Equatable, Sendable {
+    /// One connected browser profile, as of now.
+    public struct Browser: Equatable, Sendable {
+        /// Stable for the browser profile across restarts (the extension's id for it).
+        public var key: String
+        /// This connection; a restart is a new one.
+        public var session: String
+        /// Its tabs outside private windows, in order. Private tabs are never
+        /// held or remembered.
+        public var tabs: [OpenTab]
+        /// Every tab id, private windows included.
+        public var allTabs: Set<Int>
+
+        public init(key: String, session: String, tabs: [OpenTab], allTabs: Set<Int>? = nil) {
+            self.key = key; self.session = session; self.tabs = tabs
+            self.allTabs = allTabs ?? Set(tabs.map(\.id))
+        }
+    }
+
+    /// Live holds, by browser profile key.
+    public private(set) var holds: [String: LinkHolds] = [:]
+    /// Where held tabs were: profile key -> link id -> addresses. Plain
+    /// strings so it can be kept in UserDefaults as it is.
+    public private(set) var remembered: [String: [String: [String]]]
+    /// When each session was first seen, and the links it inherited without a tab.
+    private var started: [String: Date] = [:]
+    private var carried: [String: Set<String>] = [:]
+
+    /// After a restart the browser brings its tabs back a few at a time, so
+    /// links keep looking for theirs this long. A link still without its tab
+    /// then is forgotten: that tab did not come back.
+    public static let grace: TimeInterval = 60
+
+    public init(remembered: [String: [String: [String]]] = [:]) { self.remembered = remembered }
+
+    public func holds(for key: String) -> LinkHolds { holds[key] ?? LinkHolds() }
+
+    public mutating func hold(_ tab: Int, for link: UUID, in key: String) {
+        var h = holds(for: key)
+        h.hold(tab, for: link)
+        holds[key] = h
+    }
+
+    /// The person closed this one tab (not its whole window, not the browser):
+    /// its link is closed for good, so it is not looked for after a restart.
+    /// True when what is remembered changed.
+    @discardableResult
+    public mutating func closed(tab: Int, in key: String) -> Bool {
+        guard let link = holds[key]?.link(holding: tab) else { return false }
+        holds[key]?.release(tab: tab)
+        // Another window may still hold a tab for the link.
+        guard holds[key]?.tabs(heldBy: link).isEmpty ?? true else { return false }
+        return remembered[key]?.removeValue(forKey: link.uuidString) != nil
+    }
+
+    /// Takes in the browsers' tabs after any change: forgets closed tabs and
+    /// removed links, brings holds back after a restart, and notes where held
+    /// tabs are now. True when `remembered` changed and should be saved.
+    @discardableResult
+    public mutating func settle(_ browsers: [Browser], links: Set<UUID>, now: Date = Date()) -> Bool {
+        var changed = false
+        var live = Set<String>()
+        for b in browsers {
+            live.insert(b.key)
+            let was = remembered[b.key] ?? [:]
+            var mem = was.filter { UUID(uuidString: $0.key).map(links.contains) ?? false }
+            var h = holds(for: b.key)
+            if started[b.session] == nil {
+                started[b.session] = now
+                carried[b.session] = Set(mem.keys)
+            }
+            if let since = started[b.session], let inherited = carried[b.session] {
+                func waiting() -> [UUID: [String]] {
+                    var out: [UUID: [String]] = [:]
+                    for (id, urls) in mem where inherited.contains(id) {
+                        if let link = UUID(uuidString: id), h.tabs(heldBy: link).isEmpty { out[link] = urls }
+                    }
+                    return out
+                }
+                if now.timeIntervalSince(since) <= Self.grace {
+                    let w = waiting()
+                    if !w.isEmpty { h.restore(w, tabs: b.tabs, links: links) }
+                } else {
+                    for link in waiting().keys { mem[link.uuidString] = nil }
+                    carried[b.session] = nil
+                }
+            }
+            h.prune(tabs: b.allTabs, links: links)
+            for (link, urls) in h.addresses(of: b.tabs) { mem[link.uuidString] = urls }
+            if h != holds(for: b.key) { holds[b.key] = h.isEmpty ? nil : h }
+            if mem != was { remembered[b.key] = mem.isEmpty ? nil : mem; changed = true }
+        }
+        // A browser that quit drops its live holds; what was remembered stays
+        // for when it comes back.
+        for key in holds.keys where !live.contains(key) { holds[key] = nil }
+        let sessions = Set(browsers.map(\.session))
+        started = started.filter { sessions.contains($0.key) }
+        carried = carried.filter { sessions.contains($0.key) }
+        return changed
+    }
+}

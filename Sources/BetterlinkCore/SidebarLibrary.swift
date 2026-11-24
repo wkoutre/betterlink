@@ -125,6 +125,33 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// Gives saved links that have no icon the one their open tab shows (an
+    /// imported link has none until its page has been open once). Links that
+    /// already have an icon keep it. True when anything changed.
+    @discardableResult
+    public mutating func learnIcons(_ icons: [UUID: String]) -> Bool {
+        guard !icons.isEmpty else { return false }
+        var changed = false
+        for i in favorites.indices where favorites[i].icon == nil {
+            if let icon = icons[favorites[i].id] { favorites[i].icon = icon; changed = true }
+        }
+        items = Self.mapping(items) { item in
+            if case .link(var l) = item, l.icon == nil, let icon = icons[l.id] { l.icon = icon; changed = true; return .link(l) }
+            return item
+        }
+        return changed
+    }
+
+    /// The saved links with no icon yet whose tab has one to give, for `learnIcons`.
+    public func iconsToLearn(from tabIcons: [UUID: String]) -> [UUID: String] {
+        guard !tabIcons.isEmpty else { return [:] }
+        var out: [UUID: String] = [:]
+        for l in allLinks where l.icon == nil {
+            if let icon = tabIcons[l.id], icon.hasPrefix("data:image/") { out[l.id] = icon }
+        }
+        return out
+    }
+
     public mutating func toggleExpanded(_ id: UUID) {
         items = Self.mapping(items) { item in
             if case .folder(var f) = item, f.id == id { f.expanded.toggle(); return .folder(f) }
