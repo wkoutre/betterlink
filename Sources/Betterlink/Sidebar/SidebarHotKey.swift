@@ -1,3 +1,4 @@
+import BetterlinkCore
 import Carbon.HIToolbox
 import Foundation
 
@@ -6,10 +7,10 @@ import Foundation
 /// needed for a registered hot key (unlike watching every key press).
 @MainActor
 final class SidebarHotKey {
-    /// Control-Option-S.
-    static let display = "⌃⌥S"
-    private let keyCode = UInt32(kVK_ANSI_S)
-    private let modifiers = UInt32(controlKey | optionKey)
+    /// Changing it re-registers at once when it is registered.
+    var shortcut = Shortcut.sidebarDefault {
+        didSet { if ref != nil, shortcut != oldValue { unregister(); register() } }
+    }
 
     var onPress: (() -> Void)?
     private var ref: EventHotKeyRef?
@@ -34,7 +35,7 @@ final class SidebarHotKey {
             }, 1, &spec, me, &handler)
         }
         let id = EventHotKeyID(signature: OSType(0x626C_7362), id: 1) // "blsb"
-        RegisterEventHotKey(keyCode, modifiers, id, GetApplicationEventTarget(), 0, &ref)
+        RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref)
     }
 
     private func unregister() {

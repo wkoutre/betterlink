@@ -222,7 +222,7 @@ private struct SidebarSettings: View {
             }
             if sidebar.enabled && sidebar.trusted {
                 LabeledContent("Now") {
-                    Text(sidebar.collapsed ? "Hidden. Press \(SidebarHotKey.display) in the browser to show it."
+                    Text(sidebar.collapsed ? "Hidden. Press \(sidebar.shortcut.display) in the browser to show it."
                          : sidebar.target.map { "On \($0.appName)" } ?? "Waiting for one of the browsers below to be in front")
                         .foregroundStyle(DS.Palette.textSecondary)
                 }
@@ -248,13 +248,21 @@ private struct SidebarSettings: View {
             }
             VStack(alignment: .leading, spacing: DS.Space.space2) {
                 Text("Attach to")
-                Text("The sidebar follows these browsers' windows. \(SidebarHotKey.display) shows or hides it while one is in front.")
+                Text("The sidebar follows these browsers' windows.")
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 ForEach(attachable) { b in
                     Toggle(b.name, isOn: Binding(
                         get: { sidebar.attachTo.contains(b.bundleId) },
                         set: { on in if on { sidebar.attachTo.insert(b.bundleId) } else { sidebar.attachTo.remove(b.bundleId) } }))
+                }
+            }
+            LabeledContent("Show or hide") {
+                HStack {
+                    ShortcutRecorder(shortcut: $sidebar.shortcut)
+                    if sidebar.shortcut != .sidebarDefault {
+                        Button("Reset") { sidebar.shortcut = .sidebarDefault }
+                    }
                 }
             }
             LabeledContent("Width") {
@@ -306,5 +314,50 @@ private struct LatencyFooter: View {
         }
         .font(DS.TextStyle.caption.monospacedDigit())
         .foregroundStyle(DS.Palette.textTertiary)
+    }
+}
+
+/// Click, then press the new shortcut. Escape cancels. It needs Control,
+/// Option or Command, so it never takes ordinary typing.
+private struct ShortcutRecorder: View {
+    @Binding var shortcut: Shortcut
+    @State private var recording = false
+    @State private var monitor: Any?
+    @State private var hint: String?
+
+    var body: some View {
+        VStack(alignment: .trailing, spacing: 2) {
+            Button(recording ? "Press a shortcut…" : shortcut.display) { recording ? stop() : start() }
+                .monospaced()
+                .accessibilityLabel(recording ? "Recording a shortcut" : "Shortcut \(shortcut.display). Click to change.")
+            if let hint { Text(hint).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary) }
+        }
+        .onDisappear(perform: stop)
+    }
+
+    private func start() {
+        recording = true
+        hint = "Use Control, Option or Command with a key. Esc cancels."
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            if e.keyCode == 53 { stop(); return nil } // Escape
+            var m: UInt32 = 0
+            let f = e.modifierFlags
+            if f.contains(.command) { m |= Shortcut.command }
+            if f.contains(.shift) { m |= Shortcut.shift }
+            if f.contains(.option) { m |= Shortcut.option }
+            if f.contains(.control) { m |= Shortcut.control }
+            let s = Shortcut(keyCode: UInt32(e.keyCode), modifiers: m, key: (e.charactersIgnoringModifiers ?? "").uppercased())
+            guard s.isValid else { hint = "Add Control, Option or Command."; return nil }
+            shortcut = s
+            stop()
+            return nil
+        }
+    }
+
+    private func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+        recording = false
+        hint = nil
     }
 }

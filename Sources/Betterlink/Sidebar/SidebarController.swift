@@ -20,6 +20,8 @@ final class SidebarController: ObservableObject {
     /// Hidden for now with the shortcut or the menu: the window gets its space
     /// back, and showing it again makes room again (like collapsing Arc's sidebar).
     @Published private(set) var collapsed: Bool
+    /// Shows and hides the sidebar while an attached browser is in front.
+    @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
     /// The browser window the sidebar is bound to right now. Its `frame` is
@@ -70,6 +72,7 @@ final class SidebarController: ObservableObject {
         tracker = WindowTracker(browserBundleIds: attach)
         attachTo = attach
         collapsed = defaults.bool(forKey: "sidebar.collapsed")
+        shortcut = Shortcut.load(defaults, key: "sidebar.shortcut") ?? .sidebarDefault
         enabled = defaults.bool(forKey: "sidebar.enabled")
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
         memory = defaults.data(forKey: "sidebar.fitMemory").flatMap { try? JSONDecoder().decode(FitMemory.self, from: $0) } ?? FitMemory()
@@ -79,6 +82,7 @@ final class SidebarController: ObservableObject {
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
         hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
+        hotKey.shortcut = shortcut
         // betterlink's own window coming forward keeps the sidebar bound (the
         // tracker ignores it). The panel then drops to a normal level, just
         // above the browser window, so it stays beside the browser (the Side
@@ -168,6 +172,7 @@ final class SidebarController: ObservableObject {
         defaults.set(width, forKey: "sidebar.width")
         defaults.set(Array(attachTo).sorted(), forKey: "sidebar.browsers")
         defaults.set(collapsed, forKey: "sidebar.collapsed")
+        shortcut.save(defaults, key: "sidebar.shortcut")
     }
 
     // MARK: - Layout

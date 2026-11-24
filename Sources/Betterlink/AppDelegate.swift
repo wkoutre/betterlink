@@ -229,7 +229,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let item = menu.addItem(withTitle: sidebar.collapsed ? "Show Sidebar" : "Hide Sidebar",
                                     action: #selector(toggleSidebar), keyEquivalent: "")
             item.target = self
-            item.toolTip = "Or press \(SidebarHotKey.display) while the browser is in front."
+            item.toolTip = "Or press \(sidebar.shortcut.display) while the browser is in front."
         }
         menu.addItem(.separator())
         let recent = model.log.recentLinks(10)
