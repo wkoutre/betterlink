@@ -13,9 +13,13 @@ public struct SyncDeviceFile: Codable, Equatable, Sendable {
     public var name: String
     public var written: Date
     public var state: SyncState
+    /// The browser profile this Mac put in place for each synced target
+    /// (SyncModel.project). This Mac's own; other Macs ignore it.
+    public var applied: [String: ProfileRef]?
 
-    public init(device: String, name: String, written: Date, state: SyncState) {
+    public init(device: String, name: String, written: Date, state: SyncState, applied: [String: ProfileRef]? = nil) {
         self.format = Self.format; self.device = device; self.name = name; self.written = written; self.state = state
+        self.applied = applied
     }
 }
 
@@ -39,13 +43,17 @@ public struct SyncFolder: Sendable {
 
     /// Every Mac's file that can be read now. A half-downloaded or broken file
     /// is skipped until it changes; a file from a newer betterlink is skipped
-    /// and named in `newer`.
-    public func readAll() -> (files: [SyncDeviceFile], skipped: [String], newer: [String]) {
+    /// and named in `newer`. A file that another user owns or can change, or
+    /// that sits in such a folder, is refused and named in `unsafe`: device
+    /// files carry Link Rules and config.ts, which is code (FileSafety, the
+    /// check config.ts itself gets).
+    public func readAll(uid: uid_t = getuid()) -> (files: [SyncDeviceFile], skipped: [String], newer: [String], unsafe: [String]) {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
-        var files: [SyncDeviceFile] = [], skipped: [String] = [], newer: [String] = []
+        var files: [SyncDeviceFile] = [], skipped: [String] = [], newer: [String] = [], unsafe: [String] = []
         let names = (try? FileManager.default.contentsOfDirectory(atPath: devices.path)) ?? []
         for n in names.sorted() where n.hasSuffix(".json") {
+            if let problem = FileSafety.problem(with: devices.appendingPathComponent(n), uid: uid) { unsafe.append("\(n): \(problem)"); continue }
             guard let data = FileManager.default.contents(atPath: devices.appendingPathComponent(n).path) else { skipped.append(n); continue }
             if let head = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let format = head["format"] as? Int, format > SyncDeviceFile.format {
@@ -54,7 +62,7 @@ public struct SyncFolder: Sendable {
             guard let f = try? d.decode(SyncDeviceFile.self, from: data) else { skipped.append(n); continue }
             files.append(f)
         }
-        return (files, skipped, newer)
+        return (files, skipped, newer, unsafe)
     }
 }
 
@@ -74,6 +82,9 @@ public final class SyncSession {
     /// What this Mac's file holds now, so it is rewritten whenever the state
     /// moves on, merged changes from other Macs included.
     private var written: SyncState?
+    private var writtenApplied: [String: ProfileRef]?
+    /// What materialize last put in place for each synced target.
+    private var applied: [String: ProfileRef] = [:]
 
     /// What the last pull changed that wasn't this Mac's own choice, for the Log.
     public struct Report: Equatable, Sendable {
@@ -82,6 +93,7 @@ public final class SyncSession {
         public var notes = SyncModel.Notes()
         public var skipped: [String] = []
         public var newer: [String] = []
+        public var unsafe: [String] = []
     }
 
     public init(settings: SettingsFolder, folder: SyncFolder, device: String, name: String, selection: SyncSelection,
@@ -94,6 +106,8 @@ public final class SyncSession {
         if let mine = folder.readAll().files.first(where: { $0.device == device }) {
             state = mine.state
             written = mine.state
+            applied = mine.applied ?? [:]
+            writtenApplied = mine.applied
             if let m = state.maxStamp { clock.observe(m) }
         }
     }
@@ -102,10 +116,13 @@ public final class SyncSession {
     private var sidebar: SidebarStore { SidebarStore(folder: settings) }
     private var configText: String? { try? String(contentsOf: settings.configFile, encoding: .utf8) }
 
+    /// This Mac's settings as entities. An unreadable sidebar.json or
+    /// rules.json throws and stops the sync: reading it as empty would delete
+    /// everything in it on every Mac.
     private func local() throws -> [String: [String: SyncValue]] {
-        var out = SyncModel.project(rules: try rules.load(), library: (try? sidebar.load()) ?? .starter, selection: selection,
-                                    identity: identity, state: state)
-        if selection.global { out[SyncModel.globalID, default: [:]]["config"] = .of(configText) }
+        var out = SyncModel.project(rules: try rules.load(), library: try sidebar.load(), selection: selection,
+                                    identity: identity, state: state, applied: applied)
+        if selection.global { out[SyncModel.configID] = ["text": .of(configText)] }
         return out
     }
 
@@ -115,15 +132,35 @@ public final class SyncSession {
     /// seen. Returns whether it wrote.
     @discardableResult
     public func push(now: Date = Date()) throws -> Bool {
-        // Stamp an edit with when its file was saved, not when it was noticed,
-        // so of two saves moments apart on two Macs the later one wins.
-        let saved = [settings.rulesFile, settings.configFile, settings.directory.appendingPathComponent("sidebar.json")]
-            .compactMap { try? $0.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate }
-            .filter { $0 <= now }.max()
-        state.record(try local(), scope: SyncModel.scope(selection, state: state), clock: &clock, now: Self.ms(saved ?? now))
-        guard state != written || !FileManager.default.fileExists(atPath: folder.file(for: device).path) else { return false }
-        try folder.write(SyncDeviceFile(device: device, name: name, written: now, state: state))
+        let local = try local()
+        let scope = SyncModel.scope(selection, state: state)
+        if written == nil, folder.readAll().files.contains(where: { $0.device != device }) {
+            // This Mac joins Macs already syncing: what it has is stamped
+            // older than anything they shared, so shared settings win and
+            // only what is this Mac's alone is added. (The first Mac in a
+            // folder stamps normally, so the next one to join can't win.)
+            var zero = HLCClock(device: device)
+            state.record(local, scope: { _ in false }, clock: &zero, now: 0)
+        } else {
+            // Stamp an edit with when its file was saved, not when it was
+            // noticed, so of two saves moments apart on two Macs the later
+            // one wins. Each file stamps only its own settings.
+            let sidebarFile = settings.directory.appendingPathComponent("sidebar.json")
+            let groups: [(URL, (String) -> Bool)] = [
+                (settings.rulesFile, { $0 == SyncModel.globalID || $0.hasPrefix("rule:") || $0.hasPrefix("mod:") }),
+                (settings.configFile, { $0 == SyncModel.configID }),
+                (sidebarFile, { $0.hasPrefix("sp:") || $0.hasPrefix("node:") }),
+            ]
+            for (file, mine) in groups {
+                let saved = (try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate).map { min($0, now) }
+                state.record(local.filter { mine($0.key) }, scope: { mine($0) && scope($0) }, clock: &clock, now: Self.ms(saved ?? now))
+            }
+        }
+        guard state != written || applied != (writtenApplied ?? [:])
+                || !FileManager.default.fileExists(atPath: folder.file(for: device).path) else { return false }
+        try folder.write(SyncDeviceFile(device: device, name: name, written: now, state: state, applied: applied))
         written = state
+        writtenApplied = applied
         return true
     }
 
@@ -136,17 +173,18 @@ public final class SyncSession {
         // Local edits first, so they are stamped before anything newer lands.
         try push(now: now)
         let read = folder.readAll()
-        report.skipped = read.skipped; report.newer = read.newer
+        report.skipped = read.skipped; report.newer = read.newer; report.unsafe = read.unsafe
         for f in read.files where f.device != device { state = state.merged(with: f.state) }
         otherDevices = read.files.filter { $0.device != device }.map(\.name)
         if let m = state.maxStamp { clock.observe(m) }
 
-        let before = (try rules.load(), (try? sidebar.load()) ?? .starter)
+        let before = (try rules.load(), try sidebar.load())
         let r = SyncModel.materialize(state, rules: before.0, library: before.1, selection: selection, resolve: resolve)
         report.notes = r.notes
+        applied = r.applied
         if r.rules != before.0 { _ = try rules.update { $0 = r.rules }; report.changedSettings = true }
         if r.library != before.1 { _ = try sidebar.update { $0 = r.library }; report.changedSettings = true }
-        if selection.global, let synced = state.value(SyncModel.globalID, "config") {
+        if selection.global, let synced = state.value(SyncModel.configID, "text") {
             let mine = configText
             if synced.string != mine {
                 if let mine, !mine.isEmpty {

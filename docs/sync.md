@@ -1,6 +1,6 @@
 # Sync (design)
 
-Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession; the app's SyncController and General › Sync).
+Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession; the app's SyncController and General › Sync). Not built yet: the Log note with a Restore button for a losing edit, and the Link Rules page's mark on a rule whose profile this Mac lacks.
 
 betterlink syncs your settings between Macs through a folder that Dropbox, Google Drive or iCloud Drive already keeps in sync. There's no account, server or API key. You choose what syncs. Two Macs editing at the same time always end up identical, and nothing is lost silently.
 
@@ -42,7 +42,7 @@ Every field of every entity is stored with a **stamp**:
 Edits made at nearly the same time:
 
 - **Different fields of the same item merge.** One Mac renames a folder while another moves it: both happen.
-- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. If the losing edit was this Mac's own, the Log says so, with the losing value and a Restore button. An edit is stamped with when its settings file was saved, so of two saves moments apart on two Macs the later save wins (live: B saving 0.3 s after A won three times out of three).
+- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. (Planned, not built: when the losing edit was this Mac's own, a Log note with the losing value and a Restore button.) An edit is stamped with when its settings file was saved (rules.json for rules and global settings, config.ts for config.ts, sidebar.json for Sidebar Profiles), so of two saves moments apart on two Macs the later save wins (live: B saving 0.3 s after A won three times out of three).
 
 ## Lists and moves
 
@@ -61,18 +61,21 @@ Edits made at nearly the same time:
 
 config.ts is code and can't be merged field by field.
 
-- It syncs as one field of the global settings: the newest version wins (its stamp is when it was last saved).
+- It syncs as its own entity, part of the global settings switch: the newest version wins (its stamp is when it was last saved).
 - The version it replaces is saved beside it as `config.ts.<Mac name>.<date>.bak`, and the Log links to it.
 
 ## Live
 
-- Every Mac watches the sync folder (FSEvents; the existing PathWatcher) and merges within about a second of a file landing.
-- A Mac writes its own file at most once a second, after edits stop for 0.5 s.
+- Every Mac watches the sync folder (FSEvents; the existing PathWatcher, 0.3 s debounce) and its settings folder (0.5 s), and syncs 0.2 s after either changes. It also checks every 30 s, since a cloud app can replace a file without the folder noticing. Live, a change reached the other copy in about a second.
+- A Mac rewrites its own file only when its state changed.
 - A merge that changes anything saves rules.json and sidebar.json as usual. So the rest of betterlink, the CLI and the folder watch see ordinary file changes.
 
 ## Failure and edge cases
 
 - **An unreadable or half-written device file** is skipped until it changes.
+- **An unreadable rules.json or sidebar.json on this Mac** stops the sync with an error in Sync settings. Reading it as empty would delete everything in it on every Mac.
+- **A Mac joining Macs that already sync:** its first sync stamps what it already has older than anything shared. Shared settings win every conflict, and what only this Mac has (a rule, a profile) is added for everyone. The first Mac in a folder stamps normally, so the next Mac to join can't override it.
+- **A device file another user owns or can change** (or one in such a folder) is refused and named in the Log, with the check config.ts itself gets (FileSafety). Device files carry Link Rules and config.ts, which is code: anyone who can write into the sync folder as you can change what betterlink runs. Share the folder with no one.
 - **A file from a newer format version** (`v2`) is ignored, and the Log asks to update betterlink.
 - **A Mac with a clock far ahead** issues high stamps. The HLC keeps everyone after them, and edits still apply in the order they were made.
 - **The sync folder disappears** (the provider quits, or the folder is renamed): sync pauses, says so in Sync settings, and resumes when the folder is back. Nothing local is removed.
@@ -94,4 +97,6 @@ config.ts is code and can't be merged field by field.
 
 ## Rules on another Mac
 
-Link Rules, modifier rules and the fallback point at a browser profile by its folder in the browser ("Default", "Profile 1"), and the same Chrome profile can sit in a different folder on another Mac. So a synced rule also carries the profile's signed-in Google account and display name, from the browser's Local State. Each Mac finds the profile by account first, then by display name (Nick, 2026-11-24). A rule whose profile isn't on this Mac opens in the fallback, and the Link Rules page marks it.
+Link Rules, modifier rules and the fallback point at a browser profile by its folder in the browser ("Default", "Profile 1"), and the same Chrome profile can sit in a different folder on another Mac. So a synced rule also carries the profile's signed-in Google account and display name, from the browser's Local State. Each Mac finds the profile by account first, then by display name (Nick, 2026-11-24). A rule whose profile isn't on this Mac opens in the fallback (the same browser's Default profile when none is set), never in a profile that only shares the other Mac's folder name; the Log says how many such rules there are when that number changes (the Link Rules page's mark is not built yet). Safari and Firefox have no profiles to match, so their rules apply as they are.
+
+Each Mac remembers which of its own profiles it put in place for each synced rule (`applied` in its device file). While a rule still points there, the Mac sends the synced profile fields back unchanged, so two Macs with the profile in different folders never overwrite each other. Pointing the rule at another profile on any Mac is an edit and syncs as one. The fallback works the same way, and a synced fallback this Mac can't match leaves this Mac's own.

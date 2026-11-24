@@ -30,6 +30,10 @@ final class SyncController: ObservableObject {
     private var timer: Timer?
     private var pending: DispatchWorkItem?
     private var note: (String) -> Void = { _ in }
+    /// What the Log last said about rules with no matching profile and about
+    /// refused device files, so it speaks only when that changes.
+    private var lastUnresolved: Set<UUID> = []
+    private var lastUnsafe: [String] = []
 
     /// This Mac, as other Macs' Logs name it.
     lazy var deviceName = testDevice.map { "Test \($0)" } ?? Host.current().localizedName ?? "Mac"
@@ -121,9 +125,15 @@ final class SyncController: ObservableObject {
             if let bak = r.configReplaced {
                 note("config.ts was replaced by a newer one from another Mac. Yours is kept as \(bak.lastPathComponent).")
             }
-            if !r.notes.unresolvedRules.isEmpty {
-                note("\(r.notes.unresolvedRules.count) synced rule(s) point at a browser profile this Mac doesn't have; they open in the fallback.")
+            let unresolved = Set(r.notes.unresolvedRules)
+            if unresolved != lastUnresolved, !unresolved.isEmpty {
+                note("\(unresolved.count) synced rule(s) point at a browser profile this Mac doesn't have; they open in the fallback.")
             }
+            lastUnresolved = unresolved
+            if r.unsafe != lastUnsafe {
+                for u in r.unsafe { note("Sync refused another Mac's file, \(u).") }
+            }
+            lastUnsafe = r.unsafe
             if !r.notes.orphansMovedToTop.isEmpty {
                 note("\(r.notes.orphansMovedToTop.count) saved item(s) were in a folder another Mac deleted; they are at the top of the sidebar now.")
             }
@@ -156,6 +166,8 @@ final class SyncController: ObservableObject {
     }
 
     private func resolve(_ browser: String, _ directory: String, _ who: ProfileIdentity) -> String? {
+        // Safari and Firefox have no profiles here to match: the same name works.
+        guard let known = Browser.known(bundleId: browser), known.dataFolder != nil else { return directory }
         guard let data = localState(browser) else { return nil }
         let profiles = ProfileCatalog.parse(localStateJSON: data, browser: browser).profiles
         return ProfileCatalog.resolve(who, profiles: profiles, accounts: ProfileCatalog.accounts(localStateJSON: data))

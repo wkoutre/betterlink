@@ -40,6 +40,7 @@ public enum SyncModel {
     static func profileID(_ id: UUID) -> String { "sp:\(id.uuidString)" }
     static func nodeID(_ id: UUID) -> String { "node:\(id.uuidString)" }
     static let globalID = "global"
+    static let configID = "config"
 
     static func uuid(_ entity: String) -> UUID? {
         entity.split(separator: ":", maxSplits: 1).last.flatMap { UUID(uuidString: String($0)) }
@@ -50,34 +51,48 @@ public enum SyncModel {
     /// The entities this Mac's settings say should exist, with their field
     /// values. Positions keep the ones already in `state` where the order
     /// still agrees, so a sync never renumbers a whole list.
+    ///
+    /// `applied` is the browser profile this Mac last put in place for each
+    /// synced target (materialize's `applied`). A local target still equal to
+    /// it is the synced one, translated to this Mac's folder names, so the
+    /// synced fields go out unchanged: a Mac never pushes its own folder name
+    /// over another Mac's for the same profile. A target that differs was
+    /// edited here and goes out with this Mac's identity of it.
     public static func project(rules: RuleStore.Contents, library: SidebarLibrary, selection: SyncSelection,
-                               identity: (ProfileRef) -> ProfileIdentity, state: SyncState) -> [String: [String: SyncValue]] {
+                               identity: (ProfileRef) -> ProfileIdentity, state: SyncState,
+                               applied: [String: ProfileRef] = [:]) -> [String: [String: SyncValue]] {
         var out: [String: [String: SyncValue]] = [:]
         func existing(_ ids: [String]) -> [String: String] {
             Dictionary(uniqueKeysWithValues: ids.compactMap { id in state.value(id, "position")?.string.map { (id, $0) } })
+        }
+        /// The four fields naming a target: the synced ones when this Mac
+        /// hasn't changed what sync applied, else this Mac's own.
+        func target(_ id: String, _ local: ProfileRef?, _ k: TargetKeys) -> [String: SyncValue] {
+            if applied[id] == (local ?? noProfile), state.value(id, k.browser) != nil {
+                return [k.browser: state.value(id, k.browser) ?? .null, k.directory: state.value(id, k.directory) ?? .null,
+                        k.name: state.value(id, k.name) ?? .null, k.account: state.value(id, k.account) ?? .null]
+            }
+            let who = local.map(identity)
+            return [k.browser: .of(local?.browser), k.directory: .of(local?.directory), k.name: .of(who?.name), k.account: .of(who?.account)]
         }
         if selection.global {
             let ids = rules.rules.map { ruleID($0.id) }
             let pos = FractionalIndex.positions(for: ids, existing: existing(ids))
             for r in rules.rules {
-                let who = identity(r.target)
-                out[ruleID(r.id)] = ["kind": .string(r.kind.rawValue), "pattern": .string(r.pattern), "browser": .string(r.browser),
-                                     "profile": .string(r.profile), "profileName": .of(who.name), "profileAccount": .of(who.account),
-                                     "position": .string(pos[ruleID(r.id)]!)]
+                let id = ruleID(r.id)
+                out[id] = target(id, r.target, .rule).merging(["kind": .string(r.kind.rawValue), "pattern": .string(r.pattern),
+                                                               "position": .string(pos[id]!)]) { a, _ in a }
             }
             let mods = rules.modifierRules ?? []
             let mids = mods.map { modID($0.id) }
             let mpos = FractionalIndex.positions(for: mids, existing: existing(mids))
             for m in mods {
-                let who = identity(m.target)
-                out[modID(m.id)] = ["keys": .number(Double(m.keys.rawValue)), "browser": .string(m.browser), "profile": .string(m.profile),
-                                    "profileName": .of(who.name), "profileAccount": .of(who.account), "position": .string(mpos[modID(m.id)]!)]
+                let id = modID(m.id)
+                out[id] = target(id, m.target, .rule).merging(["keys": .number(Double(m.keys.rawValue)),
+                                                               "position": .string(mpos[id]!)]) { a, _ in a }
             }
-            let fb = rules.fallback
-            let who = fb.map(identity)
-            out[globalID] = ["fallbackBrowser": .of(fb?.browser), "fallbackProfile": .of(fb?.directory),
-                             "fallbackName": .of(who?.name), "fallbackAccount": .of(who?.account),
-                             "showLog": rules.showLog.map { .bool($0) } ?? .null]
+            out[globalID] = target(globalID, rules.fallback, .fallback)
+                .merging(["showLog": rules.showLog.map { .bool($0) } ?? .null]) { a, _ in a }
         }
         for p in library.profiles {
             guard let parts = selection.profiles[p.id] else { continue }
@@ -109,6 +124,16 @@ public enum SyncModel {
         return out
     }
 
+    /// `applied` for "no profile": a synced fallback this Mac couldn't match
+    /// while it had none of its own.
+    static let noProfile = ProfileRef(browser: "", directory: "")
+
+    struct TargetKeys {
+        let browser, directory, name, account: String
+        static let rule = TargetKeys(browser: "browser", directory: "profile", name: "profileName", account: "profileAccount")
+        static let fallback = TargetKeys(browser: "fallbackBrowser", directory: "fallbackProfile", name: "fallbackName", account: "fallbackAccount")
+    }
+
     static func linkFields(_ l: SavedLink, profile: UUID, container: String, parent: UUID?, position: String) -> [String: SyncValue] {
         ["kind": .string("link"), "profile": .string(profile.uuidString), "container": .string(container),
          "parent": .of(parent?.uuidString), "position": .string(position), "title": .string(l.title), "url": .string(l.url), "icon": .of(l.icon)]
@@ -118,7 +143,7 @@ public enum SyncModel {
     /// marked deleted only when it is in this Mac's selection.
     public static func scope(_ selection: SyncSelection, state: SyncState) -> (String) -> Bool {
         { id in
-            if id == globalID || id.hasPrefix("rule:") || id.hasPrefix("mod:") { return selection.global }
+            if id == globalID || id == configID || id.hasPrefix("rule:") || id.hasPrefix("mod:") { return selection.global }
             if id.hasPrefix("sp:") { return uuid(id).flatMap { selection.profiles[$0] } != nil }
             if id.hasPrefix("node:") {
                 guard let p = state.value(id, "profile")?.string.flatMap(UUID.init(uuidString:)),
@@ -141,11 +166,17 @@ public enum SyncModel {
     /// This Mac's settings rebuilt from the merged state, for everything in
     /// the selection; everything else stays as it is locally. `resolve` finds
     /// a browser profile on this Mac from another Mac's (account, then name).
+    /// A rule whose profile this Mac doesn't have opens in this Mac's
+    /// fallback (the same browser's Default profile when none is set), never
+    /// in whatever profile happens to share the other Mac's folder name.
+    /// `applied` says which local profile each synced target became, for
+    /// `project`.
     public static func materialize(_ state: SyncState, rules local: RuleStore.Contents, library: SidebarLibrary,
                                    selection: SyncSelection,
                                    resolve: (_ browser: String, _ directory: String, ProfileIdentity) -> String?)
-    -> (rules: RuleStore.Contents, library: SidebarLibrary, notes: Notes) {
+    -> (rules: RuleStore.Contents, library: SidebarLibrary, notes: Notes, applied: [String: ProfileRef]) {
         var notes = Notes()
+        var applied: [String: ProfileRef] = [:]
         var rules = local
         func live(_ prefix: String) -> [(String, [String: Stamped])] {
             state.entities.filter { $0.key.hasPrefix(prefix) && state.isLive($0.key) }
@@ -154,35 +185,45 @@ public enum SyncModel {
                     return pa != pb ? pa < pb : a.key < b.key
                 }
         }
-        func target(_ f: [String: Stamped], _ browserKey: String, _ dirKey: String, _ nameKey: String, _ accountKey: String) -> (String, String, Bool) {
-            let browser = f[browserKey]?.value.string ?? "", dir = f[dirKey]?.value.string ?? ""
-            let who = ProfileIdentity(name: f[nameKey]?.value.string, account: f[accountKey]?.value.string)
-            if let d = resolve(browser, dir, who) { return (browser, d, true) }
-            return (browser, dir, false)
+        /// The local profile for a synced target, or nil when this Mac has none.
+        func resolved(_ id: String, _ k: TargetKeys) -> ProfileRef? {
+            guard let browser = state.value(id, k.browser)?.string, let dir = state.value(id, k.directory)?.string else { return nil }
+            let who = ProfileIdentity(name: state.value(id, k.name)?.string, account: state.value(id, k.account)?.string)
+            return resolve(browser, dir, who).map { ProfileRef(browser: browser, directory: $0) }
         }
         if selection.global {
-            rules.rules = live("rule:").compactMap { id, f in
-                guard let u = uuid(id), let kind = f["kind"]?.value.string.flatMap(Rule.Kind.init(rawValue:)),
-                      let pattern = f["pattern"]?.value.string else { return nil }
-                let (b, d, ok) = target(f, "browser", "profile", "profileName", "profileAccount")
-                if !ok { notes.unresolvedRules.append(u) }
-                return Rule(id: u, kind: kind, pattern: pattern, browser: b, profile: d)
-            }
-            let mods: [ModifierRule] = live("mod:").compactMap { id, f in
-                guard let u = uuid(id), let k = f["keys"]?.value.number else { return nil }
-                let (b, d, _) = target(f, "browser", "profile", "profileName", "profileAccount")
-                return ModifierRule(id: u, keys: ModifierKeys(rawValue: Int(k)), browser: b, profile: d)
-            }
-            rules.modifierRules = mods.isEmpty && local.modifierRules == nil ? nil : mods
+            // The fallback first: unmatched rules open there.
             if let g = state.entities[globalID] {
-                if let b = g["fallbackBrowser"]?.value.string, let d = g["fallbackProfile"]?.value.string {
-                    let (bb, dd, _) = target(g, "fallbackBrowser", "fallbackProfile", "fallbackName", "fallbackAccount")
-                    rules.fallback = ProfileRef(browser: bb.isEmpty ? b : bb, directory: dd.isEmpty ? d : dd)
+                if g["fallbackBrowser"]?.value.string != nil {
+                    // A fallback profile this Mac doesn't have keeps this Mac's own.
+                    if let ref = resolved(globalID, .fallback) { rules.fallback = ref }
+                    applied[globalID] = rules.fallback ?? noProfile
                 } else if g["fallbackBrowser"] != nil {
                     rules.fallback = nil
                 }
                 if let v = g["showLog"]?.value { rules.showLog = v.bool }
             }
+            func place(_ id: String) -> ProfileRef? {
+                guard let browser = state.value(id, "browser")?.string else { return nil }
+                if let ref = resolved(id, .rule) { applied[id] = ref; return ref }
+                let ref = rules.fallback ?? ProfileRef(browser: browser, directory: "Default")
+                applied[id] = ref
+                return nil
+            }
+            rules.rules = live("rule:").compactMap { id, f in
+                guard let u = uuid(id), let kind = f["kind"]?.value.string.flatMap(Rule.Kind.init(rawValue:)),
+                      let pattern = f["pattern"]?.value.string, f["browser"]?.value.string != nil else { return nil }
+                if place(id) == nil { notes.unresolvedRules.append(u) }
+                let ref = applied[id]!
+                return Rule(id: u, kind: kind, pattern: pattern, browser: ref.browser, profile: ref.directory)
+            }
+            let mods: [ModifierRule] = live("mod:").compactMap { id, f in
+                guard let u = uuid(id), let k = f["keys"]?.value.number, f["browser"]?.value.string != nil else { return nil }
+                _ = place(id)
+                let ref = applied[id]!
+                return ModifierRule(id: u, keys: ModifierKeys(rawValue: Int(k)), browser: ref.browser, profile: ref.directory)
+            }
+            rules.modifierRules = mods.isEmpty && local.modifierRules == nil ? nil : mods
         }
 
         var lib = library
@@ -206,7 +247,7 @@ public enum SyncModel {
             }
             if let i = lib.profiles.firstIndex(where: { $0.id == pid }) { lib.profiles[i] = p } else { lib.profiles.append(p) }
         }
-        return (rules, lib, notes)
+        return (rules, lib, notes, applied)
     }
 
     static func link(_ key: String, _ f: [String: Stamped]) -> SavedLink? {
