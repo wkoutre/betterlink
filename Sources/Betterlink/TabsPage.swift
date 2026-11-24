@@ -238,13 +238,6 @@ private struct SidebarSettings: View {
                     Text("\(Int(sidebar.width)) pt").monospacedDigit().foregroundStyle(DS.Palette.textSecondary)
                 }
             }
-            Toggle(isOn: $sidebar.makeRoom) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Make room")
-                    Text("Narrows the browser window when it fills the screen, instead of covering its edge.")
-                        .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                }
-            }
         } header: {
             Text("Sidebar")
         }

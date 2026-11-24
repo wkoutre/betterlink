@@ -11,18 +11,28 @@ final class SidebarController: ObservableObject {
     static let shared = SidebarController()
 
     @Published var enabled: Bool { didSet { save(); enabled ? start() : stop() } }
-    @Published var side: SidebarSide { didSet { save(); relayout(rebind: true) } }
-    @Published var width: Double { didSet { save(); relayout(rebind: false) } }
-    @Published var makeRoom: Bool { didSet { save(); relayout(rebind: true) } }
+    @Published var side: SidebarSide { didSet { save(); refit() } }
+    @Published var width: Double { didSet { save(); refit() } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
-    /// The browser window the sidebar is bound to right now.
+    /// The browser window the sidebar is bound to right now. Its `frame` is
+    /// only as fresh as the last change of window or title, so a drag doesn't
+    /// redraw the tab list; `current` has the live frame.
     @Published private(set) var target: WindowTracker.Target?
     @Published private(set) var placedSide: SidebarSide = .right
 
     private let tracker: WindowTracker
     private var panel: SidebarPanel?
-    private var boundWindow: Int?
+    private var current: WindowTracker.Target?
+    /// A window this sidebar resized, by window: the space the user gave the
+    /// pair, and the frame the window took inside it.
+    private struct Fit { var outer: CGRect, inner: CGRect, side: SidebarSide }
+    private var fits: [Int: Fit] = [:]
+    /// The narrowest a browser let its window get, by window, once it stopped us.
+    private var minWidths: [Int: CGFloat] = [:]
+    private var askedAt = Date.distantPast
+    /// The frame a window would not give up, so it isn't asked again.
+    private var refused: CGRect?
     private var trustToken: NSObjectProtocol?
     /// A separate domain while `BETTERLINK_HOME` is set, like the menu bar icon.
     private let defaults = MenuBarIcon.defaults()
@@ -33,8 +43,8 @@ final class SidebarController: ObservableObject {
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
         let w = defaults.double(forKey: "sidebar.width")
         width = w >= 200 ? w : 280
-        makeRoom = defaults.bool(forKey: "sidebar.makeRoom")
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
+        tracker.onSettle = { [weak self] t in self?.settle(t) }
         // macOS posts this whenever any app's Accessibility permission changes.
         trustToken = DistributedNotificationCenter.default().addObserver(
             forName: NSNotification.Name("com.apple.accessibility.api"), object: nil, queue: .main
@@ -61,9 +71,12 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
+        // Give the window back the space the sidebar took.
+        if let t = current, let f = fits[t.windowHash], Self.same(t.frame, f.inner) { tracker.setWindowFrame(f.outer) }
+        fits = [:]
+        minWidths = [:]
         tracker.stop()
         panel?.orderOut(nil)
-        boundWindow = nil
     }
 
     private func trustMayHaveChanged() {
@@ -77,42 +90,110 @@ final class SidebarController: ObservableObject {
         defaults.set(enabled, forKey: "sidebar.enabled")
         defaults.set(side.rawValue, forKey: "sidebar.side")
         defaults.set(width, forKey: "sidebar.width")
-        defaults.set(makeRoom, forKey: "sidebar.makeRoom")
     }
 
     // MARK: - Layout
 
     private func targetChanged(_ t: WindowTracker.Target?) {
-        target = t
-        relayout(rebind: false)
+        current = t
+        var shown = t
+        if let old = target { shown?.frame = old.frame }
+        if shown != target { target = t }
+        layout()
     }
 
-    private func relayout(rebind: Bool) {
-        guard enabled, let t = target, !t.fullScreen else {
+    /// Frames within a point count as the same: the browser rounds.
+    private static func same(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
+    }
+
+    private func screen(for frame: CGRect) -> CGRect {
+        (NSScreen.screens.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area }
+            ?? NSScreen.main)?.visibleFrame ?? frame
+    }
+
+    /// The window came to rest: make the pair fill the space the window was given.
+    private func settle(_ t: WindowTracker.Target) {
+        guard enabled, !t.fullScreen else { return }
+        if let r = refused, !Self.same(r, t.frame) { refused = nil }
+        var outer = t.frame
+        if let f = fits[t.windowHash] {
+            if Self.same(f.inner, t.frame) { return }
+            if learnMinWidth(asked: f.inner, got: t) {
+                outer = f.outer // the browser widened it again after we asked
+            }
+            fits[t.windowHash] = nil // otherwise the user moved, resized or snapped it again
+        }
+        guard refused == nil else { return }
+        fit(t, into: outer)
+        layout()
+    }
+
+    /// Narrows the window so it and the sidebar fill `outer`. A browser that
+    /// stops at its minimum width is asked once more, with that width known, so
+    /// the pair stays on the screen.
+    private func fit(_ t: WindowTracker.Target, into outer: CGRect) {
+        let screen = screen(for: outer)
+        for _ in 0..<2 {
+            guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: side,
+                                                      minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
+            fits[t.windowHash] = Fit(outer: outer, inner: inner,
+                                     side: SidebarGeometry.resolve(side, window: outer, screen: screen))
+            askedAt = Date()
+            tracker.setWindowFrame(inner)
+            guard let now = current, now.windowHash == t.windowHash else { return }
+            if Self.same(now.frame, inner) { return }
+            if learnMinWidth(asked: inner, got: now) { continue }
+            if Self.same(now.frame, t.frame) {
+                fits[t.windowHash] = nil
+                refused = t.frame
+            } else {
+                fits[t.windowHash]?.inner = now.frame
+            }
+            return
+        }
+        if let now = current, now.windowHash == t.windowHash { fits[t.windowHash]?.inner = now.frame }
+    }
+
+    /// True when the window kept the place it was asked to take but is wider
+    /// than asked, by a width not known yet: the browser's minimum. Only right
+    /// after asking; later, it is the user widening the window.
+    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target) -> Bool {
+        guard Date().timeIntervalSince(askedAt) < 0.5, abs(t.frame.minX - asked.minX) < 2, abs(t.frame.height - asked.height) < 2,
+              t.frame.width > asked.width + 2, t.frame.width > (minWidths[t.windowHash] ?? 0) + 2 else { return false }
+        minWidths[t.windowHash] = t.frame.width
+        return true
+    }
+
+    /// The side or width changed: start again from the space the pair was given.
+    private func refit() {
+        guard enabled, let t = current else { return }
+        refused = nil
+        if let f = fits[t.windowHash], Self.same(f.inner, t.frame) {
+            fits[t.windowHash] = nil
+            tracker.setWindowFrame(f.outer)
+        }
+        if let now = current { settle(now) }
+        layout()
+    }
+
+    private func layout() {
+        guard enabled, let t = current, !t.fullScreen else {
             panel?.orderOut(nil)
             return
         }
-        if rebind { boundWindow = nil }
-        let screen = (NSScreen.screens.max { a, b in
-            a.frame.intersection(t.frame).area < b.frame.intersection(t.frame).area
-        } ?? NSScreen.main)?.visibleFrame ?? t.frame
-        let firstBind = boundWindow != t.windowHash
-        boundWindow = t.windowHash
-        // Make room only when binding to a window (or when a setting changes),
-        // never while the user is moving or resizing it: that would fight them.
-        let p = SidebarGeometry.place(window: t.frame, screen: screen, width: width, side: side,
-                                      makeRoom: makeRoom && firstBind)
-        // Resizing the window publishes its new frame, which lays the panel
-        // out again against the frame the browser really took (it may refuse
-        // part of the change), so this older placement must not overwrite it.
-        if let newFrame = p.window {
-            tracker.setWindowFrame(newFrame)
-            if target != t { return }
-        }
-        placedSide = p.side
+        let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
+        let p = SidebarGeometry.place(window: t.frame, screen: screen(for: t.frame), width: width, side: fit?.side ?? side,
+                                      keepOnScreen: refused.map { Self.same($0, t.frame) } ?? false)
+        if placedSide != p.side { placedSide = p.side }
         let panel = self.panel ?? makePanel()
         panel.attach(to: p.overlaps ? nil : p.side)
-        panel.setFrame(p.sidebar, display: true, animate: false)
+        // A pure move is cheap; only a real resize lays the tab list out again.
+        if panel.frame.size == p.sidebar.size {
+            panel.setFrameOrigin(p.sidebar.origin)
+        } else {
+            panel.setFrame(p.sidebar, display: true, animate: false)
+        }
         if !panel.isVisible { panel.orderFrontRegardless() }
     }
 
