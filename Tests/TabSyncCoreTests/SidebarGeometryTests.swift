@@ -22,6 +22,27 @@ struct SidebarGeometryTests {
         #expect(w.maxX + 300 == full.maxX && w.minX == full.minX && w.height == full.height)
     }
 
+    // A move that keeps the panel's width carries the pair; the browser keeps its width.
+    @Test func movingThePanelWithoutResizingItMovesTheBrowserAlong() {
+        let window = CGRect(x: 100, y: 100, width: 1100, height: 800)
+        let panel = CGRect(x: 1175, y: 100, width: 305, height: 800) // 280 + 25 reach, on the right
+        let moved = panel.offsetBy(dx: -400, dy: 50)
+        #expect(SidebarGeometry.windowAfterPanelMoved(from: panel, to: moved, window: window, width: 280, side: .right,
+                                                      minWindowWidth: 500) == CGRect(x: -300, y: 150, width: 1100, height: 800))
+        // "Maximize height": same x and width, full height.
+        let tall = CGRect(x: 1175, y: 31, width: 305, height: 1259)
+        #expect(SidebarGeometry.windowAfterPanelMoved(from: panel, to: tall, window: window, width: 280, side: .right,
+                                                      minWindowWidth: 500) == CGRect(x: 100, y: 31, width: 1100, height: 1259))
+    }
+
+    @Test func resizingThePanelToATileFillsItWithThePair() {
+        let window = CGRect(x: 100, y: 100, width: 1100, height: 800)
+        let panel = CGRect(x: 1175, y: 100, width: 305, height: 800)
+        let leftHalf = CGRect(x: 0, y: 31, width: 1028, height: 1259)
+        #expect(SidebarGeometry.windowAfterPanelMoved(from: panel, to: leftHalf, window: window, width: 280, side: .right,
+                                                      minWindowWidth: 500) == CGRect(x: 0, y: 31, width: 748, height: 1259))
+    }
+
     @Test func aRectTooNarrowForTheBrowserOverflowsAwayFromTheSidebar() {
         let quarter = CGRect(x: 1542, y: 0, width: 514, height: 1259)
         // Sidebar on the right stays at the rect's right edge; the window keeps its minimum.

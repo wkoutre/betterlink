@@ -72,6 +72,20 @@ public enum SidebarGeometry {
         return CGRect(x: x, y: r.minY, width: w, height: r.height)
     }
 
+    /// The browser window's frame after something outside moved or resized
+    /// the sidebar panel from `old` to `new`. A move that keeps the panel's
+    /// width (a plain move, "center", "maximize height") carries the pair: the
+    /// window keeps its width and moves by as much as the panel did, taking the
+    /// panel's new height. A new width means the panel was given a tile to
+    /// fill, so the pair fills it (see `window(filling:)`).
+    public static func windowAfterPanelMoved(from old: CGRect, to new: CGRect, window w: CGRect, width: CGFloat,
+                                             side: SidebarSide, minWindowWidth: CGFloat = 0) -> CGRect {
+        if abs(new.width - old.width) < 2 {
+            return CGRect(x: w.minX + (new.minX - old.minX), y: new.minY, width: w.width, height: new.height).integral
+        }
+        return window(filling: new, width: width, side: side, minWindowWidth: minWindowWidth)
+    }
+
     /// True when every edge of `w` lies on a half, third or quarter line of
     /// `screen` (the visible frame): the window was snapped, not placed by hand.
     /// The tolerance covers the gaps window managers leave around tiles.

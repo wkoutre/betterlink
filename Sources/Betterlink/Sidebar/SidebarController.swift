@@ -391,6 +391,10 @@ final class SidebarController: ObservableObject {
         let panel = SidebarPanel(contentView: host)
         panel.setTint(tint)
         self.panel = panel
+        panelTokens.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                                                  object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.screensChangedAt = Date() }
+        })
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             panelTokens.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated { self?.panelFrameChanged() }
@@ -406,6 +410,7 @@ final class SidebarController: ObservableObject {
     private var placedPanelFrame: CGRect?
     private var panelTokens: [NSObjectProtocol] = []
     private var outsideMove: DispatchWorkItem?
+    private var screensChangedAt = Date.distantPast
 
     /// A snap or move aimed at the sidebar is meant for the pair: once the
     /// tool is done (it may set the position and the size separately), the
@@ -413,6 +418,8 @@ final class SidebarController: ObservableObject {
     /// sidebar keeping its width on its side, as snapping the browser does.
     private func panelFrameChanged() {
         guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed) else { return }
+        // macOS moves windows itself when displays change; that is no snap.
+        guard Date().timeIntervalSince(screensChangedAt) > 1 else { return }
         outsideMove?.cancel()
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.movePairToPanel() } }
         outsideMove = work
@@ -424,11 +431,18 @@ final class SidebarController: ObservableObject {
               enabled, !collapsed, let t = current, !t.fullScreen else { return }
         let rect = panel.frame
         let side: SidebarSide = placedSide == .left ? .left : .right
-        let inner = SidebarGeometry.window(filling: rect, width: width, side: side,
-                                           minWindowWidth: minWidths[t.windowHash] ?? 500)
-        // Hiding the sidebar later gives the browser the whole rect.
-        fits[t.windowHash] = Fit(outer: rect, inner: inner, side: side,
-                                 window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+        let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: rect, window: t.frame, width: width, side: side,
+                                                          minWindowWidth: minWidths[t.windowHash] ?? 500)
+        if abs(rect.width - placed.width) >= 2 {
+            // Given a tile: hiding the sidebar later gives the browser all of it.
+            fits[t.windowHash] = Fit(outer: rect, inner: inner, side: side,
+                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+        } else if var f = fits[t.windowHash] {
+            // Carried along: the space to give back moves with the window.
+            f.outer = CGRect(x: f.outer.minX + inner.minX - t.frame.minX, y: inner.minY, width: f.outer.width, height: inner.height)
+            f.inner = inner
+            fits[t.windowHash] = f
+        }
         askedAt = Date()
         tracker.setWindowFrame(inner)
         layout()
