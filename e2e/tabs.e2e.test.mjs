@@ -90,7 +90,7 @@ function frame(obj) {
 }
 
 function startHost(dir, browser) {
-  const host = spawn(join(BIN, "betterlink-tabhost"), ["chrome-extension://nakiifbonhngpkpekakimjfgkbbbnjoe/"], {
+  const host = spawn(join(BIN, "betterlink-tabhost"), ["chrome-extension://gjjllnebeeegbipppiclhlomdppbnljh/"], {
     env: { ...process.env, BETTERLINK_TABS_SOCKET_DIR: dir, BETTERLINK_TABS_BROWSER_NAME: "Fake Chrome" },
     stdio: ["pipe", "pipe", "inherit"],
   });

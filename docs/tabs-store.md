@@ -4,11 +4,11 @@ How the Tabs extension gets into the store, and every field to paste. The dashbo
 
 ## The id
 
-The store gives each item its own id and will not take ours: an upload whose manifest has a `key` is refused. So the order is:
+The item exists in the store as a draft: id `gjjllnebeeegbipppiclhlomdppbnljh`, <https://chromewebstore.google.com/detail/gjjllnebeeegbipppiclhlomdppbnljh> once it is published.
 
-1. Upload the package (no `key`) as a new item. Do not submit it yet. The item now has its id, the 32 letters in the dashboard address.
-2. Dashboard › Package › **View public key**. Put that key, as one line, in `browser-extension/manifest.json` as `key`, and the item's id in `HostRegistration.extensionId`. From then on an unpacked copy and the store copy have the same id, and `allowed_origins` matches both. A test checks the key gives that id.
-3. Everyone running an unpacked copy reloads it and presses Set Up again in betterlink, once, because the id changed.
+The store gives each item its own id and refuses an upload whose manifest has a `key`. So the item was created first, from a package without one, and its public key (Dashboard › Package › View public key) is now the `key` in `browser-extension/manifest.json`. An unpacked copy and the store copy therefore have the same id, which is `HostRegistration.extensionId`; a test checks the key gives that id.
+
+A copy loaded before that change had another id. Reload it, then press Set Up Again in betterlink: the app shows a registration written for the old id as "Set up for an older betterlink".
 
 ## The package
 

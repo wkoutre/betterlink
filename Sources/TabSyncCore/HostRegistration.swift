@@ -6,9 +6,11 @@ import Foundation
 /// only when the user asks for it per browser.
 public enum HostRegistration {
     public static let hostName = "com.wkoutre.betterlink.tabs"
-    /// Pinned by the "key" in browser-extension/manifest.json, so every unpacked
-    /// copy of the extension has this id and matches `allowed_origins`.
-    public static let extensionId = "nakiifbonhngpkpekakimjfgkbbbnjoe"
+    /// The extension's Chrome Web Store item id. The "key" in
+    /// browser-extension/manifest.json is that item's public key, so an unpacked
+    /// copy has this id too and both match `allowed_origins`.
+    public static let extensionId = "gjjllnebeeegbipppiclhlomdppbnljh"
+    static var origin: String { "chrome-extension://\(extensionId)/" }
 
     /// `dataFolder` is the browser's folder under ~/Library/Application Support
     /// (`Browser.dataFolder`, e.g. "Google/Chrome" or "Dia/User Data").
@@ -24,7 +26,7 @@ public enum HostRegistration {
             "description": "betterlink Tabs: live tab sync with the betterlink app",
             "path": hostPath,
             "type": "stdio",
-            "allowed_origins": ["chrome-extension://\(extensionId)/"],
+            "allowed_origins": [origin],
         ]
         return try! JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys])
     }
@@ -32,7 +34,9 @@ public enum HostRegistration {
     public enum State: Equatable, Sendable {
         case notInstalled
         case installed
-        /// Registered, but for a host binary at another path (an older or moved betterlink).
+        /// Registered, but not for this betterlink: the host binary is at another
+        /// path (an older or moved betterlink), or the file allows another
+        /// extension id (written before the extension took its store id).
         case stale(path: String)
     }
 
@@ -41,7 +45,8 @@ public enum HostRegistration {
         guard let d = try? Data(contentsOf: url),
               let obj = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return .notInstalled }
         let p = obj["path"] as? String ?? ""
-        return p == hostPath ? .installed : .stale(path: p)
+        let allowed = obj["allowed_origins"] as? [String] ?? []
+        return p == hostPath && allowed.contains(origin) ? .installed : .stale(path: p)
     }
 
     /// Writes the manifest. Refuses when the browser's data folder does not

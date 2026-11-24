@@ -3,7 +3,7 @@
   "name": "betterlink Tabs (preview)",
   "version": "0.2.0",
   "description": "Connects this browser to the betterlink app for Mac: shows your tabs in betterlink's sidebar and runs its tab commands.",
-  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAtZbDsAbKucZFzG8uUPWnQ8rKK8wsjAz9G5UGDuQFFiw0Pt+c/ipFbwWEUEhKvLDui7HLPNXRI79q0RZp9D24gEVWRnHIHEHMvvvMoTd3mwLCzV0tJcnKRUZey+7tImDCBj23+BwvpQxbxy4UertvYWqRTfshomKiq9MzuaTyN2GHT4jQ7C5oEVYGrB8MbpQhHmDStah4u0mLsceg9dqVzLauBjYBxnd5xkwKOsMoPYnb0072ausvaAR1xdp1j0JfAiAOedtE3cE5D5JUiFhFDRRZSqWMr5WAr/NVX5ZdUgyJJsibD68ZHqbSgylSF4e8TjVvgQWbTP4iaeEvBirMOwIDAQAB",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyhlPp0ikPyiPRQ3u90F98/uPmhQWOGb55GFKHpuGBeuF03JHdQDZLJakuNdUTxihB6SMW9T43h/2C0GIuCsdlDxqEQ3uaLkD6fJFcwE2SB2ojRuaQAq7yNiYajK2uGER+oLiHE8PVGl9lnjWYwia4/9c9NnoPbWQGqS7QBpcv6w7yJ/q+E6PH7kfhIJ8yM9K24N85P67/7lHpnJqqRV39qAb4GKvtVfjgPNkDhetgmGWme2Q4cK/b+6mqXFc1q0YeRTGslEk4/AkPn2ZDXDI8glLChzLUwxS/YGE+JOczATmeLIl/RQaFVXNqs3HgEgl3v+rDq/wfQ+/HQ6/o/jnaQIDAQAB",
   "minimum_chrome_version": "116",
   "homepage_url": "https://github.com/wkoutre/betterlink",
   "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
