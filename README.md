@@ -220,6 +220,7 @@ For screenshots and manual checks, these environment variables change how better
 | `BETTERLINK_HOME` | Settings folder to use instead of the standard one. Use a temporary folder so tests never touch your real rules. |
 | `BETTERLINK_APPEARANCE` | `light` or `dark`, regardless of the system setting. |
 | `BETTERLINK_PAGE` | Page to open: `rules`, `profiles`, `permissions`, `config`, `general`, `log`, `about`. |
+| `BETTERLINK_SYNC_DEVICE` | Tests only: this copy's sync device id, with its own sync settings, so two copies on one Mac sync like two Macs. |
 | `BETTERLINK_TRACE` | `1` logs sidebar diagnostics to `trace.log` in the settings folder: how far the sidebar trailed each window drag, and each show and hide. |
 | `BETTERLINK_SHEET` | `rules` or `profiles` opens that editor sheet. |
 | `BETTERLINK_TEST_LINK` | Pre-fills the link tester. |
