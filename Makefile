@@ -5,8 +5,27 @@ LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Versions/A/Framew
 # Caps how much SwiftPM compiles at once: -j limits build tasks, and
 # -Xswiftc -j limits the compiler processes each module starts. Uncapped, one
 # build ran about 20 compilers at about 650 MB each and ran a 24 GB Mac out of
-# memory. Override with `make test SWIFT_JOBS=`.
+# memory. CI runs uncapped on its own machine. Override with `make test SWIFT_JOBS=`.
+ifdef CI
+SWIFT_JOBS ?=
+else
 SWIFT_JOBS ?= -j 4 -Xswiftc -j2
+endif
+
+# One SwiftPM build or test at a time on this machine: a second waits for the
+# first (several builds at once ran the Mac above out of memory just the same).
+# /usr/bin/lockf ships with macOS. Override with `make test SWIFTPM_LOCK=`.
+SWIFTPM_LOCK ?= $(if $(wildcard /usr/bin/lockf),/usr/bin/lockf -k /tmp/betterlink-swiftpm.lock)
+
+# With only the Command Line Tools (no Xcode), swift-testing sits outside
+# SwiftPM's default search paths, so `swift test` fails with "no such module
+# 'Testing'". Point it there; with Xcode selected this adds nothing.
+DEVELOPER_DIR ?= $(shell xcode-select -p 2>/dev/null)
+CLT_FRAMEWORKS = $(DEVELOPER_DIR)/Library/Developer/Frameworks
+ifeq ($(DEVELOPER_DIR)$(wildcard $(CLT_FRAMEWORKS)/Testing.framework),/Library/Developer/CommandLineTools$(CLT_FRAMEWORKS)/Testing.framework)
+SWIFT_TEST_FLAGS ?= -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) -Xlinker -F -Xlinker $(CLT_FRAMEWORKS) \
+	-Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) -Xlinker -rpath -Xlinker $(DEVELOPER_DIR)/Library/Developer/usr/lib
+endif
 
 .PHONY: fetch tokens icon cli build test test-cli install run clean
 
@@ -20,7 +39,7 @@ tokens:
 
 test: fetch
 	python3 scripts/gen-tokens.py --check
-	swift test $(SWIFT_JOBS)
+	$(SWIFTPM_LOCK) swift test $(SWIFT_JOBS) $(SWIFT_TEST_FLAGS)
 
 # The betterlink command (cli/), compiled with Bun into one executable that
 # ships inside the app at Contents/Helpers/betterlink. Apple silicon only,
@@ -51,7 +70,7 @@ icon:
 build: fetch icon cli
 	# Only the versions Package.resolved pins (Sparkle, by commit): a tag moved
 	# upstream fails the build instead of being built in.
-	swift build -c release --only-use-versions-from-resolved-file $(SWIFT_JOBS)
+	$(SWIFTPM_LOCK) swift build -c release --only-use-versions-from-resolved-file $(SWIFT_JOBS)
 	rm -rf $(APP)
 	mkdir -p $(CONTENTS)/MacOS $(CONTENTS)/Helpers $(CONTENTS)/Resources/typescript/lib
 	cp .build/release/Betterlink $(CONTENTS)/MacOS/Betterlink
