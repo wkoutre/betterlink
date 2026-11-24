@@ -16,6 +16,18 @@ struct SidebarView: View {
     @State private var draftName = ""
     /// A folder or profile waiting for "Delete" to be confirmed.
     @State private var confirmDelete: (id: UUID, name: String, count: Int)?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    /// Every change the sidebar makes is animated, briefly: Motion.quick, or
+    /// nothing when the viewer has Reduce Motion on.
+    private func animate(_ body: () -> Void) {
+        withAnimation(Motion.quick(reduceMotion), body)
+    }
+
+    /// Changes a Sidebar Profile, animated.
+    private func edit(_ id: UUID, _ change: (inout SidebarProfile) -> Void) {
+        animate { lib.change(profile: id, change) }
+    }
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -29,7 +41,9 @@ struct SidebarView: View {
                     VStack(alignment: .leading, spacing: DS.Space.space2) {
                         favorites(profile, m, windowTabs)
                         LazyVStack(alignment: .leading, spacing: 1) {
-                            ForEach(profile.items) { item in node(item, depth: 0, profile, m, windowTabs) }
+                            ForEach(profile.items) { item in
+                                node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
+                            }
                             Button { newFolder(in: nil, profile) } label: {
                                 Label("New Folder", systemImage: "folder.badge.plus").font(DS.TextStyle.caption)
                             }
@@ -50,8 +64,11 @@ struct SidebarView: View {
                                 }
                                 .draggable(Self.dragKey(tab))
                                 .contextMenu { tabMenu(tab, profile) }
+                                .transition(Motion.reveal(reduceMotion))
                             }
                         }
+                        // Tabs opening, closing, moving and switching animate in place.
+                        .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
                     }
                     .padding(.horizontal, DS.Space.space2)
                     .padding(.bottom, DS.Space.space4)
@@ -69,7 +86,7 @@ struct SidebarView: View {
         .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
                             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button("Delete \(confirmDelete?.count ?? 0) saved items", role: .destructive) {
-                if let d = confirmDelete, let p = profile { lib.change(profile: p.id) { $0.remove(d.id) } }
+                if let d = confirmDelete, let p = profile { edit(p.id) { $0.remove(d.id) } }
                 confirmDelete = nil
             }
         }
@@ -92,7 +109,7 @@ struct SidebarView: View {
                 if let m = match, m.certain, let ref = tabs.profileRef(m.session) {
                     Section("Show for \(tabs.profileName(m.session) ?? "this profile")") {
                         ForEach(lib.library.profiles) { sp in
-                            Button { lib.change { $0.link(ref, to: sp.id) } } label: {
+                            Button { animate { lib.change { $0.link(ref, to: sp.id) } } } label: {
                                 if sp.id == profile?.id { Label(sp.name, systemImage: "checkmark") } else { Text(sp.name) }
                             }
                         }
@@ -143,15 +160,18 @@ struct SidebarView: View {
                         .background(RoundedRectangle(cornerRadius: 10, style: .continuous)
                             .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(PressStyle())
+                .transition(Motion.pop(reduceMotion))
                 .help(link.title)
                 .accessibilityLabel(link.title)
                 .contextMenu {
-                    Button("Remove from Favorites") { lib.change(profile: p.id) { $0.remove(link.id) } }
+                    Button("Remove from Favorites") { edit(p.id) { $0.remove(link.id) } }
                 }
             }
         }
         .padding(.horizontal, DS.Space.space1)
+        .animation(Motion.quick(reduceMotion), value: p.favorites.map(\.id))
+        .animation(Motion.quick(reduceMotion), value: open.map(\.url))
         // Drop a tab here to make it a Favorite.
         .frame(minHeight: p.favorites.isEmpty ? 24 : nil)
         .overlay {
@@ -161,7 +181,7 @@ struct SidebarView: View {
         }
         .dropDestination(for: String.self) { keys, _ in
             let found = keys.compactMap { Self.tab(forDragKey: $0, in: open) }
-            for t in found { lib.change(profile: p.id) { $0.addFavorite(Self.saved(t)) } }
+            for t in found { edit(p.id) { $0.addFavorite(Self.saved(t)) } }
             return !found.isEmpty
         }
     }
@@ -173,8 +193,9 @@ struct SidebarView: View {
         case .folder(let f):
             return AnyView(VStack(alignment: .leading, spacing: 1) {
                 HStack(spacing: DS.Space.space2) {
-                    Image(systemName: f.expanded ? "chevron.down" : "chevron.right")
+                    Image(systemName: "chevron.right")
                         .font(.system(size: 9, weight: .semibold)).frame(width: 10)
+                        .rotationEffect(.degrees(f.expanded ? 90 : 0))
                         .foregroundStyle(pal.textTertiary)
                     Image(systemName: "folder").foregroundStyle(pal.textSecondary)
                     nameOrField(f.id, f.name, p)
@@ -182,30 +203,34 @@ struct SidebarView: View {
                 }
                 .padding(.leading, CGFloat(depth) * 14)
                 .rowStyle()
-                .onTapGesture { lib.change(profile: p.id) { $0.toggleExpanded(f.id) } }
+                .onTapGesture { edit(p.id) { $0.toggleExpanded(f.id) } }
                 .accessibilityElement(children: renaming == f.id ? .contain : .ignore)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel("Folder \(f.name), \(f.expanded ? "open" : "closed")")
-                .accessibilityAction { lib.change(profile: p.id) { $0.toggleExpanded(f.id) } }
+                .accessibilityAction { edit(p.id) { $0.toggleExpanded(f.id) } }
                 .contextMenu {
                     Button("New Folder Inside") { newFolder(in: f.id, p) }
                     Button("Rename") { startRename(f.id, f.name) }
                     Button("Delete Folder", role: .destructive) {
                         // A folder with things in it asks first (review F6).
                         let n = SidebarProfile.links(in: f.items).count + f.items.filter { if case .folder = $0 { return true }; return false }.count
-                        if n == 0 { lib.change(profile: p.id) { $0.remove(f.id) } } else { confirmDelete = (f.id, f.name, n) }
+                        if n == 0 { edit(p.id) { $0.remove(f.id) } } else { confirmDelete = (f.id, f.name, n) }
                     }
                 }
                 .dropDestination(for: String.self) { keys, _ in drop(keys, into: f.id, p, open) }
                 if f.expanded {
-                    ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                    VStack(alignment: .leading, spacing: 1) {
+                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                    }
+                    .transition(Motion.reveal(reduceMotion))
                 } else {
                     // Closed, it still lists its open items, as Arc and Dia do.
                     ForEach(SidebarProfile.links(in: f.items).filter { l in open.contains { SavedLink.same($0.url, l.url) } }) { l in
-                        node(.link(l), depth: depth + 1, p, m, open)
+                        node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
                     }
                 }
-            })
+            }
+            .clipped())
         case .link(let l):
             let tab = open.first { SavedLink.same($0.url, l.url) }
             return AnyView(HStack(spacing: DS.Space.space2) {
@@ -227,7 +252,7 @@ struct SidebarView: View {
             .contextMenu {
                 Button("Rename") { startRename(l.id, l.title) }
                 if let tab { Button("Close Tab") { tabs.close(tab, in: m.session) } }
-                Button("Remove", role: .destructive) { lib.change(profile: p.id) { $0.remove(l.id) } }
+                Button("Remove", role: .destructive) { edit(p.id) { $0.remove(l.id) } }
             })
         }
     }
@@ -241,7 +266,7 @@ struct SidebarView: View {
                 .font(DS.TextStyle.body)
                 .focused($nameFocused)
                 .onAppear { nameFocused = true }
-                .onSubmit { lib.change(profile: p.id) { $0.rename(id, to: draftName) }; renaming = nil }
+                .onSubmit { edit(p.id) { $0.rename(id, to: draftName) }; renaming = nil }
                 .onExitCommand { renaming = nil }
         } else {
             Text(name).font(DS.TextStyle.body).lineLimit(1) // color: the caller's, else the sidebar's default
@@ -255,7 +280,7 @@ struct SidebarView: View {
 
     private func newFolder(in parent: UUID?, _ p: SidebarProfile) {
         var made: UUID?
-        lib.change(profile: p.id) { made = $0.addFolder("New Folder", in: parent) }
+        edit(p.id) { made = $0.addFolder("New Folder", in: parent) }
         if let made { startRename(made, "New Folder") }
     }
 
@@ -265,10 +290,10 @@ struct SidebarView: View {
         var did = false
         for k in keys {
             if let t = Self.tab(forDragKey: k, in: open) {
-                lib.change(profile: p.id) { $0.addLink(Self.saved(t), in: folder) }
+                edit(p.id) { $0.addLink(Self.saved(t), in: folder) }
                 did = true
             } else if k.hasPrefix("betterlink-saved:"), let id = UUID(uuidString: String(k.dropFirst("betterlink-saved:".count))) {
-                lib.change(profile: p.id) { $0.move(id, into: folder) }
+                edit(p.id) { $0.move(id, into: folder) }
                 did = true
             }
         }
@@ -297,14 +322,14 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func tabMenu(_ tab: BrowserTab, _ p: SidebarProfile) -> some View {
-        Button("Add to Favorites") { lib.change(profile: p.id) { $0.addFavorite(Self.saved(tab)) } }
+        Button("Add to Favorites") { edit(p.id) { $0.addFavorite(Self.saved(tab)) } }
         Menu("Save to Folder") {
             ForEach(Self.folders(p.items, prefix: "")) { f in
-                Button(f.label) { lib.change(profile: p.id) { $0.addLink(Self.saved(tab), in: f.id) } }
+                Button(f.label) { edit(p.id) { $0.addLink(Self.saved(tab), in: f.id) } }
             }
             Button("New Folder…") {
                 var made: UUID?
-                lib.change(profile: p.id) {
+                edit(p.id) {
                     made = $0.addFolder("New Folder")
                     if let made { $0.addLink(Self.saved(tab), in: made) }
                 }
@@ -410,6 +435,7 @@ private struct SidebarTabRow: View {
     @State private var hovering = false
 
     @Environment(\.sidebarColors) private var pal
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: DS.Space.space2) {
@@ -424,9 +450,10 @@ private struct SidebarTabRow: View {
             }
             if hovering {
                 Button(action: close) { Image(systemName: "xmark").font(.system(size: 10, weight: .semibold)) }
-                    .buttonStyle(.plain)
+                    .buttonStyle(PressStyle())
                     .foregroundStyle(pal.textSecondary)
                     .accessibilityLabel("Close \(tab.title)")
+                    .transition(.opacity)
             }
         }
         .padding(.horizontal, DS.Space.space2)
@@ -436,6 +463,8 @@ private struct SidebarTabRow: View {
                 .fill(tab.active ? pal.selected : (hovering ? pal.hover : .clear))
         )
         .contentShape(Rectangle())
+        .animation(Motion.hover(reduceMotion), value: hovering)
+        .animation(Motion.quick(reduceMotion), value: tab.active)
         .onHover { hovering = $0 }
         .onTapGesture(perform: activate)
         .accessibilityAddTraits(tab.active ? [.isButton, .isSelected] : .isButton)
@@ -447,11 +476,42 @@ private struct SidebarTabRow: View {
 private struct RowStyle: ViewModifier {
     var selected: Bool
     @Environment(\.sidebarColors) private var pal
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var hovering = false
     func body(content: Content) -> some View {
         content.padding(.horizontal, DS.Space.space2)
             .padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(selected ? pal.selected : .clear))
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous)
+                .fill(selected ? pal.selected : (hovering ? pal.hover : .clear)))
             .contentShape(Rectangle())
+            .animation(Motion.hover(reduceMotion), value: hovering)
+            .animation(Motion.quick(reduceMotion), value: selected)
+            .onHover { hovering = $0 }
+    }
+}
+
+/// The sidebar's motion: short ease-outs, and none at all with Reduce Motion.
+enum Motion {
+    static func quick(_ reduce: Bool) -> Animation? { reduce ? nil : .easeOut(duration: 0.18) }
+    static func hover(_ reduce: Bool) -> Animation? { reduce ? nil : .easeOut(duration: 0.12) }
+    /// Rows and folder contents: fade and slide down a little.
+    static func reveal(_ reduce: Bool) -> AnyTransition {
+        reduce ? .identity : .opacity.combined(with: .offset(y: -4))
+    }
+    /// Favorites: fade and grow from slightly smaller.
+    static func pop(_ reduce: Bool) -> AnyTransition {
+        reduce ? .identity : .opacity.combined(with: .scale(scale: 0.85))
+    }
+}
+
+/// Buttons dip slightly while pressed.
+struct PressStyle: ButtonStyle {
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .scaleEffect(configuration.isPressed && !reduceMotion ? 0.94 : 1)
+            .opacity(configuration.isPressed ? 0.85 : 1)
+            .animation(Motion.hover(reduceMotion), value: configuration.isPressed)
     }
 }
 

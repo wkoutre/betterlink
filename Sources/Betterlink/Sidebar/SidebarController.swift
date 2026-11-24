@@ -346,7 +346,7 @@ final class SidebarController: ObservableObject {
         updateHotKey()
         let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         guard enabled, !collapsed, let t = current, !t.fullScreen else {
-            panel?.orderOut(nil)
+            panel?.fadeOut()
             return
         }
         let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
@@ -372,12 +372,13 @@ final class SidebarController: ObservableObject {
         if ownAppInFront {
             // Beside the browser window, under betterlink's own windows; with
             // no window number to order against, hidden rather than on top.
-            guard let n = tracker.boundWindowNumber else { panel.orderOut(nil); return }
+            guard let n = tracker.boundWindowNumber else { panel.fadeOut(); return }
             if panel.level != .normal { panel.level = .normal }
+            panel.fadeIn()
             panel.order(.above, relativeTo: Int(n))
         } else {
             if panel.level != .floating { panel.level = .floating }
-            if !panel.isVisible { panel.orderFrontRegardless() }
+            panel.fadeIn()
         }
     }
 
@@ -612,4 +613,36 @@ final class SidebarPanel: NSPanel {
 
     override var canBecomeKey: Bool { true }
     override var canBecomeMain: Bool { false }
+
+    private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    private var fading = false
+
+    /// Shows the panel with a short fade (none with Reduce Motion).
+    func fadeIn() {
+        guard !isVisible || fading else { return }
+        fading = false
+        if !isVisible { alphaValue = Self.reduceMotion ? 1 : 0; orderFrontRegardless() }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = Self.reduceMotion ? 0 : 0.14
+            animator().alphaValue = 1
+        }
+    }
+
+    /// Hides the panel with a short fade; a fadeIn during it wins.
+    func fadeOut() {
+        guard isVisible, !fading else { return }
+        guard !Self.reduceMotion else { orderOut(nil); return }
+        fading = true
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.12
+            animator().alphaValue = 0
+        }, completionHandler: { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.fading else { return }
+                self.fading = false
+                self.orderOut(nil)
+                self.alphaValue = 1
+            }
+        })
+    }
 }
