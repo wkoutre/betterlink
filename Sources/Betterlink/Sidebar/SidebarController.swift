@@ -13,6 +13,13 @@ final class SidebarController: ObservableObject {
     @Published var enabled: Bool { didSet { save(); enabled ? start() : stop() } }
     @Published var side: SidebarSide { didSet { save(); refit() } }
     @Published var width: Double { didSet { save(); refit() } }
+    /// The browsers the sidebar attaches to, by bundle id.
+    @Published var attachTo: Set<String> {
+        didSet { save(); tracker.browserBundleIds = attachTo; tracker.frontAppMayHaveChanged() }
+    }
+    /// Hidden for now with the shortcut or the menu: the window gets its space
+    /// back, and showing it again makes room again (like collapsing Arc's sidebar).
+    @Published private(set) var collapsed: Bool
 
     @Published private(set) var trusted = WindowTracker.isTrusted
     /// The browser window the sidebar is bound to right now. Its `frame` is
@@ -54,11 +61,15 @@ final class SidebarController: ObservableObject {
     private var refused: CGRect?
     private var trustToken: NSObjectProtocol?
     private var activationToken: NSObjectProtocol?
+    private let hotKey = SidebarHotKey()
     /// A separate domain while `BETTERLINK_HOME` is set, like the menu bar icon.
     private let defaults = MenuBarIcon.defaults()
 
     private init() {
-        tracker = WindowTracker(browserBundleIds: Set(Browser.known.map(\.bundleId)))
+        let attach = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Set.init) ?? Self.defaultBrowsers()
+        tracker = WindowTracker(browserBundleIds: attach)
+        attachTo = attach
+        collapsed = defaults.bool(forKey: "sidebar.collapsed")
         enabled = defaults.bool(forKey: "sidebar.enabled")
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
         memory = defaults.data(forKey: "sidebar.fitMemory").flatMap { try? JSONDecoder().decode(FitMemory.self, from: $0) } ?? FitMemory()
@@ -67,6 +78,7 @@ final class SidebarController: ObservableObject {
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
+        hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
         // betterlink's own window coming forward keeps the sidebar bound (the
         // tracker ignores it). The panel then drops to a normal level, just
         // above the browser window, so it stays beside the browser (the Side
@@ -91,6 +103,25 @@ final class SidebarController: ObservableObject {
 
     func requestTrust() { WindowTracker.requestTrust() }
 
+    /// Every installed Chromium browser, and Safari.
+    static func defaultBrowsers() -> Set<String> {
+        Set(AppModel.installedBrowsers().filter { $0.family == .chromium || $0.bundleId == "com.apple.Safari" }.map(\.bundleId))
+    }
+
+    /// The shortcut and the menu item: hide the sidebar and give the window its
+    /// space back, or show it and make room again.
+    func toggleCollapsed() {
+        guard enabled else { return }
+        if !collapsed, let t = current, let f = fits[t.windowHash], Self.same(t.frame, f.inner) {
+            fits[t.windowHash] = nil
+            tracker.setWindowFrame(f.outer)
+        }
+        collapsed.toggle()
+        save()
+        if !collapsed, let t = current { settle(t) }
+        layout()
+    }
+
     // MARK: - Lifecycle
 
     private func start() {
@@ -103,6 +134,7 @@ final class SidebarController: ObservableObject {
     private func stop() {
         giveSpaceBack()
         minWidths = [:]
+        hotKey.setRegistered(false)
         tracker.stop()
         panel?.orderOut(nil)
     }
@@ -134,6 +166,8 @@ final class SidebarController: ObservableObject {
         defaults.set(enabled, forKey: "sidebar.enabled")
         defaults.set(side.rawValue, forKey: "sidebar.side")
         defaults.set(width, forKey: "sidebar.width")
+        defaults.set(Array(attachTo).sorted(), forKey: "sidebar.browsers")
+        defaults.set(collapsed, forKey: "sidebar.collapsed")
     }
 
     // MARK: - Layout
@@ -158,7 +192,7 @@ final class SidebarController: ObservableObject {
 
     /// The window came to rest: make the pair fill the space the window was given.
     private func settle(_ t: WindowTracker.Target) {
-        guard enabled, !t.fullScreen else { return }
+        guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         var outer = t.frame
         if let f = fits[t.windowHash] {
@@ -230,8 +264,10 @@ final class SidebarController: ObservableObject {
     }
 
     private func layout() {
+        // The shortcut works only while an attached browser is in front.
+        hotKey.setRegistered(enabled && current != nil)
         let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
-        guard enabled, let t = current, !t.fullScreen else {
+        guard enabled, !collapsed, let t = current, !t.fullScreen else {
             panel?.orderOut(nil)
             return
         }

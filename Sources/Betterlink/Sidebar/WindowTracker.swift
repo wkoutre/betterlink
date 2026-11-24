@@ -77,6 +77,17 @@ final class WindowTracker: NSObject {
         frontAppChanged(NSWorkspace.shared.frontmostApplication)
     }
 
+    /// The set of browsers changed: bind, or let go, as the front app now warrants.
+    func frontAppMayHaveChanged() {
+        guard workspaceToken != nil else { return }
+        if observedPid != 0, let id = NSRunningApplication(processIdentifier: observedPid)?.bundleIdentifier,
+           !browserBundleIds.contains(id) {
+            detach()
+            publish(nil)
+        }
+        frontAppChanged(NSWorkspace.shared.frontmostApplication)
+    }
+
     func stop() {
         if let m = mouseMonitor { NSEvent.removeMonitor(m) }
         mouseMonitor = nil

@@ -203,6 +203,13 @@ struct Favicon: View {
 /// The sidebar that binds to the front browser window.
 private struct SidebarSettings: View {
     @ObservedObject var sidebar: SidebarController
+    @EnvironmentObject var model: AppModel
+
+    /// Installed browsers the sidebar can follow: the Chromium family (tabs
+    /// through the extension) and Safari.
+    private var attachable: [Browser] {
+        model.browsers.filter { $0.family == .chromium || $0.bundleId == "com.apple.Safari" }
+    }
 
     var body: some View {
         DSSection {
@@ -211,6 +218,13 @@ private struct SidebarSettings: View {
                     Text("Show the sidebar")
                     Text("Sits against the front browser window's edge and moves with it.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            if sidebar.enabled && sidebar.trusted {
+                LabeledContent("Now") {
+                    Text(sidebar.collapsed ? "Hidden. Press \(SidebarHotKey.display) in the browser to show it."
+                         : sidebar.target.map { "On \($0.appName)" } ?? "Waiting for one of the browsers below to be in front")
+                        .foregroundStyle(DS.Palette.textSecondary)
                 }
             }
             if sidebar.enabled && !sidebar.trusted {
@@ -231,6 +245,17 @@ private struct SidebarSettings: View {
                 .labelsHidden()
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 360)
+            }
+            VStack(alignment: .leading, spacing: DS.Space.space2) {
+                Text("Attach to")
+                Text("The sidebar follows these browsers' windows. \(SidebarHotKey.display) shows or hides it while one is in front.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(attachable) { b in
+                    Toggle(b.name, isOn: Binding(
+                        get: { sidebar.attachTo.contains(b.bundleId) },
+                        set: { on in if on { sidebar.attachTo.insert(b.bundleId) } else { sidebar.attachTo.remove(b.bundleId) } }))
+                }
             }
             LabeledContent("Width") {
                 HStack {
