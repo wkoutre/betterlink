@@ -118,25 +118,29 @@ final class WindowTracker: NSObject {
     /// A window's frame now, in Cocoa coordinates.
     func currentFrame(of win: AXUIElement) -> CGRect? { frame(of: win) }
 
-    /// The bound window's frame as the window server has it right now (what
+    /// Window `n`'s frame as the window server has it right now (what
     /// is on screen), Cocoa coordinates. Cheap enough to call every frame.
-    func windowServerFrame() -> CGRect? {
-        guard let n = windowNumber, let h = NSScreen.screens.first?.frame.height,
+    func windowServerFrame(_ n: UInt32) -> CGRect? {
+        guard let h = NSScreen.screens.first?.frame.height,
               let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first,
               let b = Self.axBounds(info) else { return nil }
         return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 
-    /// One step of a slide: sets the bound window's size, and its position
-    /// only when the left edge moves (the sidebar on the left), so a frame
-    /// costs one or two Accessibility calls rather than three.
-    func slideWindow(to frame: CGRect, moveOrigin: Bool) {
-        guard let win = observedWindow, let h = NSScreen.screens.first?.frame.height else { return }
+    /// One step of a slide on `win`: its size, and its position too when its
+    /// left edge moves (the sidebar on the left), so a frame costs one or two
+    /// Accessibility calls rather than three. macOS limits each step to what
+    /// fits on screen, so a growing window moves first and a shrinking one
+    /// resizes first.
+    func slideWindow(_ win: AXUIElement, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
+        guard let h = NSScreen.screens.first?.frame.height else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
         var origin = ax.origin, size = ax.size
-        if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) }
-        if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) }
+        func move() { if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) } }
+        func resize() { if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) } }
+        if growing { move(); resize() } else { resize(); move() }
     }
+
 
     /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.
     func setWindowFrame(_ frame: CGRect, of window: AXUIElement? = nil) {

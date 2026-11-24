@@ -147,6 +147,11 @@ final class SidebarController: ObservableObject {
         var hiddenWindow: CGRect
         var shownWindow: CGRect
         var windowHash: Int
+        /// The window the slide started on, by Accessibility element and
+        /// window number: every frame resizes and reads this one, whatever is
+        /// bound meanwhile (review N1).
+        var window: AXUIElement?
+        var windowNumber: UInt32?
         var timer: Timer?
         var frames = 0, started = CACurrentMediaTime(), worstGap: CGFloat = 0
         var fitted: Bool { hiddenWindow != shownWindow }
@@ -172,7 +177,8 @@ final class SidebarController: ObservableObject {
         let outer = attached == .left ? visible.minX : visible.maxX
         let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
         var run = SlideRun(slide: SidebarSlide(shown: true), side: attached, outer: outer,
-                           hiddenWindow: fit?.outer ?? t.frame, shownWindow: t.frame, windowHash: t.windowHash)
+                           hiddenWindow: fit?.outer ?? t.frame, shownWindow: t.frame, windowHash: t.windowHash,
+                           window: tracker.boundWindow, windowNumber: tracker.boundWindowNumber)
         run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
         start(run)
     }
@@ -188,6 +194,8 @@ final class SidebarController: ObservableObject {
             return
         }
         guard let t = current, !t.fullScreen else { layout(); return }
+        // As settle() does: a refusal only holds for the frame it was made at (review N2).
+        if let r = refused, !Self.same(r, t.frame) { refused = nil }
         // Where the window goes: narrowed to make room when it was given a
         // tile, else where it is.
         let screen = screen(for: t.frame)
@@ -205,7 +213,8 @@ final class SidebarController: ObservableObject {
         panel.reveal = outer
         panel.showNow()
         var run = SlideRun(slide: SidebarSlide(shown: false), side: attached, outer: outer,
-                           hiddenWindow: t.frame, shownWindow: shown, windowHash: t.windowHash)
+                           hiddenWindow: t.frame, shownWindow: shown, windowHash: t.windowHash,
+                           window: tracker.boundWindow, windowNumber: tracker.boundWindowNumber)
         run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
         start(run)
     }
@@ -232,8 +241,11 @@ final class SidebarController: ObservableObject {
                                     outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: p)
         var seam = f.innerEdge
         if run.fitted {
-            tracker.slideWindow(to: f.window, moveOrigin: run.side == .left)
-            if let real = tracker.windowServerFrame() {
+            if let win = run.window {
+                // Hiding widens the window; showing narrows it.
+                tracker.slideWindow(win, to: f.window, moveOrigin: run.side == .left, growing: run.slide.phase == .hiding)
+            }
+            if let n = run.windowNumber, let real = tracker.windowServerFrame(n) {
                 let edge = run.side == .left ? real.minX : real.maxX
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
                 seam = edge
@@ -268,8 +280,6 @@ final class SidebarController: ObservableObject {
         }
     }
 
-
-
     // MARK: - Lifecycle
 
     private func start() {
@@ -280,6 +290,13 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
+        // Turned off mid-slide: the window goes back to its full frame.
+        if let run = slideRun {
+            run.timer?.invalidate()
+            slideRun = nil
+            if run.fitted, let win = run.window { tracker.setWindowFrame(run.hiddenWindow, of: win) }
+            panel?.reveal = nil
+        }
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
