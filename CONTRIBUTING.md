@@ -17,6 +17,8 @@ make test-cli   # builds dist/betterlink.app, then runs the command's tests agai
 make build      # dist/betterlink.app only
 ```
 
+`make build` signs the app with the first Developer ID Application or Apple Development certificate in your keychain (`scripts/sign-dev.sh`), so macOS keeps the Accessibility permission you gave it across rebuilds. With no certificate the build is ad-hoc signed, and macOS asks again after each build. Pick another identity with `make build DEV_SIGN_IDENTITY="…"`, or none with `DEV_SIGN_IDENTITY=`.
+
 CI runs `make test` and `make test-cli` on macOS for every pull request, and [zizmor](https://github.com/zizmorcore/zizmor) lints the workflows.
 
 ## Never test against your real settings
