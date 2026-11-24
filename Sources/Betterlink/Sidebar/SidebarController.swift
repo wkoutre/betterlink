@@ -90,9 +90,6 @@ final class SidebarController: ObservableObject {
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
         hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
-        frontToken = NSWorkspace.shared.notificationCenter.addObserver(
-            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
-        ) { [weak self] _ in MainActor.assumeIsolated { self?.updateHotKey() } }
         hotKey.shortcut = shortcut
         // betterlink's own window coming forward keeps the sidebar bound (the
         // tracker ignores it). The panel then drops to a normal level, just
@@ -171,7 +168,8 @@ final class SidebarController: ObservableObject {
 
     /// The shortcut is registered only while an attached browser is the front
     /// app, so it never takes the keys from another app, betterlink's own
-    /// shortcut setting included (review F2).
+    /// shortcut setting included (review F2). layout() calls it, and runs on
+    /// every app activation (activationToken).
     private func updateHotKey() {
         let front = NSWorkspace.shared.frontmostApplication?.processIdentifier
         hotKey.setRegistered(enabled && current != nil && front == current?.pid)
@@ -180,7 +178,6 @@ final class SidebarController: ObservableObject {
 
     /// Why the shortcut couldn't be registered, for the setting.
     @Published private(set) var hotKeyProblem: String?
-    private var frontToken: NSObjectProtocol?
 
     private func saveMemory() {
         if let d = try? JSONEncoder().encode(memory) { defaults.set(d, forKey: "sidebar.fitMemory") }

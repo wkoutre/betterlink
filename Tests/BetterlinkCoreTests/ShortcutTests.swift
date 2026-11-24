@@ -30,6 +30,9 @@ struct ShortcutTests {
         #expect(!Shortcut(keyCode: 121, modifiers: Shortcut.control, key: "⇟").isValid) // next tab
         #expect(!Shortcut(keyCode: 116, modifiers: Shortcut.control | Shortcut.shift, key: "⇞").isValid) // move tab
         #expect(!Shortcut(keyCode: 13, modifiers: Shortcut.control | Shortcut.command, key: "W").isValid) // tab group
+        #expect(!Shortcut(keyCode: 48, modifiers: Shortcut.control, key: "⇥").isValid) // next tab, Chrome and Safari
+        #expect(!Shortcut(keyCode: 48, modifiers: Shortcut.control | Shortcut.shift, key: "⇥").isValid) // previous tab
+        #expect(!Shortcut(keyCode: 3, modifiers: Shortcut.control | Shortcut.command, key: "F").isValid) // full screen
         #expect(Shortcut(keyCode: 13, modifiers: Shortcut.control | Shortcut.option, key: "W").isValid)
         #expect(Shortcut.sidebarDefault.isValid)
     }

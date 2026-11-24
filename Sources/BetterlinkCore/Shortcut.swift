@@ -28,12 +28,15 @@ public struct Shortcut: Codable, Equatable, Sendable {
         !key.isEmpty && modifiers & Self.control != 0 && !isBrowserShortcut
     }
 
-    /// The Control shortcuts Chromium browsers define themselves
-    /// (chrome/browser/global_keyboard_shortcuts_mac.mm): ⌃PageUp/⌃PageDown
-    /// (with or without Shift) switch and move tabs, ⌃⌘C/P/W/X/Z act on tab groups.
+    /// The Control shortcuts browsers define themselves. Chromium spreads them
+    /// over several tables: global_keyboard_shortcuts_mac.mm (⌃PageUp/⌃PageDown,
+    /// with or without Shift, switch and move tabs; ⌃⌘C/P/W/X/Z act on tab
+    /// groups), accelerators_cocoa.mm (⌃⇥ and ⌃⇧⇥ cycle tabs, as in Safari)
+    /// and main_menu_builder.mm (⌃⌘F full screen, as in every Mac app).
     public var isBrowserShortcut: Bool {
-        let pageUpDown: Set<UInt32> = [116, 121]
-        if pageUpDown.contains(keyCode), modifiers & ~Self.shift == Self.control { return true }
+        let tabCycling: Set<UInt32> = [116, 121, 48] // PageUp, PageDown, Tab
+        if tabCycling.contains(keyCode), modifiers & ~Self.shift == Self.control { return true }
+        if keyCode == 3, modifiers == Self.control | Self.command { return true } // ⌃⌘F
         let groupKeys: Set<UInt32> = [8, 35, 13, 7, 6] // C, P, W, X, Z
         return groupKeys.contains(keyCode) && modifiers == Self.control | Self.command
     }
