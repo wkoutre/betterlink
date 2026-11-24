@@ -24,7 +24,7 @@ enum AgentCommand {
 
     static func run(_ args: [String]) -> Int32 {
         guard let command = args.first else {
-            return emit(AgentResponseJSON.failure("Usage: Betterlink agent <command> ['<json>']. Commands: \((Agent.commands + appCommands).joined(separator: ", "))."))
+            return emit(AgentResponseJSON.failure("Usage: Betterlink agent <command> ['<json>']. Commands: \((Agent.commands + appCommands + tabCommands).joined(separator: ", "))."))
         }
         var input: [String: Any] = [:]
         if args.count > 1 {
@@ -36,6 +36,11 @@ enum AgentCommand {
         let folder = SettingsFolder.resolve()
         let installed = Browser.known.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
 
+        if tabCommands.contains(command) {
+            let out = runTabCommand(command, input)
+            if command == "sidebar.settings.set" && isOK(out) { notifyApp() }
+            return emit(out)
+        }
         if appCommands.contains(command) {
             let out = runAppCommand(command, input, folder: folder)
             if changes(command) && isOK(out) { notifyApp() }
@@ -46,7 +51,7 @@ enum AgentCommand {
         let compiler = needsCompiler ? try? TypeScriptCompiler(typescriptJS: ts.appendingPathComponent("typescript.js"),
                                                                libDirectory: ts.appendingPathComponent("lib")) : nil
         guard Agent.commands.contains(command) else {
-            return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \((Agent.commands + appCommands).joined(separator: ", "))."))
+            return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \((Agent.commands + appCommands + tabCommands).joined(separator: ", "))."))
         }
         let response = Agent.run(command, input: input, env: AgentEnvironment(folder: folder, installed: installed, compiler: compiler))
         let out = response.json()
