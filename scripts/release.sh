@@ -74,6 +74,9 @@ if [ -n "$SIGN_IDENTITY" ]; then
   codesign --force --timestamp --options runtime \
     --entitlements scripts/cli.entitlements \
     --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/betterlink"
+  # The Tabs host a browser launches over native messaging: plain Swift, no entitlements.
+  codesign --force --timestamp --options runtime \
+    --sign "$SIGN_IDENTITY" "$APP/Contents/Helpers/betterlink-tabhost"
   codesign --force --timestamp --options runtime \
     --entitlements scripts/app.entitlements \
     --sign "$SIGN_IDENTITY" "$APP"

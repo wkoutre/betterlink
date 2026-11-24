@@ -7,6 +7,8 @@ let package = Package(
     products: [
         .library(name: "BetterlinkCore", targets: ["BetterlinkCore"]),
         .executable(name: "Betterlink", targets: ["Betterlink"]),
+        .executable(name: "betterlink-tabhost", targets: ["betterlink-tabhost"]),
+        .executable(name: "betterlink-tabs", targets: ["betterlink-tabs"]),
     ],
     dependencies: [
         // Auto-update. Pinned exactly, and to a commit by Package.resolved
@@ -20,9 +22,17 @@ let package = Package(
             name: "BetterlinkCore",
             linkerSettings: [.linkedFramework("JavaScriptCore")],
         ),
+        // Tabs (preview): live two-way sync with the browser's tabs. Protocol,
+        // per-browser tab store and socket discovery. Foundation only, no AppKit.
+        .target(name: "TabSyncCore"),
+        // The native messaging host a browser launches for the Tabs extension.
+        // Ships in Contents/Helpers; bridges the browser's stdio to a local socket.
+        .executableTarget(name: "betterlink-tabhost", dependencies: ["TabSyncCore"]),
+        // Terminal view of the same sync (debugging, and the e2e test's app side).
+        .executableTarget(name: "betterlink-tabs", dependencies: ["TabSyncCore"]),
         .executableTarget(
             name: "Betterlink",
-            dependencies: ["BetterlinkCore", .product(name: "Sparkle", package: "Sparkle")],
+            dependencies: ["BetterlinkCore", "TabSyncCore", .product(name: "Sparkle", package: "Sparkle")],
             linkerSettings: [.linkedFramework("AppKit"), .linkedFramework("SwiftUI")],
         ),
         .testTarget(
@@ -30,6 +40,7 @@ let package = Package(
             dependencies: ["BetterlinkCore"],
             resources: [.copy("Fixtures")],
         ),
+        .testTarget(name: "TabSyncCoreTests", dependencies: ["TabSyncCore"]),
     ],
     swiftLanguageModes: [.v5],
 )

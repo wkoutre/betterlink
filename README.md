@@ -126,6 +126,10 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 - it is gone when betterlink quits;
 - links are never written to disk or the system log.
 
+## Tabs (preview)
+
+A live list of every open tab in your Chromium browsers, synced both ways the instant anything changes, with no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page and connect a browser. See [docs/tabs.md](docs/tabs.md).
+
 ## Accepted risks
 
 1. **Another app can reroute your links.** Any program running as you can edit `config.ts` or `rules.json`. betterlink refuses either file if someone else owns it, or if other users can write to it or to its folder. It does not defend against malware already running as you.

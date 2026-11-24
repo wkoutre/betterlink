@@ -10,7 +10,7 @@ struct RootView: View {
         ?? UserDefaults.standard.string(forKey: "page") ?? Page.rules.rawValue
 
     enum Page: String, CaseIterable, Identifiable {
-        case rules, profiles, permissions, agents, config, general, log, about
+        case rules, profiles, permissions, agents, tabs, config, general, log, about
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -18,6 +18,7 @@ struct RootView: View {
             case .profiles: "Profiles"
             case .permissions: "Permissions"
             case .agents: "Agents"
+            case .tabs: "Tabs"
             case .config: "config.ts"
             case .general: "General"
             case .log: "Log"
@@ -31,6 +32,7 @@ struct RootView: View {
             case .profiles: DS.Palette.coral
             case .permissions: DS.Palette.success
             case .agents: DS.Palette.tileViolet
+            case .tabs: DS.Palette.accent
             case .config: DS.Palette.tileInk
             case .general, .log: DS.Palette.tileNeutral
             case .about: DS.Palette.accentText
@@ -42,6 +44,7 @@ struct RootView: View {
             case .profiles: "person.2.fill"
             case .permissions: "lock.fill"
             case .agents: "terminal.fill"
+            case .tabs: "square.on.square"
             case .config: "chevron.left.forwardslash.chevron.right"
             case .general: "gearshape.fill"
             case .log: "list.bullet"
@@ -86,6 +89,7 @@ struct RootView: View {
         case .profiles: ProfilesPage()
         case .permissions: PermissionsPage()
         case .agents: AgentsPage()
+        case .tabs: TabsPage()
         case .config: ConfigPage()
         case .general: GeneralPage()
         case .log: LogPage()
@@ -120,6 +124,7 @@ private struct Sidebar: View {
             VStack(alignment: .leading, spacing: DS.Space.space6) {
                 SidebarHeader()
                 group(nil, [.rules, .profiles, .permissions, .agents])
+                group("Preview", [.tabs])
                 group("Advanced", [.config, .general] + (model.showLog ? [.log] : []))
                 group(nil, [.about])
             }

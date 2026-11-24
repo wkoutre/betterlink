@@ -2,7 +2,7 @@ APP        = dist/betterlink.app
 CONTENTS   = $(APP)/Contents
 LSREGISTER = /System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/LaunchServices.framework/Versions/A/Support/lsregister
 
-.PHONY: fetch tokens icon cli build test test-cli install run clean
+.PHONY: fetch tokens icon cli build test test-cli test-tabs install run clean
 
 # The TypeScript compiler bundled for config.ts, checksum-pinned.
 fetch:
@@ -26,6 +26,13 @@ cli:
 	  bun build --compile --target=bun-darwin-arm64 \
 	    --define "process.env.BETTERLINK_VERSION=\"$$BETTERLINK_VERSION\"" \
 	    src/bin.ts --outfile ../.build/betterlink-cli
+
+# Tabs (preview): the extension's bridge, then the whole pipe (extension
+# bridge -> real betterlink-tabhost -> real socket client), with Node's runner.
+test-tabs:
+	swift build --product betterlink-tabhost
+	swift build --product betterlink-tabs
+	node --test browser-extension/tests/*.test.mjs e2e/*.test.mjs
 
 # Runs the CLI against the built app and a temporary settings folder.
 test-cli: build
@@ -62,8 +69,10 @@ build: fetch icon cli
 	cp Vendor/typescript/lib/lib.*.d.ts $(CONTENTS)/Resources/typescript/lib/
 	cp LICENSE $(CONTENTS)/Resources/LICENSE
 	cp .build/betterlink-cli $(CONTENTS)/Helpers/betterlink
-	# Sign the nested helper first, then the app around it.
+	cp .build/release/betterlink-tabhost $(CONTENTS)/Helpers/betterlink-tabhost
+	# Sign the nested helpers first, then the app around them.
 	codesign --force --sign - $(CONTENTS)/Helpers/betterlink
+	codesign --force --sign - $(CONTENTS)/Helpers/betterlink-tabhost
 	codesign --force --sign - $(APP)
 	@echo "Built $(APP)"
 
