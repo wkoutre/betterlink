@@ -54,6 +54,27 @@ struct SidebarGeometryTests {
         }
     }
 
+    /// Review F1: a narrowed window can land on a snap line itself (1/3, 3/4).
+    /// Settling it again, after a relaunch or turning the sidebar off and on,
+    /// must not narrow it a second time.
+    @Test func settlingAnAlreadyFittedWindowChangesNothing() {
+        let big = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        let half = CGRect(x: 0, y: 0, width: 1028, height: 1259)
+        let once = SidebarGeometry.settled(window: half, screen: big, width: 340, side: .right)
+        #expect(once == CGRect(x: 0, y: 0, width: 688, height: 1259))
+        #expect(SidebarGeometry.settled(window: once!, screen: big, width: 340, side: .right) == nil)
+        let fullOnce = SidebarGeometry.settled(window: screen, screen: screen, width: 360, side: .right)
+        #expect(fullOnce?.width == 1080)
+        #expect(SidebarGeometry.settled(window: fullOnce!, screen: screen, width: 360, side: .right) == nil)
+        for side in [SidebarSide.left, .right] {
+            for w in [200.0, 280, 340, 360, 440] {
+                if let a = SidebarGeometry.settled(window: half, screen: big, width: w, side: side) {
+                    #expect(SidebarGeometry.settled(window: a, screen: big, width: w, side: side) == nil, "\(side) \(w)")
+                }
+            }
+        }
+    }
+
     @Test func quarterTilesAndWindowManagerGapsCountAsSnapped() {
         #expect(SidebarGeometry.isSnapped(CGRect(x: 720, y: 437, width: 720, height: 438), screen: screen))
         #expect(SidebarGeometry.isSnapped(CGRect(x: 8, y: 8, width: 708, height: 859), screen: screen))

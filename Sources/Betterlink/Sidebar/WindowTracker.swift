@@ -86,9 +86,16 @@ final class WindowTracker: NSObject {
         publish(nil)
     }
 
-    /// Moves/resizes the browser window (for "make room"). Cocoa coordinates.
-    func setWindowFrame(_ frame: CGRect) {
-        guard let win = observedWindow, let h = NSScreen.screens.first?.frame.height else { return }
+    /// The window the sidebar is bound to, to resize it again later (for
+    /// example to give it its space back when the sidebar is turned off).
+    var boundWindow: AXUIElement? { observedWindow }
+
+    /// A window's frame now, in Cocoa coordinates.
+    func currentFrame(of win: AXUIElement) -> CGRect? { frame(of: win) }
+
+    /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.
+    func setWindowFrame(_ frame: CGRect, of window: AXUIElement? = nil) {
+        guard let win = window ?? observedWindow, let h = NSScreen.screens.first?.frame.height else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
         var origin = ax.origin, size = ax.size
         guard let p = AXValueCreate(.cgPoint, &origin), let s = AXValueCreate(.cgSize, &size) else { return }
@@ -97,7 +104,7 @@ final class WindowTracker: NSObject {
         AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
         AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p)
         AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
-        refresh()
+        if window == nil || CFEqual(win, observedWindow as CFTypeRef?) { refresh() }
     }
 
     /// Brings the browser back to the front (after a click in the sidebar).
@@ -267,7 +274,8 @@ final class WindowTracker: NSObject {
             }
         }
         settleWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08, execute: work)
+        // Long enough for an animated snap (macOS tiling) to finish moving.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
     }
 
     private func watchWindow(_ win: AXUIElement) {

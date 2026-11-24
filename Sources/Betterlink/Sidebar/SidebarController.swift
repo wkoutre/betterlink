@@ -26,7 +26,11 @@ final class SidebarController: ObservableObject {
     private var current: WindowTracker.Target?
     /// A window this sidebar resized, by window: the space the user gave the
     /// pair, and the frame the window took inside it.
-    private struct Fit { var outer: CGRect, inner: CGRect, side: SidebarSide }
+    private struct Fit {
+        var outer: CGRect, inner: CGRect, side: SidebarSide
+        /// The window itself, to give it its space back later.
+        var window: AXUIElement?
+    }
     private var fits: [Int: Fit] = [:]
     /// The narrowest a browser let its window get, by window, once it stopped us.
     private var minWidths: [Int: CGFloat] = [:]
@@ -72,7 +76,11 @@ final class SidebarController: ObservableObject {
 
     private func stop() {
         // Give the window back the space the sidebar took.
-        if let t = current, let f = fits[t.windowHash], Self.same(t.frame, f.inner) { tracker.setWindowFrame(f.outer) }
+        // Every window it narrowed, not only the one in front, if still as narrowed.
+        for f in fits.values {
+            guard let win = f.window, let now = tracker.currentFrame(of: win), Self.same(now, f.inner) else { continue }
+            tracker.setWindowFrame(f.outer, of: win)
+        }
         fits = [:]
         minWidths = [:]
         tracker.stop()
@@ -138,7 +146,8 @@ final class SidebarController: ObservableObject {
             guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: side,
                                                       minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
             fits[t.windowHash] = Fit(outer: outer, inner: inner,
-                                     side: SidebarGeometry.resolve(side, window: outer, screen: screen))
+                                     side: SidebarGeometry.resolve(side, window: outer, screen: screen),
+                                     window: tracker.boundWindow)
             askedAt = Date()
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }

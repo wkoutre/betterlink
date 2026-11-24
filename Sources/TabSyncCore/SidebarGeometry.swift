@@ -63,13 +63,18 @@ public enum SidebarGeometry {
     /// `screen` (the visible frame): the window was snapped, not placed by hand.
     /// The tolerance covers the gaps window managers leave around tiles.
     public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = 10) -> Bool {
-        guard s.width > 0, s.height > 0 else { return false }
+        snapError(w, screen: s) <= tolerance
+    }
+
+    /// How far the edge farthest from a half, third or quarter line is from one.
+    static func snapError(_ w: CGRect, screen s: CGRect) -> CGFloat {
+        guard s.width > 0, s.height > 0 else { return .infinity }
         let lines: [CGFloat] = [0, 1, 1 / 2, 1 / 3, 2 / 3, 1 / 4, 3 / 4]
-        func on(_ v: CGFloat, _ origin: CGFloat, _ length: CGFloat) -> Bool {
-            lines.contains { abs(origin + $0 * length - v) <= tolerance }
+        func off(_ v: CGFloat, _ origin: CGFloat, _ length: CGFloat) -> CGFloat {
+            lines.map { abs(origin + $0 * length - v) }.min() ?? .infinity
         }
-        return on(w.minX, s.minX, s.width) && on(w.maxX, s.minX, s.width)
-            && on(w.minY, s.minY, s.height) && on(w.maxY, s.minY, s.height)
+        return max(off(w.minX, s.minX, s.width), off(w.maxX, s.minX, s.width),
+                   off(w.minY, s.minY, s.height), off(w.maxY, s.minY, s.height))
     }
 
     /// The frame a window that came to rest should take so that the window and
@@ -85,6 +90,18 @@ public enum SidebarGeometry {
         let w = window.integral
         let resolved = resolve(side, window: w, screen: screen)
         let room = resolved == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+        // Already fitted: the window and its sidebar beside it fill a tile. A
+        // fitted window can itself land on a snap line (a half less the sidebar
+        // can be a third), so this comes first; without it a second settle, after
+        // a relaunch or the sidebar turned off and on, would narrow it again.
+        let besideRect = resolved == .left ? CGRect(x: w.minX - width, y: w.minY, width: width, height: w.height)
+                                           : CGRect(x: w.maxX, y: w.minY, width: width, height: w.height)
+        // When both readings land near the grid, the more exact one wins: 688 +
+        // 340 = 1028 is exactly half of 2056, while 1028 + 340 = 1368 is 3 pt off
+        // two thirds. A tie (both exact) also leaves the window alone: resizing
+        // is the step that must never repeat.
+        if room >= width, isSnapped(w.union(besideRect), screen: screen),
+           snapError(w.union(besideRect), screen: screen) <= snapError(w, screen: screen) { return nil }
         let need: CGFloat
         if isSnapped(w, screen: screen) {
             need = width
