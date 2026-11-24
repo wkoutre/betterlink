@@ -64,6 +64,22 @@ struct SidebarLibraryTests {
         #expect(p.items.map(\.id) == [outer, inner])
     }
 
+    /// Review F1: an id that isn't a folder (deleted by a sync, or a link's id)
+    /// must never lose the item being moved or saved.
+    @Test func nothingIsLostIntoAFolderThatIsntThere() {
+        var p = SidebarProfile(name: "Primary")
+        let link = SavedLink(title: "Keep", url: "https://keep.example/")
+        p.addLink(link)
+        p.move(link.id, into: UUID()) // a folder that no longer exists
+        #expect(p.allLinks.map(\.title) == ["Keep"])
+        let other = SavedLink(title: "Other", url: "https://other.example/")
+        p.addLink(other)
+        p.move(link.id, into: other.id) // a link, not a folder
+        #expect(p.allLinks.count == 2)
+        p.addLink(SavedLink(title: "Saved", url: "https://saved.example/"), in: UUID())
+        #expect(p.allLinks.map(\.title).contains("Saved")) // lands at the top level instead
+    }
+
     @Test func favoritesDoNotRepeat() {
         var p = SidebarProfile(name: "Primary")
         p.addFavorite(SavedLink(title: "Mail", url: "https://mail.example/"))

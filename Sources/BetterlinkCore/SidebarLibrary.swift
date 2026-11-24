@@ -107,6 +107,8 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
     /// can't move into itself or into one of its own folders.
     public mutating func move(_ id: UUID, into parent: UUID?) {
         guard let item = Self.find(id, in: items), id != parent else { return }
+        // Only into a folder that exists: anything else would drop the item (review F1).
+        if let parent, !isFolder(parent) { return }
         if let parent, case .folder(let f) = item, Self.find(parent, in: f.items) != nil { return }
         items = Self.removing(id, from: items)
         insert(item, into: parent)
@@ -115,15 +117,22 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
     /// Every saved link, folders included, depth first.
     public var allLinks: [SavedLink] { favorites + Self.links(in: items) }
 
+    private func isFolder(_ id: UUID) -> Bool {
+        if case .folder = Self.find(id, in: items) { return true }
+        return false
+    }
+
+    /// Into `parent` when it is a folder, else at the top level: a folder deleted
+    /// meanwhile (by a sync, say) must not swallow what is being saved.
     private mutating func insert(_ item: SidebarItem, into parent: UUID?) {
-        guard let parent else { items.append(item); return }
+        guard let parent, isFolder(parent) else { items.append(item); return }
         items = Self.mapping(items) { node in
             if case .folder(var f) = node, f.id == parent { f.items.append(item); f.expanded = true; return .folder(f) }
             return node
         }
     }
 
-    static func links(in items: [SidebarItem]) -> [SavedLink] {
+    public static func links(in items: [SidebarItem]) -> [SavedLink] {
         items.flatMap { item -> [SavedLink] in
             switch item {
             case .link(let l): return [l]

@@ -409,6 +409,8 @@ private struct ShortcutRecorder: View {
 private struct SidebarProfilesSection: View {
     @ObservedObject private var lib = SidebarLibraryModel.shared
     @ObservedObject private var tabs = TabsModel.shared
+    /// Deleting a Sidebar Profile asks first: it takes its Favorites and folders with it (review F6).
+    @State private var confirmDelete: SidebarProfile?
 
     var body: some View {
         DSSection {
@@ -416,7 +418,11 @@ private struct SidebarProfilesSection: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 2) {
                         TextField("Name", text: Binding(get: { sp.name },
-                                                        set: { n in lib.change(profile: sp.id) { $0.name = n } }))
+                                                        set: { n in
+                                                            // A blank name is not saved (review F4).
+                                                            guard !n.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+                                                            lib.change(profile: sp.id) { $0.name = n }
+                                                        }))
                             .textFieldStyle(.plain)
                         Text(links(sp)).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     }
@@ -424,7 +430,7 @@ private struct SidebarProfilesSection: View {
                     Text("\(sp.favorites.count) favorites · \(sp.allLinks.count - sp.favorites.count) saved links")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     if lib.library.profiles.count > 1 {
-                        Button("Delete") { lib.change { $0.removeProfile(sp.id) } }
+                        Button("Delete") { confirmDelete = sp }
                     }
                 }
             }
@@ -434,6 +440,13 @@ private struct SidebarProfilesSection: View {
                 .fixedSize(horizontal: false, vertical: true)
         } header: {
             Text("Sidebar Profiles")
+        }
+        .confirmationDialog("Delete the Sidebar Profile \"\(confirmDelete?.name ?? "")\"?",
+                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
+            Button("Delete it and its \(confirmDelete?.allLinks.count ?? 0) saved links", role: .destructive) {
+                if let sp = confirmDelete { lib.change { $0.removeProfile(sp.id) } }
+                confirmDelete = nil
+            }
         }
     }
 

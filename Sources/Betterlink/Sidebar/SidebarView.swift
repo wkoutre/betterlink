@@ -13,6 +13,8 @@ struct SidebarView: View {
     @State private var newURL = ""
     @State private var renaming: UUID?
     @State private var draftName = ""
+    /// A folder or profile waiting for "Delete" to be confirmed.
+    @State private var confirmDelete: (id: UUID, name: String, count: Int)?
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -39,7 +41,7 @@ struct SidebarView: View {
                         newTabField(m)
                         LazyVStack(alignment: .leading, spacing: 1) {
                             // Tabs that are open saved links show in their folder instead.
-                            ForEach(windowTabs.filter { t in !profile.allLinks.contains { SavedLink.same($0.url, t.url) } }) { tab in
+                            ForEach(windowTabs.filter { !Self.claimed(by: profile, in: windowTabs).contains($0.id) }) { tab in
                                 SidebarTabRow(tab: tab) {
                                     tabs.activate(tab, in: m.session)
                                 } close: {
@@ -63,6 +65,13 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
+                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
+            Button("Delete \(confirmDelete?.count ?? 0) saved items", role: .destructive) {
+                if let d = confirmDelete, let p = profile { lib.change(profile: p.id) { $0.remove(d.id) } }
+                confirmDelete = nil
+            }
+        }
     }
 
     // MARK: - Header
@@ -172,11 +181,20 @@ struct SidebarView: View {
                 .contextMenu {
                     Button("New Folder Inside") { newFolder(in: f.id, p) }
                     Button("Rename") { startRename(f.id, f.name) }
-                    Button("Delete Folder", role: .destructive) { lib.change(profile: p.id) { $0.remove(f.id) } }
+                    Button("Delete Folder", role: .destructive) {
+                        // A folder with things in it asks first (review F6).
+                        let n = SidebarProfile.links(in: f.items).count + f.items.filter { if case .folder = $0 { return true }; return false }.count
+                        if n == 0 { lib.change(profile: p.id) { $0.remove(f.id) } } else { confirmDelete = (f.id, f.name, n) }
+                    }
                 }
                 .dropDestination(for: String.self) { keys, _ in drop(keys, into: f.id, p, open) }
                 if f.expanded {
                     ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                } else {
+                    // Closed, it still lists its open items, as Arc and Dia do.
+                    ForEach(SidebarProfile.links(in: f.items).filter { l in open.contains { SavedLink.same($0.url, l.url) } }) { l in
+                        node(.link(l), depth: depth + 1, p, m, open)
+                    }
                 }
             })
         case .link(let l):
@@ -310,6 +328,17 @@ struct SidebarView: View {
 
     static func saved(_ t: BrowserTab) -> SavedLink {
         SavedLink(title: t.title.isEmpty ? t.url : t.title, url: t.url, icon: t.favIconUrl.hasPrefix("data:") ? t.favIconUrl : nil)
+    }
+
+    /// The tabs saved links stand for: for each saved link, its first matching
+    /// tab. Those show with their link; every other tab, a second tab at the
+    /// same address included, shows in the tab list (review F5).
+    static func claimed(by p: SidebarProfile, in tabs: [BrowserTab]) -> Set<Int> {
+        var taken = Set<Int>()
+        for l in p.allLinks {
+            if let t = tabs.first(where: { !taken.contains($0.id) && SavedLink.same($0.url, l.url) }) { taken.insert(t.id) }
+        }
+        return taken
     }
 
     static func dragKey(_ t: BrowserTab) -> String { "betterlink-tab:\(t.id)" }
