@@ -35,6 +35,8 @@ final class WindowTracker: NSObject {
     /// Called when the window has come to rest: no move or resize for a moment
     /// and the mouse button is up.
     var onSettle: ((Target) -> Void)?
+    /// The panel's window number, for DragTrace (diagnostics only).
+    var onDragStart: (() -> Int?)?
     /// Bundle ids that count as browsers.
     var browserBundleIds: Set<String>
 
@@ -310,9 +312,13 @@ final class WindowTracker: NSObject {
     private func mouseEvent(_ type: NSEvent.EventType) {
         switch type {
         case .leftMouseDragged:
-            if displayLink == nil, fastRefresh() { startDragTracking() }
+            if displayLink == nil, fastRefresh() {
+                startDragTracking()
+                if let n = boundWindowNumber, let panel = onDragStart?() { DragTrace.begin(browser: n, panel: panel) }
+            }
         default:
             let wasDragging = displayLink != nil
+            if wasDragging { DragTrace.end() }
             stopDragTracking()
             if wasDragging { refresh() }
             if target != nil { scheduleSettle() }

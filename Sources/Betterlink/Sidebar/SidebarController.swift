@@ -95,6 +95,7 @@ final class SidebarController: ObservableObject {
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
+        tracker.onDragStart = { [weak self] in self?.panel?.windowNumber }
         hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
         hotKey.shortcut = shortcut
         // betterlink's own window coming forward keeps the sidebar bound (the
@@ -130,6 +131,7 @@ final class SidebarController: ObservableObject {
     /// space back, or show it and make room again.
     func toggleCollapsed() {
         guard enabled else { return }
+        DragTrace.log("toggle: collapsed \(collapsed) -> \(!collapsed)")
         // Hiding gives every narrowed window its space back, not only the one in front (review F1).
         if !collapsed { giveSpaceBack() }
         collapsed.toggle()
@@ -550,6 +552,14 @@ struct ContinuousCorner {
 /// showing, so the two read as one window with no notch at the seam. The rest
 /// of that strip is fully transparent, so clicks there reach the browser.
 final class SidebarPanel: NSPanel {
+    override func orderOut(_ sender: Any?) {
+        if DragTrace.enabled {
+            let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
+            DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
+        }
+        super.orderOut(sender)
+    }
+
     /// The corner of a macOS 26 browser window: a continuous curve, measured on
     /// Chrome (its alpha along the corner matches a 21 pt continuous rounded rect).
     static let corner = ContinuousCorner(radius: 21)
@@ -676,6 +686,7 @@ final class SidebarPanel: NSPanel {
     /// Shows the panel with a short fade (none with Reduce Motion).
     func fadeIn() {
         guard !isVisible || fading else { return }
+        DragTrace.log("fadeIn: visible \(isVisible) fading \(fading) alpha \(alphaValue) reduceMotion \(Self.reduceMotion)")
         fading = false
         if !isVisible { alphaValue = Self.reduceMotion ? 1 : 0; orderFrontRegardless() }
         NSAnimationContext.runAnimationGroup { ctx in
@@ -686,6 +697,7 @@ final class SidebarPanel: NSPanel {
 
     /// Hides the panel with a short fade; a fadeIn during it wins.
     func fadeOut() {
+        DragTrace.log("fadeOut called: visible \(isVisible) fading \(fading) alpha \(alphaValue)")
         guard isVisible, !fading else { return }
         guard !Self.reduceMotion else { orderOut(nil); return }
         fading = true
@@ -696,6 +708,7 @@ final class SidebarPanel: NSPanel {
             MainActor.assumeIsolated {
                 guard let self, self.fading else { return }
                 self.fading = false
+                DragTrace.log("fadeOut done: orderOut")
                 self.orderOut(nil)
                 self.alphaValue = 1
             }
