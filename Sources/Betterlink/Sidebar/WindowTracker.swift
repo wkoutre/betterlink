@@ -165,7 +165,6 @@ final class WindowTracker: NSObject {
         return CFEqual(focused, win) && (copy(win, kAXMainAttribute) as Bool?) == true
     }
 
-
     /// Brings the browser back to the front (after a click in the sidebar).
     func activateBrowser() {
         guard let t = target else { return }
