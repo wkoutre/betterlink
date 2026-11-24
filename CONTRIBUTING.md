@@ -5,7 +5,7 @@ Thanks for helping. betterlink decides where every link on a Mac opens, so chang
 ## Toolchain
 
 - macOS 15 or later on Apple silicon.
-- Xcode 16 or later. The command line tools alone can build betterlink, but `make test` needs Xcode's Swift Testing module (without it: "no such module 'Testing'").
+- Xcode 16 or later, or the Command Line Tools alone: with only the Command Line Tools, `make test` adds the paths their Swift Testing module needs.
 - [Bun](https://bun.sh) 1.4.4, for the bundled `betterlink` command in `cli/`. CI and the release check that exact build by checksum (`scripts/check-bun.sh`); when you update Bun, update the version in the workflows and the checksum there together.
 - Python 3, for `make tokens` and the token check in `make test`.
 
@@ -16,6 +16,8 @@ make test       # fetches the pinned TypeScript compiler, checks design tokens, 
 make test-cli   # builds dist/betterlink.app, then runs the command's tests against it
 make build      # dist/betterlink.app only
 ```
+
+`make build` signs the app with a Developer ID Application certificate from your keychain (`scripts/sign.sh`, the sequence releases use), so macOS keeps the permissions you gave it across rebuilds. With none the build is ad-hoc signed, and macOS asks again after each build. Pick another identity with `make build DEV_SIGN_IDENTITY="…"`, or none with `DEV_SIGN_IDENTITY=`.
 
 CI runs `make test` and `make test-cli` on macOS for every pull request, and [zizmor](https://github.com/zizmorcore/zizmor) lints the workflows.
 

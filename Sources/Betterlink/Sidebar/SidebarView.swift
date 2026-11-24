@@ -93,6 +93,8 @@ struct SidebarView: View {
                                     tabs.setMuted(!tab.muted, tab, in: m.session)
                                 }
                                 .onDrag { drag(Self.dragKey(tab)) }
+                                // Drop a tab before or after another to reorder the window's tabs.
+                                .modifier(tabDropRow(tab, m, windowTabs))
                                 .contextMenu { tabMenu(tab, profile, m, windowTabs) }
                                 .transition(Motion.reveal(reduceMotion))
                             }
@@ -663,6 +665,31 @@ struct SidebarView: View {
     }
 
     static func dragKey(_ t: BrowserTab) -> String { "betterlink-tab:\(t.id)" }
+
+    /// A stable row id for a tab, for the drop line.
+    static func rowID(_ t: BrowserTab) -> UUID {
+        UUID(uuidString: String(format: "7AB00000-0000-0000-0000-%012llX", UInt64(UInt32(truncatingIfNeeded: t.id)))) ?? UUID()
+    }
+
+    /// A tab row as a drop target: another tab of this window dropped before or
+    /// after it moves there in the browser.
+    private func tabDropRow(_ target: BrowserTab, _ m: Match, _ open: [BrowserTab]) -> some ViewModifier {
+        let id = Self.rowID(target)
+        func dragged() -> BrowserTab? { dragging.flatMap { Self.tab(forDragKey: $0, in: open) } }
+        return DropRowModifier(id: id, horizontal: false, canHold: false, color: pal.accent,
+                               size: rowSizes[id] ?? .zero, target: $dropTarget,
+                               measured: { rowSizes[id] = $0 },
+                               allowed: { zone in
+                                   // Chrome keeps pinned tabs first: no drop across that line (review F1).
+                                   guard m.session.can(.move), let t = dragged(), t.pinned == target.pinned else { return false }
+                                   return TabMove.index(moving: t.index, nextTo: target.index, after: zone == .after) != nil
+                               }) { keys, zone in
+            dragging = nil
+            guard let t = keys.lazy.compactMap({ Self.tab(forDragKey: $0, in: open) }).first,
+                  let to = TabMove.index(moving: t.index, nextTo: target.index, after: zone == .after) else { return }
+            tabs.move(t, to: to, in: m.session, windowId: m.window?.id)
+        }
+    }
 
     static func tab(forDragKey k: String, in tabs: [BrowserTab]) -> BrowserTab? {
         guard k.hasPrefix("betterlink-tab:"), let id = Int(k.dropFirst("betterlink-tab:".count)) else { return nil }

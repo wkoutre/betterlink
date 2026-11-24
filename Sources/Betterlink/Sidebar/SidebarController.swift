@@ -29,9 +29,9 @@ final class SidebarController: ObservableObject {
     /// back, and showing it again makes room again (like collapsing Arc's sidebar).
     @Published private(set) var collapsed: Bool
     /// The sidebar takes over the browser's tabs: its own tab strip is switched
-    /// to collapsed vertical tabs (see TabStripTakeover), and with the sidebar
-    /// on the left, the sidebar covers that column too.
-    @Published var takeOverTabs: Bool { didSet { save(); stripCover = nil; takenOver = [:]; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
+    /// to collapsed vertical tabs (see TabStripTakeover); the sidebar sits
+    /// beside that column, never over it.
+    @Published var takeOverTabs: Bool { didSet { save(); takenOver = []; if takeOverTabs, let t = current { takeOver(t) }; layout() } }
     /// Shows and hides the sidebar while an attached browser is in front.
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
@@ -95,6 +95,7 @@ final class SidebarController: ObservableObject {
         width = w >= 200 ? w : 280
         tracker.onChange = { [weak self] t in self?.targetChanged(t) }
         tracker.onSettle = { [weak self] t in self?.settle(t) }
+        tracker.onDragStart = { [weak self] in self?.panel?.windowNumber }
         hotKey.onPress = { [weak self] in self?.toggleCollapsed() }
         hotKey.shortcut = shortcut
         // betterlink's own window coming forward keeps the sidebar bound (the
@@ -126,16 +127,175 @@ final class SidebarController: ObservableObject {
         Set(AppModel.installedBrowsers().filter { $0.family == .chromium || $0.bundleId == "com.apple.Safari" }.map(\.bundleId))
     }
 
+    /// Picks up settings another process wrote (`betterlink sidebar settings
+    /// set`, through AgentCommand): only what differs is set, so each change
+    /// takes effect as it does from the Tabs page. `sidebar.collapsed` is
+    /// applied with the same slide as the shortcut.
+    func reloadSettings() {
+        if let a = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Set.init), a != attachTo { attachTo = a }
+        if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
+        let w = defaults.double(forKey: "sidebar.width")
+        if w >= 200, w != width { width = w }
+        let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
+        if take != takeOverTabs { takeOverTabs = take }
+        let on = defaults.bool(forKey: "sidebar.enabled")
+        if on != enabled { enabled = on }
+        let hidden = defaults.bool(forKey: "sidebar.collapsed")
+        if enabled, hidden != collapsed { toggleCollapsed() }
+    }
+
     /// The shortcut and the menu item: hide the sidebar and give the window its
     /// space back, or show it and make room again.
     func toggleCollapsed() {
         guard enabled else { return }
-        // Hiding gives every narrowed window its space back, not only the one in front (review F1).
-        if !collapsed { giveSpaceBack() }
-        collapsed.toggle()
+        DragTrace.log("toggle: collapsed \(collapsed) -> \(!collapsed)")
+        if collapsed { slideIn() } else { slideOut() }
+    }
+
+    // MARK: - Show and hide as one slide
+
+    /// A slide in progress: where the sidebar's outer edge is, the window's
+    /// frames hidden and shown (equal when the window doesn't make room), and
+    /// the timer stepping it.
+    private struct SlideRun {
+        var slide: SidebarSlide
+        var side: SidebarSide
+        var outer: CGFloat
+        var hiddenWindow: CGRect
+        var shownWindow: CGRect
+        var windowHash: Int
+        /// The window the slide started on, by Accessibility element and
+        /// window number: every frame resizes and reads this one, whatever is
+        /// bound meanwhile (review N1).
+        var window: AXUIElement?
+        var windowNumber: UInt32?
+        var timer: Timer?
+        var frames = 0, started = CACurrentMediaTime(), worstGap: CGFloat = 0
+        var fitted: Bool { hiddenWindow != shownWindow }
+    }
+    private var slideRun: SlideRun?
+
+    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+
+    /// Hides: the sidebar's inner edge and the window's edge slide toward the
+    /// outer edge together; at the end the window fills the tile.
+    private func slideOut() {
+        collapsed = true
         save()
-        if !collapsed, let t = current { settle(t) }
-        layout()
+        if var run = slideRun { // turning back mid-show
+            run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+            slideRun = run
+            return
+        }
+        guard let t = current, let panel, panel.isVisible, let attached = panel.attachedSide else {
+            giveSpaceBack(); layout(); return
+        }
+        let visible = panel.frame
+        let outer = attached == .left ? visible.minX : visible.maxX
+        let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
+        var run = SlideRun(slide: SidebarSlide(shown: true), side: attached, outer: outer,
+                           hiddenWindow: fit?.outer ?? t.frame, shownWindow: t.frame, windowHash: t.windowHash,
+                           window: tracker.boundWindow, windowNumber: tracker.boundWindowNumber)
+        run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+        start(run)
+    }
+
+    /// Shows: the window narrows and the sidebar opens from its outer edge,
+    /// together, the reverse of a hide.
+    private func slideIn() {
+        collapsed = false
+        save()
+        if var run = slideRun { // turning back mid-hide
+            run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+            slideRun = run
+            return
+        }
+        guard let t = current, !t.fullScreen else { layout(); return }
+        // As settle() does: a refusal only holds for the frame it was made at (review N2).
+        if let r = refused, !Self.same(r, t.frame) { refused = nil }
+        // Where the window goes: narrowed to make room when it was given a
+        // tile, else where it is.
+        let screen = screen(for: t.frame)
+        let inner = refused == nil ? SidebarGeometry.settled(window: t.frame, screen: screen, width: width, side: side,
+                                                             minWindowWidth: minWidths[t.windowHash] ?? 500) : nil
+        let shown = inner ?? t.frame
+        let panel = placePanel(beside: shown, t)
+        guard let attached = panel.attachedSide else { layout(); return }
+        let outer = attached == .left ? panel.frame.minX : panel.frame.maxX
+        if inner != nil {
+            fits[t.windowHash] = Fit(outer: t.frame, inner: shown, side: attached,
+                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+            askedAt = Date()
+        }
+        panel.reveal = outer
+        panel.showNow()
+        var run = SlideRun(slide: SidebarSlide(shown: false), side: attached, outer: outer,
+                           hiddenWindow: t.frame, shownWindow: shown, windowHash: t.windowHash,
+                           window: tracker.boundWindow, windowNumber: tracker.boundWindowNumber)
+        run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+        start(run)
+    }
+
+    private func start(_ run: SlideRun) {
+        slideRun = run
+        stepSlide()
+        guard slideRun != nil else { return } // Reduce Motion: done in one step
+        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stepSlide() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        slideRun?.timer = timer
+    }
+
+    /// One frame: the window to its frame for this moment, then the sidebar
+    /// revealed up to where the window really is, so the seam stays tight
+    /// even when the browser lags behind.
+    private func stepSlide() {
+        guard var run = slideRun, let panel else { return }
+        let now = CACurrentMediaTime()
+        let p = run.slide.progress(at: now)
+        let f = SidebarSlide.frames(hiddenWindow: run.hiddenWindow, shownWindow: run.shownWindow,
+                                    outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: p)
+        var seam = f.innerEdge
+        if run.fitted {
+            if let win = run.window {
+                // Hiding widens the window; showing narrows it.
+                tracker.slideWindow(win, to: f.window, moveOrigin: run.side == .left,
+                                    growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
+            }
+            if let n = run.windowNumber, let real = tracker.windowServerFrame(n) {
+                let edge = run.side == .left ? real.minX : real.maxX
+                run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
+                seam = edge
+            }
+        }
+        panel.reveal = seam
+        run.frames += 1
+        if run.slide.done(at: now) {
+            run.slide.settle(at: now)
+            run.timer?.invalidate()
+            slideRun = nil
+            finishSlide(run)
+            return
+        }
+        slideRun = run
+    }
+
+    private func finishSlide(_ run: SlideRun) {
+        let ms = (CACurrentMediaTime() - run.started) * 1000
+        DragTrace.log(String(format: "slide %@: %d frames in %.0f ms (%.0f fps), worst seam gap %.1f pt, window %@",
+                             run.slide.phase == .hidden ? "out" : "in", run.frames, ms, Double(run.frames) / max(ms / 1000, 0.001),
+                             run.worstGap, run.fitted ? "resized" : "unchanged"))
+        if run.slide.phase == .hidden {
+            // Closed first, then the mask lifted: the whole panel never flashes.
+            panel?.hideNow()
+            panel?.reveal = nil
+            fits[run.windowHash] = nil
+            giveSpaceBack() // any other window narrowed for the sidebar
+        } else {
+            panel?.reveal = nil
+            layout()
+        }
     }
 
     // MARK: - Lifecycle
@@ -157,7 +317,18 @@ final class SidebarController: ObservableObject {
 
     /// Gives every window the sidebar narrowed, not only the one in front, its
     /// space back, if it is still as narrowed. Also called when the app quits.
-    func giveSpaceBack() { giveSpaceBack(where: { _ in true }) }
+    func giveSpaceBack() {
+        // Turned off or quit mid-slide: the window goes back to its full
+        // frame first, since it is at neither the narrowed nor the full width.
+        if let run = slideRun {
+            run.timer?.invalidate()
+            slideRun = nil
+            if run.fitted, let win = run.window { tracker.setWindowFrame(run.hiddenWindow, of: win) }
+            fits[run.windowHash] = nil
+            panel?.reveal = nil
+        }
+        giveSpaceBack(where: { _ in true })
+    }
 
     private func giveSpaceBack(where include: (Fit) -> Bool) {
         for (k, f) in fits where include(f) {
@@ -211,10 +382,9 @@ final class SidebarController: ObservableObject {
         let newWindow = t != nil && t?.windowHash != current?.windowHash
         current = t
         if newWindow, let t {
-            // A window already taken over keeps its measurement: coming back
-            // from another app neither drops the cover nor presses again.
-            stripCover = takenOver[t.windowHash] ?? nil
-            if takeOverTabs, takenOver[t.windowHash] == nil { takeOver(t) }
+            // A window already taken over isn't pressed again on coming back
+            // from another app.
+            if takeOverTabs, !takenOver.contains(t.windowHash) { takeOver(t) }
         }
         var shown = t
         if let old = target { shown?.frame = old.frame }
@@ -222,15 +392,11 @@ final class SidebarController: ObservableObject {
         layout()
     }
 
-    /// The browser's collapsed vertical tab column, as (width, distance from
-    /// the window's top), measured from the window; nil when there is none.
-    private var stripCover: CGSize?
-    /// Windows already taken over, with their measured column (nil inside
-    /// when the window shows none), by window hash.
-    private var takenOver: [Int: CGSize?] = [:]
+    /// Windows already taken over, by window hash.
+    private var takenOver: Set<Int> = []
 
-    /// Collapses the bound window's tab strip (Chromium browsers), then
-    /// measures the column it leaves, so the sidebar can cover it.
+    /// Collapses the bound window's tab strip (Chromium browsers). The sidebar
+    /// sits beside the collapsed column and never covers it (Nick, 2026-11-24).
     ///
     /// The browser's menu acts on whichever of its windows is focused and only
     /// catches up a moment after a window comes forward, so nothing is pressed
@@ -243,9 +409,7 @@ final class SidebarController: ObservableObject {
             guard let self, self.takeOverTabs, self.current?.windowHash == t.windowHash else { return }
             guard self.tracker.boundWindowIsFocusedMain() else { return self.takeOver(t, pass: pass + 1) }
             if TabStripTakeover.apply(pid: t.pid) != nil { return self.takeOver(t, pass: pass + 1) }
-            self.stripCover = self.tracker.verticalTabStrip()
-            self.takenOver[t.windowHash] = .some(self.stripCover)
-            self.layout()
+            self.takenOver.insert(t.windowHash)
         }
     }
 
@@ -263,13 +427,6 @@ final class SidebarController: ObservableObject {
     private func settle(_ t: WindowTracker.Target) {
         // The tab list matches the window by its frame: refresh it now that it is still.
         if target != t { target = t }
-        // Every mouse-up settles: the user may have expanded the tab column or
-        // turned vertical tabs off, so measure it again (review F3).
-        if takeOverTabs, takenOver[t.windowHash] != nil {
-            let now = tracker.verticalTabStrip()
-            takenOver[t.windowHash] = .some(now)
-            if now != stripCover { stripCover = now; layout() }
-        }
         guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         var outer = t.frame
@@ -344,19 +501,38 @@ final class SidebarController: ObservableObject {
     private func layout() {
         // The shortcut works only while an attached browser is in front.
         updateHotKey()
+        // A slide places the panel itself, frame by frame.
+        guard slideRun == nil else { return }
         let ownAppInFront = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         guard enabled, !collapsed, let t = current, !t.fullScreen else {
             panel?.fadeOut()
             return
         }
-        let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
-        let p = SidebarGeometry.place(window: t.frame, screen: screen(for: t.frame), width: width, side: fit?.side ?? side,
-                                      keepOnScreen: refused.map { Self.same($0, t.frame) } ?? false)
+        let panel = placePanel(beside: t.frame, t)
+        if ownAppInFront {
+            // Beside the browser window, under betterlink's own windows; with
+            // no window number to order against, hidden rather than on top.
+            guard let n = tracker.boundWindowNumber else { panel.fadeOut(); return }
+            if panel.level != .normal { panel.level = .normal }
+            panel.fadeIn()
+            panel.order(.above, relativeTo: Int(n))
+        } else {
+            if panel.level != .floating { panel.level = .floating }
+            panel.fadeIn()
+        }
+    }
+
+    /// Puts the panel beside a window at `windowFrame` (the bound window's,
+    /// or where it is about to be), attached to its edge. Returns the panel.
+    @discardableResult
+    private func placePanel(beside windowFrame: CGRect, _ t: WindowTracker.Target) -> SidebarPanel {
+        let fit = fits[t.windowHash].flatMap { Self.same($0.inner, windowFrame) ? $0 : nil }
+        let p = SidebarGeometry.place(window: windowFrame, screen: screen(for: windowFrame), width: width, side: fit?.side ?? side,
+                                      keepOnScreen: refused.map { Self.same($0, windowFrame) } ?? false)
         if placedSide != p.side { placedSide = p.side }
         let panel = self.panel ?? makePanel()
         let attached: SidebarSide? = p.overlaps ? nil : p.side
-        // On the left, it also covers the browser's collapsed tab column.
-        panel.attach(to: attached, cover: attached == .left && takeOverTabs ? stripCover : nil)
+        panel.attach(to: attached)
         // Beside the window, the panel reaches under the window's rounded
         // corners to fill them (see SidebarPanel), so it is that much wider.
         let reach = attached == nil ? 0 : panel.reach
@@ -371,17 +547,7 @@ final class SidebarController: ObservableObject {
         } else {
             panel.setFrame(frame, display: true, animate: false)
         }
-        if ownAppInFront {
-            // Beside the browser window, under betterlink's own windows; with
-            // no window number to order against, hidden rather than on top.
-            guard let n = tracker.boundWindowNumber else { panel.fadeOut(); return }
-            if panel.level != .normal { panel.level = .normal }
-            panel.fadeIn()
-            panel.order(.above, relativeTo: Int(n))
-        } else {
-            if panel.level != .floating { panel.level = .floating }
-            panel.fadeIn()
-        }
+        return panel
     }
 
     private func makePanel() -> SidebarPanel {
@@ -550,6 +716,16 @@ struct ContinuousCorner {
 /// showing, so the two read as one window with no notch at the seam. The rest
 /// of that strip is fully transparent, so clicks there reach the browser.
 final class SidebarPanel: NSPanel {
+    override func orderOut(_ sender: Any?) {
+        fadeTimer?.invalidate(); fadeTimer = nil
+        fade = Fade(shown: false)
+        if DragTrace.enabled {
+            let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
+            DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
+        }
+        super.orderOut(sender)
+    }
+
     /// The corner of a macOS 26 browser window: a continuous curve, measured on
     /// Chrome (its alpha along the corner matches a 21 pt continuous rounded rect).
     static let corner = ContinuousCorner(radius: 21)
@@ -564,10 +740,8 @@ final class SidebarPanel: NSPanel {
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
     private var side: SidebarSide?
-    private var cover: CGSize?
-    /// How far the panel reaches under the browser window: the corner's curve,
-    /// or the tab column it covers when wider.
-    var reach: CGFloat { max(Self.browserCornerRadius, cover?.width ?? 0) }
+    /// How far the panel reaches under the browser window: the corner's curve.
+    var reach: CGFloat { Self.browserCornerRadius }
 
     init(contentView content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 280, height: 600),
@@ -582,6 +756,8 @@ final class SidebarPanel: NSPanel {
         // No shadow of its own: it would fall across the browser along the seam,
         // and the pair should read as one window.
         hasShadow = false
+        // Our slide and fade are the only motion; no system fade on close.
+        animationBehavior = .none
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
 
         effect.material = .sidebar
@@ -616,9 +792,8 @@ final class SidebarPanel: NSPanel {
 
     /// Which side of the browser window the panel is on, or nil when it covers
     /// the window's edge instead (all four corners rounded, nothing to fill).
-    func attach(to side: SidebarSide?, cover: CGSize? = nil) {
+    func attach(to side: SidebarSide?) {
         self.side = side
-        self.cover = side == .left ? cover : nil
         let r = side == nil ? 0 : reach
         leading?.constant = side == .right ? r : 0
         trailing?.constant = side == .left ? -r : 0
@@ -637,11 +812,28 @@ final class SidebarPanel: NSPanel {
 
     /// The sidebar with rounded outer corners, plus the bits of the strip under
     /// the browser's edge that its rounded corners leave uncovered.
+    /// During a slide, the part of the panel shown: from `inner` (the
+    /// window's seam) to the outer edge, in screen x. Nil: the whole panel.
+    var reveal: CGFloat? { didSet { reshape() } }
+
     private func reshape() {
         let b = effect.bounds
         guard b.width > 0, b.height > 0 else { return }
         let reach = self.reach, c = Self.corner
         var path: CGPath
+        if let inner = reveal {
+            // Only the strip between the seam and the outer edge, outer
+            // corners rounded; the content stays anchored and isn't reflowed.
+            let x = min(max(inner - frame.minX, 0), b.width)
+            let strip = side == .left ? CGRect(x: 0, y: 0, width: x, height: b.height)
+                                      : CGRect(x: x, y: 0, width: b.width - x, height: b.height)
+            path = strip.width < 1 ? CGPath(rect: .zero, transform: nil)
+                                   : c.rect(strip, corners: side == .left ? [0, 3] : [1, 2])
+            CATransaction.begin(); CATransaction.setDisableActions(true)
+            shape.frame = b; shape.path = path
+            CATransaction.commit()
+            return
+        }
         switch side {
         case .right:
             // The window is to the left; its edge is at x = reach.
@@ -653,10 +845,6 @@ final class SidebarPanel: NSPanel {
             let body = c.rect(CGRect(x: 0, y: 0, width: edge, height: b.height), corners: [0, 3])
             path = body.union(c.notch(edgeX: edge, windowLeft: false, top: true, height: b.height))
                 .union(c.notch(edgeX: edge, windowLeft: false, top: false, height: b.height))
-            // The browser's collapsed tab column, from its top to the window's bottom.
-            if let cover, cover.height < b.height {
-                path = path.union(CGPath(rect: CGRect(x: edge, y: 0, width: cover.width, height: b.height - cover.height), transform: nil))
-            }
         default:
             path = c.rect(b, corners: [0, 1, 2, 3])
         }
@@ -671,34 +859,70 @@ final class SidebarPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 
     private static var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
-    private var fading = false
+    /// The show and hide fade (BetterlinkCore's Fade), stepped by our own
+    /// timer: AppKit's window alpha animation sometimes didn't run on hide,
+    /// leaving the panel to vanish at once (Nick, 2026-11-24).
+    private var fade = Fade(shown: false)
+    private var fadeTimer: Timer?
+
+    private static var now: Double { CACurrentMediaTime() }
+
+    /// The side the panel is attached on, nil when it covers the window's edge.
+    var attachedSide: SidebarSide? { side }
+
+    /// Shows at full alpha at once (a slide reveals it instead of a fade).
+    func showNow() {
+        fadeTimer?.invalidate(); fadeTimer = nil
+        fade = Fade(shown: true)
+        alphaValue = 1
+        if !isVisible { orderFrontRegardless() }
+    }
+
+    /// Hides at once, at the end of a slide.
+    func hideNow() {
+        fadeTimer?.invalidate(); fadeTimer = nil
+        super.orderOut(nil)
+        fade = Fade(shown: false)
+        alphaValue = 1
+    }
 
     /// Shows the panel with a short fade (none with Reduce Motion).
     func fadeIn() {
-        guard !isVisible || fading else { return }
-        fading = false
-        if !isVisible { alphaValue = Self.reduceMotion ? 1 : 0; orderFrontRegardless() }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = Self.reduceMotion ? 0 : 0.14
-            animator().alphaValue = 1
-        }
+        guard fade.phase == .hidden || fade.phase == .hiding || !isVisible else { return }
+        if !isVisible { fade = Fade(shown: false); alphaValue = 0; orderFrontRegardless() }
+        DragTrace.log("fadeIn from alpha \(alphaValue) phase \(fade.phase)")
+        fade.show(at: Self.now, reduceMotion: Self.reduceMotion)
+        runFade()
     }
 
     /// Hides the panel with a short fade; a fadeIn during it wins.
     func fadeOut() {
-        guard isVisible, !fading else { return }
-        guard !Self.reduceMotion else { orderOut(nil); return }
-        fading = true
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.12
-            animator().alphaValue = 0
-        }, completionHandler: { [weak self] in
-            MainActor.assumeIsolated {
-                guard let self, self.fading else { return }
-                self.fading = false
-                self.orderOut(nil)
-                self.alphaValue = 1
-            }
-        })
+        guard isVisible, fade.phase == .shown || fade.phase == .showing else { return }
+        DragTrace.log("fadeOut from alpha \(alphaValue) phase \(fade.phase)")
+        fade.hide(at: Self.now, reduceMotion: Self.reduceMotion)
+        runFade()
+    }
+
+    private func runFade() {
+        step()
+        guard fadeTimer == nil, fade.phase == .showing || fade.phase == .hiding else { return }
+        let t = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.step() }
+        }
+        RunLoop.main.add(t, forMode: .common) // keeps stepping during drags and menus
+        fadeTimer = t
+    }
+
+    private func step() {
+        let t = Self.now
+        alphaValue = fade.alpha(at: t)
+        guard fade.done(at: t) else { return }
+        fade.settle(at: t)
+        fadeTimer?.invalidate(); fadeTimer = nil
+        if fade.phase == .hidden {
+            DragTrace.log("fade done: orderOut")
+            super.orderOut(nil)
+            alphaValue = 1
+        }
     }
 }

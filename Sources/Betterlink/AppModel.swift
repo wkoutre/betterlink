@@ -445,6 +445,8 @@ final class AppModel: ObservableObject {
                 self.reloadRules()
                 self.reloadConfig(force: true)
                 SidebarLibraryModel.shared.reload()
+                // `betterlink sidebar settings set` writes the sidebar's settings.
+                SidebarController.shared.reloadSettings()
                 self.refreshPermissions()
                 // `betterlink menu-bar set` writes the setting from another process.
                 let shown = MenuBarIcon.isShown(in: MenuBarIcon.defaults())

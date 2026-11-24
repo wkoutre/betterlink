@@ -35,6 +35,8 @@ final class WindowTracker: NSObject {
     /// Called when the window has come to rest: no move or resize for a moment
     /// and the mouse button is up.
     var onSettle: ((Target) -> Void)?
+    /// The panel's window number, for DragTrace (diagnostics only).
+    var onDragStart: (() -> Int?)?
     /// Bundle ids that count as browsers.
     var browserBundleIds: Set<String>
 
@@ -116,6 +118,29 @@ final class WindowTracker: NSObject {
     /// A window's frame now, in Cocoa coordinates.
     func currentFrame(of win: AXUIElement) -> CGRect? { frame(of: win) }
 
+    /// Window `n`'s frame as the window server has it right now (what
+    /// is on screen), Cocoa coordinates. Cheap enough to call every frame.
+    func windowServerFrame(_ n: UInt32) -> CGRect? {
+        guard let h = NSScreen.screens.first?.frame.height,
+              let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first,
+              let b = Self.axBounds(info) else { return nil }
+        return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
+    }
+
+    /// One step of a slide on `win`: its size, and its position too when its
+    /// left edge moves (the sidebar on the left), so a frame costs one or two
+    /// Accessibility calls rather than three. macOS limits each step to what
+    /// fits on screen, so a growing window moves first and a shrinking one
+    /// resizes first.
+    func slideWindow(_ win: AXUIElement, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
+        guard let h = NSScreen.screens.first?.frame.height else { return }
+        let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
+        var origin = ax.origin, size = ax.size
+        func move() { if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) } }
+        func resize() { if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) } }
+        if growing { move(); resize() } else { resize(); move() }
+    }
+
     /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.
     func setWindowFrame(_ frame: CGRect, of window: AXUIElement? = nil) {
         guard let win = window ?? observedWindow, let h = NSScreen.screens.first?.frame.height else { return }
@@ -138,28 +163,6 @@ final class WindowTracker: NSObject {
         guard let win = observedWindow, let app = appElement,
               let focused: AXUIElement = copy(app, kAXFocusedWindowAttribute) else { return false }
         return CFEqual(focused, win) && (copy(win, kAXMainAttribute) as Bool?) == true
-    }
-
-    /// The bound window's vertical tab column, when the browser shows one along
-    /// its left edge (Chrome's collapsed vertical tabs: an AXTabGroup much taller
-    /// than wide): its width and how far below the window's top it starts.
-    func verticalTabStrip() -> CGSize? {
-        guard let win = observedWindow,
-              let wp: AXValue = copy(win, kAXPositionAttribute), let ws: AXValue = copy(win, kAXSizeAttribute) else { return nil }
-        var origin = CGPoint.zero, size = CGSize.zero
-        AXValueGetValue(wp, .cgPoint, &origin); AXValueGetValue(ws, .cgSize, &size)
-        func search(_ e: AXUIElement, _ depth: Int) -> CGSize? {
-            if (copy(e, kAXRoleAttribute) as String?) == (kAXTabGroupRole as String),
-               let pv: AXValue = copy(e, kAXPositionAttribute), let sv: AXValue = copy(e, kAXSizeAttribute) {
-                var p = CGPoint.zero, s = CGSize.zero
-                AXValueGetValue(pv, .cgPoint, &p); AXValueGetValue(sv, .cgSize, &s)
-                if abs(p.x - origin.x) < 2, s.height > s.width * 3, s.width < 120 { return CGSize(width: s.width, height: p.y - origin.y) }
-            }
-            guard depth < 7 else { return nil }
-            for c in (copy(e, kAXChildrenAttribute) as [AXUIElement]?) ?? [] { if let hit = search(c, depth + 1) { return hit } }
-            return nil
-        }
-        return search(win, 0)
     }
 
     /// Brings the browser back to the front (after a click in the sidebar).
@@ -310,9 +313,13 @@ final class WindowTracker: NSObject {
     private func mouseEvent(_ type: NSEvent.EventType) {
         switch type {
         case .leftMouseDragged:
-            if displayLink == nil, fastRefresh() { startDragTracking() }
+            if displayLink == nil, fastRefresh() {
+                startDragTracking()
+                if let n = boundWindowNumber, let panel = onDragStart?() { DragTrace.begin(browser: n, panel: panel) }
+            }
         default:
             let wasDragging = displayLink != nil
+            if wasDragging { DragTrace.end() }
             stopDragTracking()
             if wasDragging { refresh() }
             if target != nil { scheduleSettle() }
