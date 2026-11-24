@@ -15,8 +15,8 @@ final class TabsModel: ObservableObject {
     static let shared = TabsModel()
 
     @Published private(set) var sessions: [BrowserSession] = []
-    /// Browser profile names, by the extension's instance id (see ProfileLocator).
-    @Published private(set) var profileNames: [String: String] = [:]
+    /// Browser profiles, by the extension's instance id (see ProfileLocator).
+    @Published private(set) var profiles: [String: (ref: ProfileRef, name: String)] = [:]
     private var profileLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
@@ -35,7 +35,9 @@ final class TabsModel: ObservableObject {
     }
 
     /// The browser profile a session runs in, once known ("Claude", "Work").
-    func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profileNames[$0] } }
+    func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profiles[$0]?.name } }
+    /// Which browser profile a session runs in, once known.
+    func profileRef(_ s: BrowserSession) -> ProfileRef? { s.instance.flatMap { profiles[$0]?.ref } }
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the
@@ -43,7 +45,7 @@ final class TabsModel: ObservableObject {
     /// browser writes the storage a moment after the extension starts).
     private func lookUpProfiles(_ sessions: [BrowserSession]) {
         for s in sessions {
-            guard let instance = s.instance, profileNames[instance] == nil,
+            guard let instance = s.instance, profiles[instance] == nil,
                   Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > 5,
                   let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
                   let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
@@ -56,7 +58,8 @@ final class TabsModel: ObservableObject {
                 let state = FileManager.default.contents(atPath: root.appendingPathComponent("Local State").path)
                 let name = state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: browser.bundleId)
                     .profiles.first { $0.directory == dir }?.name } ?? dir
-                DispatchQueue.main.async { self.profileNames[instance] = name }
+                let ref = ProfileRef(browser: browser.bundleId, directory: dir)
+                DispatchQueue.main.async { self.profiles[instance] = (ref, name) }
             }
         }
     }
@@ -112,6 +115,7 @@ struct TabsPage: View {
             PageHeader(title: "Tabs",
                        subtitle: "Preview. Every open tab in your browsers, live. Click a tab to switch to it, ✕ to close it.")
             SidebarSettings(sidebar: sidebar)
+            SidebarProfilesSection()
             DSSection {
                 HStack(spacing: DS.Space.space2) {
                     DSTextField(label: "Open a tab", text: $newURL, prompt: "Open a link or search")
@@ -397,5 +401,48 @@ private struct ShortcutRecorder: View {
         monitor = nil
         recording = false
         hint = nil
+    }
+}
+
+/// The Sidebar Profiles: each has its own Favorites and folders and is shown
+/// for the browser profiles linked to it (pick one from the sidebar's title).
+private struct SidebarProfilesSection: View {
+    @ObservedObject private var lib = SidebarLibraryModel.shared
+    @ObservedObject private var tabs = TabsModel.shared
+
+    var body: some View {
+        DSSection {
+            ForEach(lib.library.profiles) { sp in
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        TextField("Name", text: Binding(get: { sp.name },
+                                                        set: { n in lib.change(profile: sp.id) { $0.name = n } }))
+                            .textFieldStyle(.plain)
+                        Text(links(sp)).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    }
+                    Spacer()
+                    Text("\(sp.favorites.count) favorites · \(sp.allLinks.count - sp.favorites.count) saved links")
+                        .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    if lib.library.profiles.count > 1 {
+                        Button("Delete") { lib.change { $0.removeProfile(sp.id) } }
+                    }
+                }
+            }
+            if let problem = lib.problem { Text(problem).foregroundStyle(DS.Palette.danger) }
+            Text("Pick which Sidebar Profile a browser profile shows from the title at the top of the sidebar. Saved in sidebar.json in the settings folder.")
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        } header: {
+            Text("Sidebar Profiles")
+        }
+    }
+
+    private func links(_ sp: SidebarProfile) -> String {
+        guard !sp.browserProfiles.isEmpty else { return "Every browser profile not linked elsewhere" }
+        let known = Dictionary(tabs.profiles.values.map { ($0.ref, $0.name) }, uniquingKeysWith: { a, _ in a })
+        return sp.browserProfiles.map { ref in
+            let browser = Browser.known(bundleId: ref.browser)?.name ?? ref.browser
+            return "\(browser) · \(known[ref] ?? ref.directory)"
+        }.joined(separator: ", ")
     }
 }

@@ -513,6 +513,7 @@ final class AppModel: ObservableObject {
         watchFolder()
         reloadRules()
         reloadConfig(force: true)
+        SidebarLibraryModel.shared.reload(folder: target)
     }
 
     func revealSettingsFolder() { NSWorkspace.shared.activateFileViewerSelecting([paths.directory]) }

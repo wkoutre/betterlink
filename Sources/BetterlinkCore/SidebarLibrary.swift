@@ -1,0 +1,253 @@
+import Foundation
+
+/// What the betterlink sidebar keeps, like Arc's and Dia's sidebars: for each
+/// Sidebar Profile a grid of Favorites and a tree of folders of saved links.
+/// Each Sidebar Profile is shown for the browser profiles it is linked to.
+/// Saved in the settings folder as sidebar.json, so it syncs with the rules.
+public struct SidebarLibrary: Codable, Equatable, Sendable {
+    public var version = 1
+    public var profiles: [SidebarProfile]
+
+    public init(profiles: [SidebarProfile] = []) { self.profiles = profiles }
+
+    /// The Sidebar Profile for a browser profile: the one linked to it, else
+    /// the first one linked to nothing (the catch-all), else the first.
+    public func profile(for ref: ProfileRef?) -> SidebarProfile? {
+        if let ref, let linked = profiles.first(where: { $0.browserProfiles.contains(ref) }) { return linked }
+        return profiles.first { $0.browserProfiles.isEmpty } ?? profiles.first
+    }
+
+    /// The library with one profile, "Primary", for everything.
+    public static let starter = SidebarLibrary(profiles: [SidebarProfile(name: "Primary")])
+
+    /// Shows `id` for `ref` from now on (and no other profile for it).
+    public mutating func link(_ ref: ProfileRef, to id: UUID) {
+        for i in profiles.indices {
+            profiles[i].browserProfiles.removeAll { $0 == ref }
+            if profiles[i].id == id { profiles[i].browserProfiles.append(ref) }
+        }
+    }
+
+    /// Removes a Sidebar Profile; the last one is kept.
+    public mutating func removeProfile(_ id: UUID) {
+        guard profiles.count > 1 else { return }
+        profiles.removeAll { $0.id == id }
+    }
+
+    public mutating func update(_ id: UUID, _ change: (inout SidebarProfile) -> Void) {
+        guard let i = profiles.firstIndex(where: { $0.id == id }) else { return }
+        change(&profiles[i])
+    }
+}
+
+public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    /// The browser profiles that show this Sidebar Profile. Empty: every
+    /// browser profile not linked to another one.
+    public var browserProfiles: [ProfileRef]
+    /// The grid of icons at the top.
+    public var favorites: [SavedLink]
+    /// Folders and links, in order.
+    public var items: [SidebarItem]
+
+    public init(id: UUID = UUID(), name: String, browserProfiles: [ProfileRef] = [],
+                favorites: [SavedLink] = [], items: [SidebarItem] = []) {
+        self.id = id; self.name = name; self.browserProfiles = browserProfiles
+        self.favorites = favorites; self.items = items
+    }
+
+    // MARK: - Editing
+
+    /// Adds a folder at the end of `parent` (nil: the top level).
+    @discardableResult
+    public mutating func addFolder(_ name: String, in parent: UUID? = nil) -> UUID {
+        let f = SidebarFolder(name: name)
+        insert(.folder(f), into: parent)
+        return f.id
+    }
+
+    /// Saves a link at the end of `parent` (nil: the top level).
+    public mutating func addLink(_ link: SavedLink, in parent: UUID? = nil) {
+        insert(.link(link), into: parent)
+    }
+
+    public mutating func addFavorite(_ link: SavedLink) {
+        guard !favorites.contains(where: { SavedLink.same($0.url, link.url) }) else { return }
+        favorites.append(link)
+    }
+
+    /// Removes a folder (with everything in it), a link or a favorite.
+    public mutating func remove(_ id: UUID) {
+        favorites.removeAll { $0.id == id }
+        items = Self.removing(id, from: items)
+    }
+
+    public mutating func rename(_ id: UUID, to name: String) {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !n.isEmpty else { return }
+        if let i = favorites.firstIndex(where: { $0.id == id }) { favorites[i].title = n }
+        items = Self.mapping(items) { item in
+            switch item {
+            case .folder(var f) where f.id == id: f.name = n; return .folder(f)
+            case .link(var l) where l.id == id: l.title = n; return .link(l)
+            default: return item
+            }
+        }
+    }
+
+    public mutating func toggleExpanded(_ id: UUID) {
+        items = Self.mapping(items) { item in
+            if case .folder(var f) = item, f.id == id { f.expanded.toggle(); return .folder(f) }
+            return item
+        }
+    }
+
+    /// Moves an item into `parent` (nil: the top level), at the end. A folder
+    /// can't move into itself or into one of its own folders.
+    public mutating func move(_ id: UUID, into parent: UUID?) {
+        guard let item = Self.find(id, in: items), id != parent else { return }
+        if let parent, case .folder(let f) = item, Self.find(parent, in: f.items) != nil { return }
+        items = Self.removing(id, from: items)
+        insert(item, into: parent)
+    }
+
+    /// Every saved link, folders included, depth first.
+    public var allLinks: [SavedLink] { favorites + Self.links(in: items) }
+
+    private mutating func insert(_ item: SidebarItem, into parent: UUID?) {
+        guard let parent else { items.append(item); return }
+        items = Self.mapping(items) { node in
+            if case .folder(var f) = node, f.id == parent { f.items.append(item); f.expanded = true; return .folder(f) }
+            return node
+        }
+    }
+
+    static func links(in items: [SidebarItem]) -> [SavedLink] {
+        items.flatMap { item -> [SavedLink] in
+            switch item {
+            case .link(let l): return [l]
+            case .folder(let f): return links(in: f.items)
+            }
+        }
+    }
+
+    static func find(_ id: UUID, in items: [SidebarItem]) -> SidebarItem? {
+        for item in items {
+            if item.id == id { return item }
+            if case .folder(let f) = item, let hit = find(id, in: f.items) { return hit }
+        }
+        return nil
+    }
+
+    static func removing(_ id: UUID, from items: [SidebarItem]) -> [SidebarItem] {
+        items.compactMap { item in
+            if item.id == id { return nil }
+            if case .folder(var f) = item { f.items = removing(id, from: f.items); return .folder(f) }
+            return item
+        }
+    }
+
+    /// Applies `change` to every item, depth first, children before parents.
+    static func mapping(_ items: [SidebarItem], _ change: (SidebarItem) -> SidebarItem) -> [SidebarItem] {
+        items.map { item in
+            if case .folder(var f) = item { f.items = mapping(f.items, change); return change(.folder(f)) }
+            return change(item)
+        }
+    }
+}
+
+public enum SidebarItem: Codable, Equatable, Identifiable, Sendable {
+    case folder(SidebarFolder)
+    case link(SavedLink)
+
+    public var id: UUID {
+        switch self {
+        case .folder(let f): return f.id
+        case .link(let l): return l.id
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey { case folder, link }
+
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if let f = try c.decodeIfPresent(SidebarFolder.self, forKey: .folder) { self = .folder(f); return }
+        self = .link(try c.decode(SavedLink.self, forKey: .link))
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .folder(let f): try c.encode(f, forKey: .folder)
+        case .link(let l): try c.encode(l, forKey: .link)
+        }
+    }
+}
+
+public struct SidebarFolder: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var name: String
+    public var expanded: Bool
+    public var items: [SidebarItem]
+
+    public init(id: UUID = UUID(), name: String, expanded: Bool = true, items: [SidebarItem] = []) {
+        self.id = id; self.name = name; self.expanded = expanded; self.items = items
+    }
+}
+
+/// A saved link, like an Arc pinned tab: it shows as open while a tab with
+/// its address is open, and clicking it switches to that tab or opens it.
+public struct SavedLink: Codable, Equatable, Identifiable, Sendable {
+    public var id: UUID
+    public var title: String
+    public var url: String
+    /// The site's icon as a data: URL, captured when the link was saved.
+    public var icon: String?
+
+    public init(id: UUID = UUID(), title: String, url: String, icon: String? = nil) {
+        self.id = id; self.title = title; self.url = url; self.icon = icon
+    }
+
+    /// Whether two addresses are the same page for "is it open": ignores the
+    /// #fragment, a trailing slash, and the case of the scheme and host.
+    public static func same(_ a: String, _ b: String) -> Bool { key(a) == key(b) }
+
+    static func key(_ s: String) -> String {
+        guard var c = URLComponents(string: s) else { return s }
+        c.fragment = nil
+        c.scheme = c.scheme?.lowercased()
+        c.host = c.host?.lowercased()
+        if c.path.count > 1, c.path.hasSuffix("/") { c.path.removeLast() }
+        if c.path.isEmpty { c.path = "/" }
+        return c.string ?? s
+    }
+}
+
+/// sidebar.json in the settings folder.
+public struct SidebarStore: Sendable {
+    public let file: URL
+
+    public init(folder: SettingsFolder) { file = folder.directory.appendingPathComponent("sidebar.json") }
+    public init(file: URL) { self.file = file }
+
+    /// The saved library, or the starter one when there is no file. Throws
+    /// when the file exists but is unsafe or unreadable.
+    public func load() throws -> SidebarLibrary {
+        guard FileManager.default.fileExists(atPath: file.path) else { return .starter }
+        if let problem = FileSafety.problem(with: file) { throw ConfigError.unsafeFile("Refused sidebar.json: \(problem).") }
+        let lib = try JSONDecoder().decode(SidebarLibrary.self, from: Data(contentsOf: file))
+        return lib.profiles.isEmpty ? .starter : lib
+    }
+
+    /// Changes the library starting from what is on disk now.
+    @discardableResult
+    public func update(_ change: (inout SidebarLibrary) throws -> Void) throws -> SidebarLibrary {
+        try SettingsFile.withLock(beside: file, name: ".sidebar.lock", what: "sidebar.json") {
+            var lib = try load()
+            try change(&lib)
+            try SettingsFile.write(lib, to: file, what: "sidebar.json")
+            return lib
+        }
+    }
+}
