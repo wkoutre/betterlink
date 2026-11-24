@@ -36,6 +36,21 @@ public enum WindowMatch {
         public var windowId: Int
     }
 
+    /// The browser's focused window. The browser tells each profile's copy of
+    /// the extension which of its windows has focus, and the others "none of
+    /// mine" (`windows.onFocusChanged`), so while the browser is in front
+    /// exactly one window across all its profiles is focused: the one in front.
+    /// This tells apart windows of one profile at the same size and place.
+    /// Then, when focus is unknown (an event not in yet), the window whose
+    /// reported frame is closest to `frame`.
+    public static func front(frame: WindowBounds?, in sessions: [BrowserSession]) -> Hit? {
+        let focused = sessions.flatMap { s in
+            s.store.orderedWindows.filter(\.window.focused).map { Hit(session: s.id, windowId: $0.id) }
+        }
+        if focused.count == 1 { return focused[0] }
+        return frame.flatMap { best(for: $0, in: sessions) }
+    }
+
     /// The window whose reported frame is closest to `frame` (Accessibility
     /// coordinates), across every session of that browser process. Frames more
     /// than `tolerance` apart in total don't count.

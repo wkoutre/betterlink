@@ -78,15 +78,15 @@ struct SidebarView: View {
     /// tab's title the AX window title starts with, else the focused window.
     static func match(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Match? {
         guard let t = target else { return nil }
-        // Each browser profile is its own session: the window whose reported
-        // frame matches the one in front says which profile it is.
+        // Each browser profile is its own session. The browser's focused window
+        // is the one in front; its frame is the fallback (see WindowMatch.front).
         let mine = sessions.filter { $0.browserPid == Int(t.pid) }
-        if let h = NSScreen.screens.first?.frame.height {
-            let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: h)
-            let front = WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height)
-            if let hit = WindowMatch.best(for: front, in: mine), let s = mine.first(where: { $0.id == hit.session }) {
-                return Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId })
-            }
+        let frame = NSScreen.screens.first.map { screen -> WindowBounds in
+            let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: screen.frame.height)
+            return WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height)
+        }
+        if let hit = WindowMatch.front(frame: frame, in: mine), let s = mine.first(where: { $0.id == hit.session }) {
+            return Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId })
         }
         guard let s = sessions.first(where: { $0.browserPid == Int(t.pid) })
             ?? sessions.first(where: { $0.browser == t.appName }) else { return nil }

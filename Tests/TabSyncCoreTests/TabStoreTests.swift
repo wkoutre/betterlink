@@ -196,6 +196,21 @@ struct ProfileTests {
         #expect(WindowMatch.best(for: WindowBounds(left: 300, top: 200, width: 500, height: 500), in: [a, b]) == nil)
     }
 
+    @Test func windowsOfOneProfileAtTheSameSpotAreToldApartByFocus() {
+        var a = BrowserSession(socketPath: "/a"), b = BrowserSession(socketPath: "/b")
+        let spot = (left: 0.0, top: 31.0, width: 748.0, height: 1259.0)
+        a.store.apply(snapshot([SnapshotWindow(id: 1, focused: false, tabs: [], left: spot.left, top: spot.top, width: spot.width, height: spot.height),
+                                SnapshotWindow(id: 2, focused: true, tabs: [], left: spot.left, top: spot.top, width: spot.width, height: spot.height)]))
+        b.store.apply(snapshot([SnapshotWindow(id: 9, focused: false, tabs: [], left: spot.left, top: spot.top, width: spot.width, height: spot.height)]))
+        let frame = WindowBounds(left: spot.left, top: spot.top, width: spot.width, height: spot.height)
+        #expect(WindowMatch.front(frame: frame, in: [a, b]) == WindowMatch.Hit(session: "/a", windowId: 2))
+        // Focus moves to the other profile: its extension reports its window, this one reports none (-1).
+        var lose = Inbound(type: "event"); lose.kind = "windowFocused"; lose.seq = 2; lose.windowId = -1
+        var gain = Inbound(type: "event"); gain.kind = "windowFocused"; gain.seq = 2; gain.windowId = 9
+        a.store.apply(lose); b.store.apply(gain)
+        #expect(WindowMatch.front(frame: frame, in: [a, b]) == WindowMatch.Hit(session: "/b", windowId: 9))
+    }
+
     @Test func theProfileFolderIsFoundByTheExtensionsStoredId() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("bl-prof-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: root) }
