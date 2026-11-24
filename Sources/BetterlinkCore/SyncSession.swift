@@ -117,11 +117,10 @@ public final class SyncSession {
 
     private var rules: RuleStore { RuleStore(folder: settings) }
     private var sidebar: SidebarStore { SidebarStore(folder: settings) }
-    private var configText: String? { try? String(contentsOf: settings.configFile, encoding: .utf8) }
 
     /// This Mac's settings files as one sync sees them, and when each was
-    /// saved. Reading throws when rules.json or sidebar.json is unreadable,
-    /// which stops the sync: reading it as empty would delete everything in it
+    /// saved. Reading throws when one of them is there but unreadable, which
+    /// stops the sync: reading it as empty would delete everything in it
     /// on every Mac.
     private struct Snapshot {
         var rules: RuleStore.Contents
@@ -140,11 +139,18 @@ public final class SyncSession {
             // From the path, not the URL, which caches what it read before.
             (try? FileManager.default.attributesOfItem(atPath: url.resolvingSymlinksInPath().path))?[.modificationDate] as? Date
         }
-        // Dates first: an edit landing in between is then recorded by the next
-        // sync with its own date.
-        let r = saved(settings.rulesFile), l = saved(sidebar.file), c = saved(settings.configFile)
-        return Snapshot(rules: try rules.load(), library: try sidebar.load(), config: configText,
-                        rulesSaved: r, librarySaved: l, configSaved: c)
+        func dates() -> [Date?] { [saved(settings.rulesFile), saved(sidebar.file), saved(settings.configFile)] }
+        // The dates must belong to the contents: read again when a file was
+        // saved in between.
+        var before = dates()
+        for _ in 0..<5 {
+            let snap = Snapshot(rules: try rules.load(), library: try sidebar.load(), config: try ConfigSwap.read(settings.configFile),
+                                rulesSaved: before[0], librarySaved: before[1], configSaved: before[2])
+            let after = dates()
+            if after == before { return snap }
+            before = after
+        }
+        throw ChangedMeanwhile()
     }
 
     private static func isRules(_ id: String) -> Bool { id == SyncModel.globalID || id.hasPrefix("rule:") || id.hasPrefix("mod:") }
@@ -208,6 +214,7 @@ public final class SyncSession {
         var report = Report()
         for attempt in 1... {
             do { try pullOnce(now: now, &report); break }
+            catch is ConfigSwap.Changed { if attempt == 10 { throw ChangedMeanwhile() } }
             catch let e as ChangedMeanwhile { if attempt == 10 { throw e } }
         }
         try push(now: now)
@@ -233,7 +240,10 @@ public final class SyncSession {
             for (id, fields) in merged.entities where mine(id) { state.entities[id] = fields }
         }
         let r = SyncModel.materialize(merged, rules: snap.rules, library: snap.library, selection: selection, resolve: resolve)
-        report.notes = r.notes
+        // A sync that starts over may have moved things already: keep its notes.
+        report.notes.unresolvedRules = r.notes.unresolvedRules
+        report.notes.orphansMovedToTop += r.notes.orphansMovedToTop.filter { !report.notes.orphansMovedToTop.contains($0) }
+        report.notes.cyclesBroken += r.notes.cyclesBroken.filter { !report.notes.cyclesBroken.contains($0) }
 
         try replace(snap.rules, with: r.rules, in: rules.update, &report)
         applied = r.applied
@@ -243,21 +253,9 @@ public final class SyncSession {
         adopt(Self.isLibrary)
 
         if selection.global, let synced = merged.value(SyncModel.configID, "text"), synced.string != snap.config {
-            if let mine = snap.config, !mine.isEmpty {
-                let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
-                let bak = settings.directory.appendingPathComponent("config.ts.\(Self.safe(name)).\(stamp).bak")
-                try mine.write(to: bak, atomically: true, encoding: .utf8)
-                // Editors take no lock, so this is checked as late as it can be.
-                guard configText == snap.config else {
-                    try? FileManager.default.removeItem(at: bak)
-                    throw ChangedMeanwhile()
-                }
-                report.configReplaced = bak
-            } else if configText != snap.config {
-                throw ChangedMeanwhile()
-            }
-            if let text = synced.string { try text.write(to: settings.configFile, atomically: true, encoding: .utf8) }
-            else { try? FileManager.default.removeItem(at: settings.configFile) }
+            let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
+            report.configReplaced = try ConfigSwap.replace(settings.configFile, expected: snap.config, with: synced.string,
+                                                           backup: "config.ts.\(Self.safe(name)).\(stamp)")
             report.changedSettings = true
         }
         state = merged
