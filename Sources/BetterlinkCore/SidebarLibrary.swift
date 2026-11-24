@@ -114,6 +114,78 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         insert(item, into: parent)
     }
 
+    /// Where an item can go: a position in the Favorites grid, or a position
+    /// among a folder's items (`parent` nil: the top level). Indexes count the
+    /// list as it is before the move and are clamped to its ends.
+    public enum Spot: Equatable, Sendable {
+        case favorites(Int)
+        case items(parent: UUID?, index: Int)
+    }
+
+    /// Moves a favorite, a saved link or a folder to `spot`: reorders it, moves it
+    /// into or out of a folder, or between the Favorites grid and the folders (a
+    /// link becomes a favorite and back). Does nothing when the move can't be
+    /// made: a folder into the grid or into itself, a folder that doesn't exist,
+    /// or a link to the grid when a favorite already has its address.
+    public mutating func place(_ id: UUID, at spot: Spot) {
+        let fromFavorites = favorites.firstIndex { $0.id == id }
+        guard fromFavorites != nil || Self.find(id, in: items) != nil else { return }
+        let item: SidebarItem = fromFavorites.map { .link(favorites[$0]) } ?? Self.find(id, in: items)!
+        switch spot {
+        case .favorites(let index):
+            guard case .link(let l) = item else { return }
+            if fromFavorites == nil, favorites.contains(where: { SavedLink.same($0.url, l.url) }) { return }
+            var i = min(max(index, 0), favorites.count)
+            if let from = fromFavorites {
+                if from < i { i -= 1 }
+                favorites.remove(at: from)
+            } else {
+                items = Self.removing(id, from: items)
+            }
+            favorites.insert(l, at: min(i, favorites.count))
+        case .items(let parent, let index):
+            if let parent {
+                guard isFolder(parent), parent != id else { return }
+                if case .folder(let f) = item, Self.find(parent, in: f.items) != nil { return }
+            }
+            // The index counts the target list before this item leaves it.
+            var i = max(index, 0)
+            if fromFavorites == nil, let from = children(of: parent).firstIndex(where: { $0.id == id }), from < i { i -= 1 }
+            if let from = fromFavorites { favorites.remove(at: from) } else { items = Self.removing(id, from: items) }
+            insert(item, into: parent, at: i)
+        }
+    }
+
+    /// Saves a new link (a tab dragged in) at `spot`.
+    public mutating func insert(_ link: SavedLink, at spot: Spot) {
+        switch spot {
+        case .favorites(let index):
+            guard !favorites.contains(where: { SavedLink.same($0.url, link.url) }) else { return }
+            favorites.insert(link, at: min(max(index, 0), favorites.count))
+        case .items(let parent, let index):
+            insert(.link(link), into: parent, at: max(index, 0))
+        }
+    }
+
+    /// The items directly in `parent` (nil: the top level), in order.
+    public func children(of parent: UUID?) -> [SidebarItem] {
+        guard let parent else { return items }
+        if case .folder(let f) = Self.find(parent, in: items) { return f.items }
+        return []
+    }
+
+    /// The folder directly holding `id` (nil: the top level, or not found).
+    public func parent(of id: UUID) -> UUID? {
+        func search(_ list: [SidebarItem], _ owner: UUID?) -> UUID?? {
+            for item in list {
+                if item.id == id { return .some(owner) }
+                if case .folder(let f) = item, let hit = search(f.items, f.id) { return hit }
+            }
+            return nil
+        }
+        return search(items, nil) ?? nil
+    }
+
     /// Every saved link, folders included, depth first.
     public var allLinks: [SavedLink] { favorites + Self.links(in: items) }
 
@@ -124,10 +196,12 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
 
     /// Into `parent` when it is a folder, else at the top level: a folder deleted
     /// meanwhile (by a sync, say) must not swallow what is being saved.
-    private mutating func insert(_ item: SidebarItem, into parent: UUID?) {
-        guard let parent, isFolder(parent) else { items.append(item); return }
+    private mutating func insert(_ item: SidebarItem, into parent: UUID?, at index: Int = .max) {
+        guard let parent, isFolder(parent) else { items.insert(item, at: min(index, items.count)); return }
         items = Self.mapping(items) { node in
-            if case .folder(var f) = node, f.id == parent { f.items.append(item); f.expanded = true; return .folder(f) }
+            if case .folder(var f) = node, f.id == parent {
+                f.items.insert(item, at: min(index, f.items.count)); f.expanded = true; return .folder(f)
+            }
             return node
         }
     }

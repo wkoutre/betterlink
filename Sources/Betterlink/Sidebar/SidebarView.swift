@@ -17,10 +17,13 @@ struct SidebarView: View {
     /// The header's own field: a folder or link rename may be open too (review F2).
     @State private var profileDraft = ""
     @FocusState private var profileNameFocused: Bool
+    /// The row a drag is over, and where in it.
+    @State private var dropTarget: DropTarget?
+    @State private var rowSizes: [UUID: CGSize] = [:]
+    /// The last delete, for Undo: the Sidebar Profile as it was, and what went.
+    @State private var undo: (profile: SidebarProfile, label: String, at: Date)?
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
-    /// A folder or profile waiting for "Delete" to be confirmed.
-    @State private var confirmDelete: (id: UUID, name: String, count: Int)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Every change the sidebar makes is animated, briefly: Motion.quick, or
@@ -58,6 +61,10 @@ struct SidebarView: View {
                             .foregroundStyle(pal.textTertiary)
                             .padding(.horizontal, DS.Space.space2)
                             .padding(.vertical, 4)
+                            // Dropped here: the end of the top level.
+                            .dropDestination(for: String.self) { keys, _ in
+                                apply(keys, at: .items(parent: nil, index: profile.items.count), profile, windowTabs)
+                            }
                         }
                         // A closed folder lists its open items, which come and go
                         // with tabs: animate those in place too (review F1).
@@ -93,13 +100,8 @@ struct SidebarView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
-                            isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
-            Button("Delete \(confirmDelete?.count ?? 0) saved items", role: .destructive) {
-                if let d = confirmDelete, let p = profile { edit(p.id) { $0.remove(d.id) } }
-                confirmDelete = nil
-            }
-        }
+        // Undo for the last delete, at the bottom for a few seconds.
+        .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
         // The browser profile's frame color, like the browser's own window.
         .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
         // Anything left on system colors (text fields, their placeholders,
@@ -219,11 +221,18 @@ struct SidebarView: View {
                             .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
                 }
                 .buttonStyle(PressStyle())
+                .draggable(Self.savedKey(link.id))
+                .modifier(dropRow(link.id, horizontal: true, canHold: false, p, open) { zone in
+                    let i = p.favorites.firstIndex { $0.id == link.id } ?? p.favorites.count
+                    return .favorites(zone == .before ? i : i + 1)
+                })
                 .transition(Motion.pop(reduceMotion))
                 .help(link.title)
                 .accessibilityLabel(link.title)
                 .contextMenu {
-                    Button("Remove from Favorites") { edit(p.id) { $0.remove(link.id) } }
+                    moveMenu(link.id, isFolder: false, inFavorites: true, p)
+                    Divider()
+                    Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p) }
                 }
             }
         }
@@ -237,11 +246,8 @@ struct SidebarView: View {
                 Text("Drag a tab here for a Favorite").font(DS.TextStyle.caption).foregroundStyle(pal.textTertiary)
             }
         }
-        .dropDestination(for: String.self) { keys, _ in
-            let found = keys.compactMap { Self.tab(forDragKey: $0, in: open) }
-            for t in found { edit(p.id) { $0.addFavorite(Self.saved(t)) } }
-            return !found.isEmpty
-        }
+        // Dropped on the grid's empty space: the end of the Favorites.
+        .dropDestination(for: String.self) { keys, _ in apply(keys, at: .favorites(p.favorites.count), p, open) }
     }
 
     // MARK: - Folders
@@ -262,6 +268,8 @@ struct SidebarView: View {
                 .padding(.leading, CGFloat(depth) * 14)
                 .rowStyle()
                 .onTapGesture { edit(p.id) { $0.toggleExpanded(f.id) } }
+                .draggable(Self.savedKey(f.id))
+                .modifier(dropRow(f.id, canHold: true, p, open) { zone in spot(for: f.id, zone, p) })
                 .accessibilityElement(children: renaming == f.id ? .contain : .ignore)
                 .accessibilityAddTraits(.isButton)
                 .accessibilityLabel("Folder \(f.name), \(f.expanded ? "open" : "closed")")
@@ -269,13 +277,11 @@ struct SidebarView: View {
                 .contextMenu {
                     Button("New Folder Inside") { newFolder(in: f.id, p) }
                     Button("Rename") { startRename(f.id, f.name) }
-                    Button("Delete Folder", role: .destructive) {
-                        // A folder with things in it asks first (review F6).
-                        let n = SidebarProfile.links(in: f.items).count + f.items.filter { if case .folder = $0 { return true }; return false }.count
-                        if n == 0 { edit(p.id) { $0.remove(f.id) } } else { confirmDelete = (f.id, f.name, n) }
-                    }
+                    moveMenu(f.id, isFolder: true, inFavorites: false, p)
+                    Divider()
+                    // Undo brings it back with everything in it.
+                    Button("Delete Folder", role: .destructive) { deleteWithUndo(f.id, f.name, p) }
                 }
-                .dropDestination(for: String.self) { keys, _ in drop(keys, into: f.id, p, open) }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
@@ -306,11 +312,14 @@ struct SidebarView: View {
             .accessibilityLabel(tab == nil ? l.title : "\(l.title), open")
             .accessibilityAddTraits(.isButton)
             .accessibilityAction { openOrSwitch(l, m) }
-            .draggable("betterlink-saved:\(l.id.uuidString)")
+            .draggable(Self.savedKey(l.id))
+            .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
             .contextMenu {
                 Button("Rename") { startRename(l.id, l.title) }
                 if let tab { Button("Close Tab") { tabs.close(tab, in: m.session) } }
-                Button("Remove", role: .destructive) { edit(p.id) { $0.remove(l.id) } }
+                moveMenu(l.id, isFolder: false, inFavorites: false, p)
+                Divider()
+                Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, p) }
             })
         }
     }
@@ -343,20 +352,106 @@ struct SidebarView: View {
         if let made { startRename(made, "New Folder") }
     }
 
-    /// A tab dropped on a folder is saved into it; a saved link dropped on a
-    /// folder moves there.
-    private func drop(_ keys: [String], into folder: UUID, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
+    // MARK: - Drag and drop
+
+    static func savedKey(_ id: UUID) -> String { "betterlink-saved:\(id.uuidString)" }
+
+    /// Where `zone` of the row for `id` puts what is dropped there.
+    private func spot(for id: UUID, _ zone: DropZone, _ p: SidebarProfile) -> SidebarProfile.Spot {
+        if zone == .into { return .items(parent: id, index: p.children(of: id).count) }
+        let parent = p.parent(of: id)
+        let i = p.children(of: parent).firstIndex { $0.id == id } ?? p.children(of: parent).count
+        return .items(parent: parent, index: zone == .before ? i : i + 1)
+    }
+
+    /// Makes a row a drop target with an insertion line.
+    private func dropRow(_ id: UUID, horizontal: Bool = false, canHold: Bool, _ p: SidebarProfile, _ open: [BrowserTab],
+                         spot: @escaping (DropZone) -> SidebarProfile.Spot) -> some ViewModifier {
+        DropRowModifier(id: id, horizontal: horizontal, canHold: canHold, color: pal.accent,
+                        size: rowSizes[id] ?? .zero, target: $dropTarget,
+                        measured: { rowSizes[id] = $0 }) { keys, zone in
+            _ = apply(keys, at: spot(zone), p, open)
+        }
+    }
+
+    /// Dropped strings, in order: a tab is saved there, a favorite, saved link
+    /// or folder moves there.
+    @discardableResult
+    private func apply(_ keys: [String], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
         var did = false
+        var next = spot
         for k in keys {
             if let t = Self.tab(forDragKey: k, in: open) {
-                edit(p.id) { $0.addLink(Self.saved(t), in: folder) }
-                did = true
+                let at = next
+                edit(p.id) { $0.insert(Self.saved(t), at: at) }
             } else if k.hasPrefix("betterlink-saved:"), let id = UUID(uuidString: String(k.dropFirst("betterlink-saved:".count))) {
-                edit(p.id) { $0.move(id, into: folder) }
-                did = true
+                let at = next
+                edit(p.id) { $0.place(id, at: at) }
+            } else { continue }
+            did = true
+            // Several at once keep their order.
+            switch next {
+            case .favorites(let i): next = .favorites(i + 1)
+            case .items(let parent, let i): next = .items(parent: parent, index: i + 1)
             }
         }
         return did
+    }
+
+    /// Move Up, Move Down and Move to, for a row's context menu.
+    @ViewBuilder
+    private func moveMenu(_ id: UUID, isFolder: Bool, inFavorites: Bool, _ p: SidebarProfile) -> some View {
+        let parent = inFavorites ? nil : p.parent(of: id)
+        let list: [UUID] = inFavorites ? p.favorites.map(\.id) : p.children(of: parent).map(\.id)
+        let i = list.firstIndex(of: id) ?? 0
+        Button("Move Up") { edit(p.id) { $0.place(id, at: inFavorites ? .favorites(i - 1) : .items(parent: parent, index: i - 1)) } }
+            .disabled(i == 0)
+        Button("Move Down") { edit(p.id) { $0.place(id, at: inFavorites ? .favorites(i + 2) : .items(parent: parent, index: i + 2)) } }
+            .disabled(i >= list.count - 1)
+        Menu("Move to") {
+            if !isFolder && !inFavorites {
+                Button("Favorites") { edit(p.id) { $0.place(id, at: .favorites(p.favorites.count)) } }
+            }
+            if inFavorites || parent != nil {
+                Button("Top Level") { edit(p.id) { $0.place(id, at: .items(parent: nil, index: p.items.count)) } }
+            }
+            // Not into itself or its own folders.
+            let mine: Set<UUID> = isFolder ? Set(Self.folders(p.children(of: id), prefix: "").map(\.id) + [id]) : []
+            ForEach(Self.folders(p.items, prefix: "").filter { !mine.contains($0.id) && $0.id != parent }) { f in
+                Button(f.label) { edit(p.id) { $0.place(id, at: .items(parent: f.id, index: p.children(of: f.id).count)) } }
+            }
+        }
+    }
+
+    /// Deletes at once and offers Undo for a few seconds.
+    private func deleteWithUndo(_ id: UUID, _ label: String, _ p: SidebarProfile) {
+        let before = p
+        edit(p.id) { $0.remove(id) }
+        let now = Date()
+        withAnimation(Motion.quick(reduceMotion)) { undo = (before, label, now) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
+            if undo?.at == now { withAnimation(Motion.quick(reduceMotion)) { undo = nil } }
+        }
+    }
+
+    private func undoBar(_ u: (profile: SidebarProfile, label: String, at: Date)) -> some View {
+        HStack(spacing: DS.Space.space2) {
+            Text("Deleted \u{201C}\(u.label)\u{201D}").lineLimit(1).foregroundStyle(pal.textSecondary)
+            Spacer(minLength: 0)
+            Button("Undo") {
+                animate { lib.change(profile: u.profile.id) { $0 = u.profile } }
+                undo = nil
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(pal.text)
+            .fontWeight(.semibold)
+        }
+        .font(DS.TextStyle.caption)
+        .padding(.horizontal, DS.Space.space3)
+        .padding(.vertical, 8)
+        .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(pal.hover))
+        .padding(DS.Space.space2)
+        .transition(Motion.reveal(reduceMotion))
     }
 
     // MARK: - Tabs
