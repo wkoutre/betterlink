@@ -349,7 +349,7 @@ private struct ShortcutRecorder: View {
 }
 
 /// The Sidebar Profiles: each has its own Favorites and folders and is shown
-/// for the browser profiles linked to it (pick one from the sidebar's title).
+/// for the browser profiles linked to it (pick one from the ⚙ at the top of the sidebar).
 private struct SidebarProfilesSection: View {
     @ObservedObject private var lib = SidebarLibraryModel.shared
     @ObservedObject private var tabs = TabsModel.shared

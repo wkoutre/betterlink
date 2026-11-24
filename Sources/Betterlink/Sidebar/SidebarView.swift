@@ -14,6 +14,9 @@ struct SidebarView: View {
     @State private var newURL = ""
     @State private var renaming: UUID?
     @State private var renamingProfile: UUID?
+    /// The header's own field: a folder or link rename may be open too (review F2).
+    @State private var profileDraft = ""
+    @FocusState private var profileNameFocused: Bool
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
     /// A folder or profile waiting for "Delete" to be confirmed.
@@ -38,6 +41,8 @@ struct SidebarView: View {
         let windowTabs = match?.window?.tabs ?? []
         VStack(alignment: .leading, spacing: 0) {
             header(match: match, profile: profile)
+                // Another profile now: an open rename belonged to the last one.
+                .onChange(of: profile?.id) { renamingProfile = nil }
             if let m = match, let profile {
                 ScrollView {
                     VStack(alignment: .leading, spacing: DS.Space.space2) {
@@ -111,12 +116,12 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: DS.Space.space2) {
                 if let p = profile, renamingProfile == p.id {
-                    TextField("Name", text: $draftName)
+                    TextField("Name", text: $profileDraft)
                         .textFieldStyle(.plain)
                         .font(DS.TextStyle.headline)
                         .foregroundStyle(pal.text)
-                        .focused($nameFocused)
-                        .onAppear { nameFocused = true }
+                        .focused($profileNameFocused)
+                        .onAppear { profileNameFocused = true }
                         .onSubmit { renameProfile(p.id) }
                         .onExitCommand { renamingProfile = nil }
                 } else {
@@ -187,7 +192,7 @@ struct SidebarView: View {
         }
         if let p = profile {
             Divider()
-            Button("Rename…") { draftName = p.name; renamingProfile = p.id }
+            Button("Rename…") { renaming = nil; profileDraft = p.name; renamingProfile = p.id }
             Button("Delete…", role: .destructive) { confirmProfileDelete = p }
                 .disabled(lib.library.profiles.count <= 1)
         }
@@ -196,7 +201,7 @@ struct SidebarView: View {
     }
 
     private func renameProfile(_ id: UUID) {
-        let name = draftName.trimmingCharacters(in: .whitespacesAndNewlines)
+        let name = profileDraft.trimmingCharacters(in: .whitespacesAndNewlines)
         if !name.isEmpty { lib.change(profile: id) { $0.name = name } }
         renamingProfile = nil
     }
@@ -327,6 +332,7 @@ struct SidebarView: View {
     }
 
     private func startRename(_ id: UUID, _ name: String) {
+        renamingProfile = nil
         draftName = name
         renaming = id
     }
