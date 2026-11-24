@@ -1,0 +1,264 @@
+import Foundation
+
+// Turning betterlink's settings into synced entities and back (docs/sync.md).
+// Everything here is plain values in, plain values out, so the property tests
+// can run many simulated Macs without files or a UI.
+
+/// What this Mac syncs (Settings › Sync). Per Mac; never synced itself.
+public struct SyncSelection: Codable, Equatable, Sendable {
+    public struct Parts: Codable, Equatable, Sendable {
+        public var favorites = true
+        public var folders = true
+        public var appearance = true
+        public init(favorites: Bool = true, folders: Bool = true, appearance: Bool = true) {
+            self.favorites = favorites; self.folders = folders; self.appearance = appearance
+        }
+    }
+    /// Link Rules, modifier rules, the fallback and Show log.
+    public var global: Bool
+    /// The Sidebar Profiles that sync, and which of their parts.
+    public var profiles: [UUID: Parts]
+
+    public init(global: Bool = true, profiles: [UUID: Parts] = [:]) {
+        self.global = global; self.profiles = profiles
+    }
+}
+
+/// How a browser profile is named on this Mac, so a rule can find the same
+/// profile on another Mac: by its signed-in account first, then its name.
+public struct ProfileIdentity: Equatable, Sendable {
+    public var name: String?
+    public var account: String?
+    public init(name: String?, account: String?) { self.name = name; self.account = account }
+}
+
+public enum SyncModel {
+    // MARK: Ids
+
+    static func ruleID(_ id: UUID) -> String { "rule:\(id.uuidString)" }
+    static func modID(_ id: UUID) -> String { "mod:\(id.uuidString)" }
+    static func profileID(_ id: UUID) -> String { "sp:\(id.uuidString)" }
+    static func nodeID(_ id: UUID) -> String { "node:\(id.uuidString)" }
+    static let globalID = "global"
+
+    static func uuid(_ entity: String) -> UUID? {
+        entity.split(separator: ":", maxSplits: 1).last.flatMap { UUID(uuidString: String($0)) }
+    }
+
+    // MARK: Local → entities
+
+    /// The entities this Mac's settings say should exist, with their field
+    /// values. Positions keep the ones already in `state` where the order
+    /// still agrees, so a sync never renumbers a whole list.
+    public static func project(rules: RuleStore.Contents, library: SidebarLibrary, selection: SyncSelection,
+                               identity: (ProfileRef) -> ProfileIdentity, state: SyncState) -> [String: [String: SyncValue]] {
+        var out: [String: [String: SyncValue]] = [:]
+        func existing(_ ids: [String]) -> [String: String] {
+            Dictionary(uniqueKeysWithValues: ids.compactMap { id in state.value(id, "position")?.string.map { (id, $0) } })
+        }
+        if selection.global {
+            let ids = rules.rules.map { ruleID($0.id) }
+            let pos = FractionalIndex.positions(for: ids, existing: existing(ids))
+            for r in rules.rules {
+                let who = identity(r.target)
+                out[ruleID(r.id)] = ["kind": .string(r.kind.rawValue), "pattern": .string(r.pattern), "browser": .string(r.browser),
+                                     "profile": .string(r.profile), "profileName": .of(who.name), "profileAccount": .of(who.account),
+                                     "position": .string(pos[ruleID(r.id)]!)]
+            }
+            let mods = rules.modifierRules ?? []
+            let mids = mods.map { modID($0.id) }
+            let mpos = FractionalIndex.positions(for: mids, existing: existing(mids))
+            for m in mods {
+                let who = identity(m.target)
+                out[modID(m.id)] = ["keys": .number(Double(m.keys.rawValue)), "browser": .string(m.browser), "profile": .string(m.profile),
+                                    "profileName": .of(who.name), "profileAccount": .of(who.account), "position": .string(mpos[modID(m.id)]!)]
+            }
+            let fb = rules.fallback
+            let who = fb.map(identity)
+            out[globalID] = ["fallbackBrowser": .of(fb?.browser), "fallbackProfile": .of(fb?.directory),
+                             "fallbackName": .of(who?.name), "fallbackAccount": .of(who?.account),
+                             "showLog": rules.showLog.map { .bool($0) } ?? .null]
+        }
+        for p in library.profiles {
+            guard let parts = selection.profiles[p.id] else { continue }
+            if parts.appearance { out[profileID(p.id)] = ["name": .string(p.name)] }
+            else { out[profileID(p.id)] = [:] }
+            if parts.favorites {
+                let ids = p.favorites.map { nodeID($0.id) }
+                let pos = FractionalIndex.positions(for: ids, existing: existing(ids))
+                for l in p.favorites { out[nodeID(l.id)] = linkFields(l, profile: p.id, container: "fav", parent: nil, position: pos[nodeID(l.id)]!) }
+            }
+            if parts.folders {
+                func walk(_ items: [SidebarItem], parent: UUID?) {
+                    let ids = items.map { nodeID($0.id) }
+                    let pos = FractionalIndex.positions(for: ids, existing: existing(ids))
+                    for item in items {
+                        switch item {
+                        case .link(let l):
+                            out[nodeID(l.id)] = linkFields(l, profile: p.id, container: "items", parent: parent, position: pos[nodeID(l.id)]!)
+                        case .folder(let f):
+                            out[nodeID(f.id)] = ["kind": .string("folder"), "profile": .string(p.id.uuidString), "container": .string("items"),
+                                                 "parent": .of(parent?.uuidString), "position": .string(pos[nodeID(f.id)]!), "title": .string(f.name)]
+                            walk(f.items, parent: f.id)
+                        }
+                    }
+                }
+                walk(p.items, parent: nil)
+            }
+        }
+        return out
+    }
+
+    static func linkFields(_ l: SavedLink, profile: UUID, container: String, parent: UUID?, position: String) -> [String: SyncValue] {
+        ["kind": .string("link"), "profile": .string(profile.uuidString), "container": .string(container),
+         "parent": .of(parent?.uuidString), "position": .string(position), "title": .string(l.title), "url": .string(l.url), "icon": .of(l.icon)]
+    }
+
+    /// Which entities this Mac speaks for, so an entity it doesn't have is
+    /// marked deleted only when it is in this Mac's selection.
+    public static func scope(_ selection: SyncSelection, state: SyncState) -> (String) -> Bool {
+        { id in
+            if id == globalID || id.hasPrefix("rule:") || id.hasPrefix("mod:") { return selection.global }
+            if id.hasPrefix("sp:") { return uuid(id).flatMap { selection.profiles[$0] } != nil }
+            if id.hasPrefix("node:") {
+                guard let p = state.value(id, "profile")?.string.flatMap(UUID.init(uuidString:)),
+                      let parts = selection.profiles[p] else { return false }
+                return state.value(id, "container")?.string == "fav" ? parts.favorites : parts.folders
+            }
+            return false
+        }
+    }
+
+    // MARK: Entities → local
+
+    /// What a merge changed on this Mac that wasn't its own choice, for the Log.
+    public struct Notes: Equatable, Sendable {
+        public var unresolvedRules: [UUID] = []
+        public var orphansMovedToTop: [UUID] = []
+        public var cyclesBroken: [UUID] = []
+    }
+
+    /// This Mac's settings rebuilt from the merged state, for everything in
+    /// the selection; everything else stays as it is locally. `resolve` finds
+    /// a browser profile on this Mac from another Mac's (account, then name).
+    public static func materialize(_ state: SyncState, rules local: RuleStore.Contents, library: SidebarLibrary,
+                                   selection: SyncSelection,
+                                   resolve: (_ browser: String, _ directory: String, ProfileIdentity) -> String?)
+    -> (rules: RuleStore.Contents, library: SidebarLibrary, notes: Notes) {
+        var notes = Notes()
+        var rules = local
+        func live(_ prefix: String) -> [(String, [String: Stamped])] {
+            state.entities.filter { $0.key.hasPrefix(prefix) && state.isLive($0.key) }
+                .sorted { a, b in
+                    let pa = a.value["position"]?.value.string ?? "", pb = b.value["position"]?.value.string ?? ""
+                    return pa != pb ? pa < pb : a.key < b.key
+                }
+        }
+        func target(_ f: [String: Stamped], _ browserKey: String, _ dirKey: String, _ nameKey: String, _ accountKey: String) -> (String, String, Bool) {
+            let browser = f[browserKey]?.value.string ?? "", dir = f[dirKey]?.value.string ?? ""
+            let who = ProfileIdentity(name: f[nameKey]?.value.string, account: f[accountKey]?.value.string)
+            if let d = resolve(browser, dir, who) { return (browser, d, true) }
+            return (browser, dir, false)
+        }
+        if selection.global {
+            rules.rules = live("rule:").compactMap { id, f in
+                guard let u = uuid(id), let kind = f["kind"]?.value.string.flatMap(Rule.Kind.init(rawValue:)),
+                      let pattern = f["pattern"]?.value.string else { return nil }
+                let (b, d, ok) = target(f, "browser", "profile", "profileName", "profileAccount")
+                if !ok { notes.unresolvedRules.append(u) }
+                return Rule(id: u, kind: kind, pattern: pattern, browser: b, profile: d)
+            }
+            let mods: [ModifierRule] = live("mod:").compactMap { id, f in
+                guard let u = uuid(id), let k = f["keys"]?.value.number else { return nil }
+                let (b, d, _) = target(f, "browser", "profile", "profileName", "profileAccount")
+                return ModifierRule(id: u, keys: ModifierKeys(rawValue: Int(k)), browser: b, profile: d)
+            }
+            rules.modifierRules = mods.isEmpty && local.modifierRules == nil ? nil : mods
+            if let g = state.entities[globalID] {
+                if let b = g["fallbackBrowser"]?.value.string, let d = g["fallbackProfile"]?.value.string {
+                    let (bb, dd, _) = target(g, "fallbackBrowser", "fallbackProfile", "fallbackName", "fallbackAccount")
+                    rules.fallback = ProfileRef(browser: bb.isEmpty ? b : bb, directory: dd.isEmpty ? d : dd)
+                } else if g["fallbackBrowser"] != nil {
+                    rules.fallback = nil
+                }
+                if let v = g["showLog"]?.value { rules.showLog = v.bool }
+            }
+        }
+
+        var lib = library
+        for (pid, parts) in selection.profiles.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            let sid = profileID(pid)
+            guard state.entities[sid] != nil else { continue }
+            if !state.isLive(sid) { lib.profiles.removeAll { $0.id == pid }; continue }
+            var p = lib.profiles.first { $0.id == pid } ?? SidebarProfile(id: pid, name: "Profile")
+            if parts.appearance, let n = state.value(sid, "name")?.string { p.name = n }
+            let nodes = state.entities.filter { k, f in
+                k.hasPrefix("node:") && state.isLive(k) && f["profile"]?.value.string == pid.uuidString
+            }
+            if parts.favorites {
+                p.favorites = nodes.filter { $0.value["container"]?.value.string == "fav" && $0.value["kind"]?.value.string == "link" }
+                    .sorted { ($0.value["position"]?.value.string ?? "", $0.key) < ($1.value["position"]?.value.string ?? "", $1.key) }
+                    .compactMap { k, f in link(k, f) }
+            }
+            if parts.folders {
+                let expanded = Dictionary(SidebarProfile.allFolders(in: p.items).map { ($0.id, $0.expanded) }, uniquingKeysWith: { a, _ in a })
+                p.items = tree(nodes.filter { $0.value["container"]?.value.string == "items" }, expanded: expanded, notes: &notes)
+            }
+            if let i = lib.profiles.firstIndex(where: { $0.id == pid }) { lib.profiles[i] = p } else { lib.profiles.append(p) }
+        }
+        return (rules, lib, notes)
+    }
+
+    static func link(_ key: String, _ f: [String: Stamped]) -> SavedLink? {
+        guard let u = uuid(key), let url = f["url"]?.value.string else { return nil }
+        return SavedLink(id: u, title: f["title"]?.value.string ?? url, url: url, icon: f["icon"]?.value.string)
+    }
+
+    /// Folders and links from flat nodes: a missing or deleted parent puts a
+    /// node at the top level (nothing lost); parent loops are broken the same
+    /// way on every Mac, lowest id first.
+    static func tree(_ nodes: [String: [String: Stamped]], expanded: [UUID: Bool], notes: inout Notes) -> [SidebarItem] {
+        var parent: [UUID: UUID?] = [:]
+        var fields: [UUID: [String: Stamped]] = [:]
+        for (k, f) in nodes { if let u = uuid(k) { fields[u] = f } }
+        let folders = Set(fields.filter { $0.value["kind"]?.value.string == "folder" }.keys)
+        for (u, f) in fields {
+            let p = f["parent"]?.value.string.flatMap(UUID.init(uuidString:))
+            if let p, !folders.contains(p) { notes.orphansMovedToTop.append(u); parent[u] = .some(nil) }
+            else { parent[u] = .some(p) }
+        }
+        // Break cycles: follow each folder's chain; a chain that returns to a
+        // folder already on it is cut at its lowest id.
+        for start in folders.sorted(by: { $0.uuidString < $1.uuidString }) {
+            var seen: [UUID] = [], cur: UUID? = start
+            while let c = cur, !seen.contains(c) { seen.append(c); cur = parent[c] ?? nil }
+            if let c = cur, let i = seen.firstIndex(of: c) {
+                let loop = seen[i...]
+                let cut = loop.min { $0.uuidString < $1.uuidString }!
+                parent[cut] = .some(nil)
+                notes.cyclesBroken.append(cut)
+            }
+        }
+        func children(of p: UUID?) -> [SidebarItem] {
+            fields.filter { (parent[$0.key] ?? nil) == p }
+                .sorted { ($0.value["position"]?.value.string ?? "", $0.key.uuidString) < ($1.value["position"]?.value.string ?? "", $1.key.uuidString) }
+                .compactMap { u, f -> SidebarItem? in
+                    if f["kind"]?.value.string == "folder" {
+                        return .folder(SidebarFolder(id: u, name: f["title"]?.value.string ?? "Folder", expanded: expanded[u] ?? true, items: children(of: u)))
+                    }
+                    return link(nodeID(u), f).map { .link($0) }
+                }
+        }
+        return children(of: nil)
+    }
+}
+
+extension SidebarProfile {
+    /// Every folder at any depth.
+    static func allFolders(in items: [SidebarItem]) -> [SidebarFolder] {
+        items.flatMap { item -> [SidebarFolder] in
+            if case .folder(let f) = item { return [f] + allFolders(in: f.items) }
+            return []
+        }
+    }
+}
