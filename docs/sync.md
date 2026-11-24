@@ -10,11 +10,13 @@ Settings › Sync, per Mac:
 
 1. **Sync folder**: any folder (for example `~/Dropbox/betterlink`). Off until one is picked.
 2. **Global settings**: one switch. Covers Link Rules, modifier rules, the fallback profile, Show log, and config.ts.
-3. **Sidebar Profiles**: a switch per profile. For each synced profile, choose its parts: **Favorites**, **Folders and saved links**, **Appearance** (name and color), and **Browser profile link** (which browser profile shows it).
+3. **Sidebar Profiles**: a switch per profile. For each synced profile, choose its parts: **Favorites**, **Folders and saved links**, and **Appearance** (name and color).
 
-Never synced (they belong to one Mac): browser profiles themselves (each Mac's own Chrome profiles, found on that Mac), the sidebar's side, width, shortcut and attach-to list, the tab takeover setting, window positions, the Accessibility grant, browser setup, and the Sync choices above.
+Never synced (they belong to one Mac): browser profiles themselves (each Mac's own Chrome profiles, found on that Mac), which Sidebar Profile each browser profile shows (Nick: "That is local to each machine"), the sidebar's side, width, shortcut and attach-to list, the tab takeover setting, window positions, the Accessibility grant, browser setup, and the Sync choices above.
 
-A Mac only writes what it has chosen to sync and only applies what it has chosen to receive. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button.
+A Mac only writes what it has chosen to sync and only applies what it has chosen to receive.
+
+A new Mac: install betterlink, turn on Sync and pick the folder, and the synced settings and Sidebar Profiles arrive. Then open Chrome in any profile and choose its Sidebar Profile from the sidebar's ⚙, as on any Mac. Nothing about another Mac's Chrome profiles carries over. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button.
 
 ## Files
 
@@ -93,4 +95,4 @@ config.ts is code and can't be merged field by field.
 
 ## Open question for Nick
 
-Link Rules and the fallback point at a browser profile by its folder name in the browser ("Default", "Profile 1"). The same Chrome profile can have a different folder name on another Mac. Proposal: a synced rule also carries the profile's display name ("Work"). Each Mac matches by display name. A rule whose profile isn't on this Mac opens in the fallback, and the Rules page marks it. The same goes for a Sidebar Profile's browser-profile link.
+Link Rules and the fallback point at a browser profile by its folder name in the browser ("Default", "Profile 1"). The same Chrome profile can have a different folder name on another Mac. Proposal: a synced rule also carries the profile's display name ("Work"). Each Mac matches by display name. A rule whose profile isn't on this Mac opens in the fallback, and the Rules page marks it. (A Sidebar Profile's browser-profile link doesn't sync at all, so it needs no matching.)
