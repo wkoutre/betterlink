@@ -128,7 +128,7 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 
 ## Tabs (preview)
 
-A live list of every open tab in your Chromium browsers, synced both ways the instant anything changes, with no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page and connect a browser. See [docs/tabs.md](docs/tabs.md).
+A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page, connect a browser and show the sidebar. See [docs/tabs.md](docs/tabs.md).
 
 ## Accepted risks
 

@@ -1,6 +1,6 @@
 # Tabs (preview)
 
-betterlink's Tabs page is a live mirror of every open tab in your Chromium browsers, in true realtime, both ways. Open or close a tab in the browser and the sidebar changes in the same instant; open, focus or close a tab from the sidebar and the browser does it immediately. No polling anywhere.
+betterlink keeps a live mirror of every open tab in your Chromium browsers, in true realtime, both ways, and shows it in the sidebar beside the browser window. Open or close a tab in the browser and the sidebar changes in the same instant; open, focus or close a tab from the sidebar and the browser does it immediately. No polling anywhere. The Tabs page holds the sidebar's settings, Sidebar Profiles and browser setup; it doesn't list tabs itself.
 
 This preview proves the pipe. The feature set is deliberately tiny: list, focus, close, open.
 
@@ -34,7 +34,7 @@ The only timer in the system is the extension's reconnect backoff (1s doubling t
 browser->app: 1.0 ms; app->browser->app: 1.7 ms; host-measured event latency: 0.34 ms
 ```
 
-The app's status bar shows the same two numbers live: event latency (browser fired it → app applied it) and command round trip.
+The terminal view (`betterlink-tabs`) prints the same two numbers live: event latency (browser fired it → app applied it) and command round trip.
 
 ## Layout
 
@@ -87,7 +87,6 @@ Tabs page › Sidebar › **Show the sidebar** puts a panel flush against the fr
 - Events that fire while no app is connected are not queued; the snapshot on connect covers them.
 - A tab event that fires during the few ms a snapshot is being collected can be lost; the next event's sequence number is still consecutive, so this one case does not self-heal yet. Fix: collect the snapshot inside the extension's own event queue.
 - Incognito windows are only visible if the extension is allowed in incognito.
-- No floating sidebar yet: the list lives on a page of the main window.
 - The extension is not in any store; it is loaded unpacked.
 
 ## Where this could go

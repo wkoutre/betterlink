@@ -6,10 +6,9 @@ import TabSyncCore
 /// SwiftUI has its own `Tab` (macOS 15), so name the browser's explicitly.
 typealias BrowserTab = TabSyncCore.Tab
 
-/// Tabs (preview): every open tab in every connected browser, live. The
-/// browser pushes each change through the Tabs extension and
-/// betterlink-tabhost the instant it happens; nothing here polls. Clicking a
-/// tab focuses it in the browser, ✕ closes it, and the field opens a new one.
+/// Tabs (preview): every open tab in every connected browser, live, for the
+/// sidebar. The browser pushes each change through the Tabs extension and
+/// betterlink-tabhost the instant it happens; nothing here polls.
 @MainActor
 final class TabsModel: ObservableObject {
     static let shared = TabsModel()
@@ -125,50 +124,17 @@ struct TabsPage: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var tabs = TabsModel.shared
     @ObservedObject private var sidebar = SidebarController.shared
-    @State private var newURL = ""
-
     var body: some View {
         PageForm {
             PageHeader(title: "Tabs",
-                       subtitle: "Preview. Every open tab in your browsers, live. Click a tab to switch to it, ✕ to close it.")
+                       subtitle: "Preview. The sidebar beside your browser window: its settings, Sidebar Profiles, and the browsers it connects to.")
             SidebarSettings(sidebar: sidebar)
             SidebarProfilesSection()
-            DSSection {
-                HStack(spacing: DS.Space.space2) {
-                    DSTextField(label: "Open a tab", text: $newURL, prompt: "Open a link or search")
-                        .onSubmit {
-                            guard !newURL.isEmpty else { return }
-                            tabs.open(newURL)
-                            newURL = ""
-                        }
-                    Button("Open") { tabs.open(newURL); newURL = "" }
-                        .disabled(newURL.isEmpty || tabs.sessions.isEmpty)
-                }
-            } footer: {
-                LatencyFooter(sessions: tabs.sessions)
-            }
-
             if tabs.sessions.isEmpty {
                 DSSection {
                     Text("No browser connected yet. Set up a browser below, load the Tabs extension in it, then open the browser.")
                         .foregroundStyle(DS.Palette.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            ForEach(tabs.sessions) { session in
-                ForEach(Array(session.store.orderedWindows.enumerated()), id: \.element.id) { i, entry in
-                    DSSection {
-                        ForEach(entry.tabs) { tab in TabRow(tab: tab, session: session) }
-                    } header: {
-                        HStack {
-                            Text("\(session.browser)\(tabs.profileName(session).map { " (\($0))" } ?? "") · Window \(i + 1)")
-                            if entry.window.focused {
-                                Circle().fill(DS.Palette.success).frame(width: 6, height: 6).accessibilityLabel("Focused")
-                            }
-                            Spacer()
-                            Text("\(entry.tabs.count) tabs").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                        }
-                    }
                 }
             }
 
@@ -191,38 +157,6 @@ struct TabsPage: View {
             }
         }
         .onAppear { tabs.start() }
-    }
-}
-
-private struct TabRow: View {
-    @ObservedObject private var tabs = TabsModel.shared
-    let tab: BrowserTab
-    let session: BrowserSession
-    @State private var hovering = false
-
-    var body: some View {
-        HStack(spacing: DS.Space.space3) {
-            Favicon(url: tab.favIconUrl)
-            VStack(alignment: .leading, spacing: 1) {
-                Text(tab.title.isEmpty ? tab.url : tab.title)
-                    .lineLimit(1)
-                    .fontWeight(tab.active ? .semibold : .regular)
-                    .foregroundStyle(DS.Palette.text)
-                Text(URL(string: tab.url)?.host ?? tab.url)
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary).lineLimit(1)
-            }
-            Spacer(minLength: 0)
-            if tab.pinned { Image(systemName: "pin.fill").font(.caption).foregroundStyle(DS.Palette.textTertiary) }
-            if tab.audible { Image(systemName: "speaker.wave.2.fill").font(.caption).foregroundStyle(DS.Palette.textTertiary) }
-            Button { tabs.close(tab, in: session) } label: { Image(systemName: "xmark") }
-                .buttonStyle(.dsGhost)
-                .opacity(hovering ? 1 : 0)
-                .accessibilityLabel("Close \(tab.title)")
-        }
-        .contentShape(Rectangle())
-        .onHover { hovering = $0 }
-        .onTapGesture { tabs.activate(tab, in: session) }
-        .accessibilityAddTraits(tab.active ? [.isButton, .isSelected] : .isButton)
     }
 }
 
@@ -362,20 +296,6 @@ private struct BrowserRegistrationRow: View {
                 Button(state == .notInstalled ? "Set Up" : "Set Up Again") { tabs.setRegistered(true, browser) }
             }
         }
-    }
-}
-
-private struct LatencyFooter: View {
-    let sessions: [BrowserSession]
-    var body: some View {
-        HStack(spacing: DS.Space.space3) {
-            Text(sessions.isEmpty ? "Waiting for a browser" : "\(sessions.reduce(0) { $0 + $1.store.tabCount }) tabs in \(sessions.count) browser\(sessions.count == 1 ? "" : "s")")
-            Spacer()
-            if let l = sessions.compactMap(\.lastEventLatencyMs).last { Text(String(format: "last change %.1f ms", l)) }
-            if let r = sessions.compactMap(\.lastCommandRoundTripMs).last { Text(String(format: "last command %.1f ms", r)) }
-        }
-        .font(DS.TextStyle.caption.monospacedDigit())
-        .foregroundStyle(DS.Palette.textTertiary)
     }
 }
 
