@@ -39,6 +39,9 @@ public struct SyncFolder: Sendable {
         e.outputFormatting = [.sortedKeys]
         e.dateEncodingStrategy = .iso8601
         try e.encode(f).write(to: file(for: f.device), options: .atomic)
+        // The rename keeps the old file's mode; a file others can change is
+        // refused by every Mac (readAll), so this Mac's own file is reset.
+        try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: file(for: f.device).path)
     }
 
     /// Every Mac's file that can be read now. A half-downloaded or broken file
@@ -134,7 +137,11 @@ public final class SyncSession {
     public func push(now: Date = Date()) throws -> Bool {
         let local = try local()
         let scope = SyncModel.scope(selection, state: state)
-        if written == nil, folder.readAll().files.contains(where: { $0.device != device }) {
+        // Joining means this Mac has never written a file here. One that is
+        // there but couldn't be read (half-downloaded, refused) doesn't count:
+        // treating that Mac as new would undo its edits since its last sync.
+        if written == nil, !FileManager.default.fileExists(atPath: folder.file(for: device).path),
+           folder.readAll().files.contains(where: { $0.device != device }) {
             // This Mac joins Macs already syncing: what it has is stamped
             // older than anything they shared, so shared settings win and
             // only what is this Mac's alone is added. (The first Mac in a

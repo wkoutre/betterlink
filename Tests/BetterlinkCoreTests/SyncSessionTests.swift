@@ -200,4 +200,18 @@ struct SyncSessionTests {
         #expect(r.unsafe.count == 1 && r.unsafe[0].hasPrefix("B.json"))
         #expect(try RuleStore(folder: a.settings).load().rules.isEmpty)
     }
+
+    @Test func aMacWhoseOwnFileCantBeReadAtLaunchIsNotTreatedAsNew() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        _ = try RuleStore(folder: a.settings).update { $0.showLog = false }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        _ = try RuleStore(folder: a.settings).update { $0.showLog = true }
+        // A's own file is refused at launch (group-writable), so the new session starts without it.
+        try FileManager.default.setAttributes([.posixPermissions: 0o666], ofItemAtPath: SyncFolder(sync).file(for: "A").path)
+        let again = SyncSession(settings: a.settings, folder: SyncFolder(sync), device: "A", name: "Mac A", selection: a.selection)
+        try again.pull(now: t(3)); try b.pull(now: t(4))
+        #expect(try RuleStore(folder: a.settings).load().showLog == true)
+        #expect(try RuleStore(folder: b.settings).load().showLog == true)
+    }
 }

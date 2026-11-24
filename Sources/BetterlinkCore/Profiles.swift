@@ -254,6 +254,24 @@ public struct ProfileCatalog: Equatable, Sendable {
         return nil
     }
 
+    /// Where a synced rule's profile is on this Mac. Only Chromium browsers
+    /// keep profiles in Local State to match by account or name; any other
+    /// browser (Safari, Firefox and its relatives, an unknown one) and a
+    /// Chromium browser whose Local State can't be read keep the folder as it
+    /// is. A folder whose own profile matches the identity is kept before any
+    /// other, so two profiles with one name don't swap. nil: this Mac has no
+    /// such profile.
+    public static func resolveSynced(browser: Browser?, directory: String, identity: ProfileIdentity, localState: Data?) -> String? {
+        guard let browser, browser.family == .chromium, let localState else { return directory }
+        let profiles = parse(localStateJSON: localState, browser: browser.bundleId).profiles
+        let accounts = accounts(localStateJSON: localState)
+        if let own = profiles.first(where: { $0.directory == directory }) {
+            if let a = identity.account, accounts[directory] == a { return directory }
+            if identity.account == nil, accounts[directory] == nil, let n = identity.name, own.name == n { return directory }
+        }
+        return resolve(identity, profiles: profiles, accounts: accounts)
+    }
+
     /// The color a Chromium browser paints a profile's window frame with
     /// (`profile_highlight_color` in Local State, signed 32-bit ARGB), as RGB.
     public static func frameColor(localStateJSON data: Data, directory: String) -> UInt32? {

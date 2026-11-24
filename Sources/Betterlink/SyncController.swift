@@ -166,10 +166,7 @@ final class SyncController: ObservableObject {
     }
 
     private func resolve(_ browser: String, _ directory: String, _ who: ProfileIdentity) -> String? {
-        // Safari and Firefox have no profiles here to match: the same name works.
-        guard let known = Browser.known(bundleId: browser), known.dataFolder != nil else { return directory }
-        guard let data = localState(browser) else { return nil }
-        let profiles = ProfileCatalog.parse(localStateJSON: data, browser: browser).profiles
-        return ProfileCatalog.resolve(who, profiles: profiles, accounts: ProfileCatalog.accounts(localStateJSON: data))
+        ProfileCatalog.resolveSynced(browser: Browser.known(bundleId: browser), directory: directory, identity: who,
+                                     localState: localState(browser))
     }
 }
