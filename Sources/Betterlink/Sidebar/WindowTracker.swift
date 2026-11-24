@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import BetterlinkCore
+import TabSyncCore
 
 /// Follows the frontmost browser window: which one it is, and its frame, the
 /// moment either changes. Event-driven throughout:

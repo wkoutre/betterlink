@@ -24,7 +24,8 @@ final class SidebarController: ObservableObject {
     private var panel: SidebarPanel?
     private var boundWindow: Int?
     private var trustToken: NSObjectProtocol?
-    private let defaults = UserDefaults.standard
+    /// A separate domain while `BETTERLINK_HOME` is set, like the menu bar icon.
+    private let defaults = MenuBarIcon.defaults()
 
     private init() {
         tracker = WindowTracker(browserBundleIds: Set(Browser.known.map(\.bundleId)))
@@ -101,9 +102,13 @@ final class SidebarController: ObservableObject {
         // never while the user is moving or resizing it: that would fight them.
         let p = SidebarGeometry.place(window: t.frame, screen: screen, width: width, side: side,
                                       makeRoom: makeRoom && firstBind)
-        // Resizing the window publishes its new frame, which lands here again;
-        // the panel goes to its final spot now in case the browser refuses.
-        if let newFrame = p.window { tracker.setWindowFrame(newFrame) }
+        // Resizing the window publishes its new frame, which lays the panel
+        // out again against the frame the browser really took (it may refuse
+        // part of the change), so this older placement must not overwrite it.
+        if let newFrame = p.window {
+            tracker.setWindowFrame(newFrame)
+            if target != t { return }
+        }
         placedSide = p.side
         let panel = self.panel ?? makePanel()
         panel.setFrame(p.sidebar, display: true, animate: false)
