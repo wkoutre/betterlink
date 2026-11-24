@@ -31,7 +31,7 @@ struct SidebarView: View {
             .padding(.top, 28)
 
             if let m = match {
-                Text([m.session.browser, tabs.profileName(m.session)].compactMap { $0 }.joined(separator: " · "))
+                Text([m.session.browser, m.certain ? tabs.profileName(m.session) : nil].compactMap { $0 }.joined(separator: " · "))
                     .font(DS.TextStyle.caption)
                     .foregroundStyle(DS.Palette.textTertiary)
                     .lineLimit(1)
@@ -71,11 +71,13 @@ struct SidebarView: View {
     struct Match {
         var session: BrowserSession
         var window: TabStore.WindowEntry?
+        /// False for a best guess between profiles: its profile isn't named.
+        var certain = true
     }
 
-    /// The browser session and window behind the bound AX window: the session
-    /// whose browser process is the frontmost app, then the window whose active
-    /// tab's title the AX window title starts with, else the focused window.
+    /// The browser session (profile) and window behind the bound window: the
+    /// browser's focused window, else its frame (WindowMatch.front), else the
+    /// one window across every profile whose active tab titles it.
     static func match(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Match? {
         guard let t = target else { return nil }
         // Each browser profile is its own session. The browser's focused window
@@ -88,15 +90,20 @@ struct SidebarView: View {
         if let hit = WindowMatch.front(frame: frame, in: mine), let s = mine.first(where: { $0.id == hit.session }) {
             return Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId })
         }
-        guard let s = sessions.first(where: { $0.browserPid == Int(t.pid) })
-            ?? sessions.first(where: { $0.browser == t.appName }) else { return nil }
-        let windows = s.store.orderedWindows
-        let byTitle = windows.filter { w in
-            guard let title = w.tabs.first(where: \.active)?.title, !title.isEmpty else { return false }
-            return t.title.hasPrefix(title)
+        // Not settled yet (no single focused window, no frame match): the one
+        // window, across every profile, whose active tab titles the window in
+        // front. Anything less certain is a guess, shown without a profile name.
+        let candidates = mine.isEmpty ? sessions.filter { $0.browser == t.appName } : mine
+        let byTitle = candidates.flatMap { s in
+            s.store.orderedWindows.filter { w in
+                guard let title = w.tabs.first(where: \.active)?.title, !title.isEmpty else { return false }
+                return t.title.hasPrefix(title)
+            }.map { (s, $0) }
         }
-        let w = byTitle.count == 1 ? byTitle[0] : (windows.first { $0.window.focused } ?? windows.first)
-        return Match(session: s, window: w)
+        if byTitle.count == 1 { return Match(session: byTitle[0].0, window: byTitle[0].1) }
+        guard let s = candidates.first else { return nil }
+        return Match(session: s, window: s.store.orderedWindows.first { $0.window.focused } ?? s.store.orderedWindows.first,
+                     certain: false)
     }
 }
 

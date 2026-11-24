@@ -11,15 +11,19 @@ public enum ProfileLocator {
     /// extension storage holds `instance`, or nil.
     public static func directory(instance: String, dataFolder: URL,
                                  extensionId: String = HostRegistration.extensionId) -> String? {
-        guard !instance.isEmpty, let needle = instance.data(using: .utf8),
+        // The random part: never repeats anything else in the store.
+        let random = instance.components(separatedBy: "betterlink-instance-").last ?? instance
+        guard !random.isEmpty, let needle = random.data(using: .utf8),
               let profiles = try? FileManager.default.contentsOfDirectory(atPath: dataFolder.path) else { return nil }
         for profile in profiles.sorted() {
             let store = dataFolder.appendingPathComponent(profile)
                 .appendingPathComponent("Local Extension Settings").appendingPathComponent(extensionId)
             guard let files = try? FileManager.default.contentsOfDirectory(atPath: store.path) else { continue }
             for f in files where f.hasSuffix(".log") || f.hasSuffix(".ldb") {
-                // LevelDB keeps fresh writes uncompressed in .log files; a short
-                // value stays a literal run even after compaction.
+                // LevelDB keeps fresh writes uncompressed in .log files. After
+                // compaction (.ldb) blocks may be Snappy-compressed, which can
+                // fold the "betterlink" prefix into a back-reference to the key,
+                // so only the random part of the id is searched for.
                 guard let data = FileManager.default.contents(atPath: store.appendingPathComponent(f).path),
                       data.count < 8 << 20 else { continue }
                 if data.range(of: needle) != nil { return profile }

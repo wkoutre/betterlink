@@ -33,8 +33,9 @@ final class SidebarController: ObservableObject {
 
     @Published private(set) var trusted = WindowTracker.isTrusted
     /// The browser window the sidebar is bound to right now. Its `frame` is
-    /// only as fresh as the last change of window or title, so a drag doesn't
-    /// redraw the tab list; `current` has the live frame.
+    /// refreshed when the window, its title, or its resting place (settle)
+    /// changes, not on every drag step, so a drag doesn't redraw the tab list;
+    /// `current` has the live frame.
     @Published private(set) var target: WindowTracker.Target?
     @Published private(set) var placedSide: SidebarSide = .right
 
