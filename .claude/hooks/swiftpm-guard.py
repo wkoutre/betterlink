@@ -1,47 +1,50 @@
 #!/usr/bin/env python3
-"""PreToolUse hook (Bash): refuses a bare `swift build` or `swift test` in this repo.
+"""PreToolUse hook (Bash): refuses SwiftPM builds that skip this repo's build lock.
 
 Several SwiftPM builds at once ran a 24 GB Mac out of memory. The Makefile runs
 SwiftPM under a machine-wide lock with a compiler cap (SWIFTPM_LOCK, SWIFT_JOBS),
 so builds go through `make test` / `make build`.
 
-How it reads a command line:
-1. Text that is only data is dropped: heredoc bodies, then quoted strings. So a
-   commit message, a PR body or a search pattern that mentions SwiftPM is never
-   refused. (A command hidden inside quotes, as in `bash -c "swift build"`, is
-   not caught; this guards against mistakes, not deliberate bypasses.)
-2. What is left is cut into segments at ; & | ( ) { } and newlines. Any segment
-   that runs `swift build` or `swift test` anywhere in it (after a keyword such as
-   `do` or `then`, a wrapper such as `sudo`, `timeout 600` or `xcrun --sdk x`, or
-   a path such as /usr/bin/swift) is refused, unless that same segment runs it
-   under lockf or only asks for --show-bin-path.
+It errs toward refusing. Only text the shell never runs is ignored: single-quoted
+strings, and the bodies of heredocs whose delimiter is quoted (<<'EOF'), when the
+closing delimiter line is there. If the single quotes don't pair up (an apostrophe
+in a comment, an escaped quote), nothing is ignored. Double-quoted text is still
+checked, since the shell runs $(...) and backticks inside it; write messages that
+mention SwiftPM in single quotes or a <<'EOF' heredoc.
+
+In what is left, any SwiftPM build entry point (swift build|test|run, swift-build,
+swift-test, swift-run) is refused unless the same command (cut at ; & | and
+newlines) runs it under this repo's lock file with the compiler cap, as the
+Makefile does, or is `swift build ... --show-bin-path`.
 Exit 2 blocks the call and shows stderr to the agent; anything else allows it.
 """
 import json
 import re
 import sys
 
-HEREDOC = re.compile(r"<<-?\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(.*?)(?:\n[ \t]*\2[ \t]*(?=\n|$)|\Z)", re.S)
-QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"", re.S)
-SEGMENT = re.compile(r"[;&|(){}\n]")
-SWIFTPM = re.compile(r"(?:^|[\s/])swift\s+(?:build|test)\b")
+LOCKFILE = "/tmp/betterlink-swiftpm.lock"
+QUOTED_HEREDOC = re.compile(r"<<-?[ \t]*(['\"])([A-Za-z_][A-Za-z0-9_]*)\1[^\n]*\n(.*?)\n[ \t]*\2[ \t]*(?=\n|$)", re.S)
+SINGLE = re.compile(r"'[^']*'")
+SEGMENT = re.compile(r"[;&|\n]")
+SWIFTPM = re.compile(r"(?<![\w.-])swift(?:\s+|-)(?:build|test|run)\b")
+BIN_PATH = re.compile(r"(?<![\w.-])swift\s+build\b[^;&|\n#]*--show-bin-path")
 
 
 def strip_data(cmd: str) -> str:
-    # Keep the heredoc's opening line (the command), drop its body.
-    cmd = HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0] + "\n", cmd)
-    return QUOTED.sub("''", cmd)
+    cmd = QUOTED_HEREDOC.sub(lambda m: m.group(0).split("\n", 1)[0] + "\n", cmd)
+    if cmd.count("'") % 2 == 0 and "\\'" not in cmd:
+        cmd = SINGLE.sub("''", cmd)
+    return cmd
+
+
+def allowed(seg: str) -> bool:
+    if BIN_PATH.search(seg) and len(SWIFTPM.findall(seg)) == 1:
+        return True
+    return re.search(r"(?<![\w.-])lockf\b", seg) is not None and LOCKFILE in seg and "-Xswiftc -j" in seg
 
 
 def refused(cmd: str) -> bool:
-    for seg in SEGMENT.split(strip_data(cmd)):
-        m = SWIFTPM.search(seg)
-        if not m:
-            continue
-        if "--show-bin-path" in seg or re.search(r"(?:^|[\s/])lockf\b", seg[: m.start() + 1]):
-            continue
-        return True
-    return False
+    return any(SWIFTPM.search(seg) and not allowed(seg) for seg in SEGMENT.split(strip_data(cmd)))
 
 
 def main() -> int:
@@ -51,9 +54,9 @@ def main() -> int:
         return 0  # never block on a malformed event
     if isinstance(cmd, str) and refused(cmd):
         print(
-            "Refused: a bare `swift build`/`swift test` skips this repo's machine-wide build lock "
-            "and compiler cap. Run `make test` or `make build` (one at a time), or prefix SwiftPM "
-            "with the Makefile's SWIFTPM_LOCK and SWIFT_JOBS. See CLAUDE.md.",
+            "Refused: this runs a SwiftPM build outside the repo's machine-wide build lock and "
+            "compiler cap. Run `make test` or `make build` (one at a time). To mention SwiftPM in a "
+            "message, put it in single quotes or a <<'EOF' heredoc. See CLAUDE.md.",
             file=sys.stderr,
         )
         return 2

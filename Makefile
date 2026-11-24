@@ -62,7 +62,7 @@ test-cli: build
 icon:
 	rm -rf .build/AppIcon.iconset
 	mkdir -p .build/AppIcon.iconset
-	swiftc -O scripts/make-icon.swift -o .build/make-icon
+	$(SWIFTPM_LOCK) swiftc -O scripts/make-icon.swift -o .build/make-icon
 	for s in 16 32 128 256 512; do \
 	  .build/make-icon .build/AppIcon.iconset/icon_$${s}x$${s}.png $$s; \
 	  .build/make-icon .build/AppIcon.iconset/icon_$${s}x$${s}@2x.png $$((s*2)); \
