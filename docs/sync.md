@@ -16,7 +16,7 @@ Never synced (they belong to one Mac): browser profiles themselves (each Mac's o
 
 A Mac only writes what it has chosen to sync and only applies what it has chosen to receive.
 
-A new Mac: install betterlink, turn on Sync and pick the folder, and the synced settings and Sidebar Profiles arrive. Then open Chrome in any profile and choose its Sidebar Profile from the sidebar's ⚙, as on any Mac. Nothing about another Mac's Chrome profiles carries over. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button.
+A new Mac: install betterlink, turn on Sync and pick the folder, and the synced settings and Sidebar Profiles arrive. Then open Chrome in any profile and choose its Sidebar Profile from the sidebar's ⚙, as on any Mac. Nothing about another Mac's Chrome profiles carries over. Today that assignment is stored in sidebar.json (each Sidebar Profile's `browserProfiles`). Sync leaves that field out of the device files and never changes it on merge, so it stays per Mac. A Chrome profile with no assignment shows the default Sidebar Profile (the one linked to nothing, such as Primary), as it does now. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button.
 
 ## Files
 
