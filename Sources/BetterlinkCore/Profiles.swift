@@ -231,6 +231,29 @@ public struct ProfileCatalog: Equatable, Sendable {
         return ProfileCatalog(profiles: list)
     }
 
+    /// Each Chromium profile's signed-in account (`user_name` in Local State,
+    /// an email), by profile folder. Sync finds a rule's profile on another
+    /// Mac by this first, then by name (docs/sync.md). Empty for a profile
+    /// not signed in.
+    public static func accounts(localStateJSON data: Data) -> [String: String] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let cache = (root["profile"] as? [String: Any])?["info_cache"] as? [String: Any] else { return [:] }
+        var out: [String: String] = [:]
+        for (dir, v) in cache {
+            if let u = (v as? [String: Any])?["user_name"] as? String, !u.isEmpty { out[dir] = u }
+        }
+        return out
+    }
+
+    /// The profile folder on this Mac for a profile another Mac named
+    /// `identity`: the one signed in to the same account, else the one with
+    /// the same name, else nil.
+    public static func resolve(_ identity: ProfileIdentity, profiles: [BrowserProfile], accounts: [String: String]) -> String? {
+        if let a = identity.account, let dir = profiles.first(where: { accounts[$0.directory] == a })?.directory { return dir }
+        if let n = identity.name, let dir = profiles.first(where: { $0.name == n })?.directory { return dir }
+        return nil
+    }
+
     /// The color a Chromium browser paints a profile's window frame with
     /// (`profile_highlight_color` in Local State, signed 32-bit ARGB), as RGB.
     public static func frameColor(localStateJSON data: Data, directory: String) -> UInt32? {

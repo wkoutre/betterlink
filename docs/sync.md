@@ -1,6 +1,6 @@
 # Sync (design)
 
-Status: design for review. Nothing is built yet.
+Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession; the app's SyncController and General › Sync).
 
 betterlink syncs your settings between Macs through a folder that Dropbox, Google Drive or iCloud Drive already keeps in sync. There's no account, server or API key. You choose what syncs. Two Macs editing at the same time always end up identical, and nothing is lost silently.
 
@@ -42,7 +42,7 @@ Every field of every entity is stored with a **stamp**:
 Edits made at nearly the same time:
 
 - **Different fields of the same item merge.** One Mac renames a folder while another moves it: both happen.
-- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. If the losing edit was this Mac's own, the Log says so, with the losing value and a Restore button.
+- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. If the losing edit was this Mac's own, the Log says so, with the losing value and a Restore button. An edit is stamped with when its settings file was saved, so of two saves moments apart on two Macs the later save wins (live: B saving 0.3 s after A won three times out of three).
 
 ## Lists and moves
 
