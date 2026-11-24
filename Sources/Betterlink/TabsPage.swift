@@ -2,6 +2,9 @@ import BetterlinkCore
 import SwiftUI
 import TabSyncCore
 
+/// SwiftUI has its own `Tab` (macOS 15), so name the browser's explicitly.
+typealias BrowserTab = TabSyncCore.Tab
+
 /// Tabs (preview): every open tab in every connected browser, live. The
 /// browser pushes each change through the Tabs extension and
 /// betterlink-tabhost the instant it happens; nothing here polls. Clicking a
@@ -31,8 +34,8 @@ final class TabsModel: ObservableObject {
         guard let s = sessions.first else { return }
         hub?.send(.open(Self.normalize(text)), to: s.socketPath)
     }
-    func activate(_ tab: Tab, in s: BrowserSession) { hub?.send(.activate(tab.id), to: s.socketPath) }
-    func close(_ tab: Tab, in s: BrowserSession) { hub?.send(.close(tab.id), to: s.socketPath) }
+    func activate(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.activate(tab.id), to: s.socketPath) }
+    func close(_ tab: BrowserTab, in s: BrowserSession) { hub?.send(.close(tab.id), to: s.socketPath) }
 
     /// The host binary inside the running app (Contents/Helpers), or next to the
     /// executable for `swift run`.
@@ -139,7 +142,7 @@ struct TabsPage: View {
 
 private struct TabRow: View {
     @ObservedObject private var tabs = TabsModel.shared
-    let tab: Tab
+    let tab: BrowserTab
     let session: BrowserSession
     @State private var hovering = false
 
