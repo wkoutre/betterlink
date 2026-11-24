@@ -256,10 +256,180 @@ const updates = Cli.create('updates', { description: 'Automatic update checks (t
     run: (c) => core('updates.set', { automatic: isOn(c.options.automatic) }),
   })
 
-export const cli = Cli.create('betterlink', {
+export // The sidebar's saved things (sidebar.json): Sidebar Profiles, Favorites,
+// folders, saved links, which browser profile shows which, imports. Ids come
+// from `sidebar list`; the first 4+ characters of an id are enough.
+const sidebarProfileOption = {
+  profile: z.string().optional().describe('Sidebar Profile name or id; needed when there is more than one'),
+}
+const whereOptions = {
+  to: z.string().optional().describe('"favorites", "top", or a folder id'),
+  position: z.number().int().positive().optional().describe('1 puts it first; default is last'),
+}
+const browserProfileOptions = {
+  browser: z.string().describe('Browser name ("Google Chrome") or bundle id'),
+  browserProfile: z.string().describe('The browser profile\'s folder: "Default", "Profile 1" (profiles list)'),
+}
+
+const sidebarProfiles = Cli.create('profiles', {
+  description: 'Sidebar Profiles: each holds its own Favorites and folders, and shows for the browser profiles assigned to it',
+})
+  .command('add', {
+    description: 'Make a Sidebar Profile',
+    options: z.object({ name: z.string() }),
+    run: (c) => core('sidebar.profiles.add', c.options),
+  })
+  .command('rename', {
+    description: 'Rename a Sidebar Profile',
+    options: z.object({ profile: z.string().describe('Its current name or id'), name: z.string().describe('The new name') }),
+    run: (c) => core('sidebar.profiles.rename', c.options),
+  })
+  .command('remove', {
+    description: 'Delete a Sidebar Profile and everything saved in it (the last one stays)',
+    options: z.object({ profile: z.string().describe('Name or id') }),
+    run: (c) => core('sidebar.profiles.remove', c.options),
+  })
+  .command('assign', {
+    description: 'Show this Sidebar Profile for a browser profile (this Mac only; never synced)',
+    options: z.object({ profile: z.string().describe('Sidebar Profile name or id'), ...browserProfileOptions }),
+    run: (c) => core('sidebar.profiles.assign', c.options),
+  })
+  .command('unassign', {
+    description: 'Let a browser profile show the default Sidebar Profile again',
+    options: z.object(browserProfileOptions),
+    run: (c) => core('sidebar.profiles.unassign', c.options),
+  })
+
+const sidebarSettings = Cli.create('settings', { description: 'The sidebar on this Mac: on or off, shown or hidden, side, width, browsers' })
+  .command('get', { description: 'Show the sidebar settings', run: () => core('sidebar.settings.get') })
+  .command('set', {
+    description: 'Change the sidebar settings; the running app applies them at once',
+    options: z.object({
+      enabled: onOff('the sidebar').optional(),
+      shown: onOff('show it, or hide it and give the window its space back (like the shortcut)').optional(),
+      side: z.enum(['left', 'right', 'auto']).optional().describe('auto: whichever side has room'),
+      width: z.number().min(200).max(440).optional().describe('Points, 200 to 440'),
+      takeOverTabs: onOff("switch the browser's own tab strip to its collapsed vertical tabs").optional(),
+      browsers: z.string().optional().describe('Browsers it attaches to, comma separated names or bundle ids'),
+    }),
+    run: (c) => {
+      const o = c.options
+      return core('sidebar.settings.set', {
+        enabled: o.enabled && isOn(o.enabled),
+        shown: o.shown && isOn(o.shown),
+        side: o.side,
+        width: o.width,
+        takeOverTabs: o.takeOverTabs && isOn(o.takeOverTabs),
+        browsers: o.browsers?.split(',').map((b) => b.trim()).filter(Boolean),
+      })
+    },
+  })
+
+const sidebar = Cli.create('sidebar', {
+  description: "The sidebar's saved things: Sidebar Profiles, Favorites, folders and saved links, imports, and its settings",
+})
+  .command('list', { description: 'Every Sidebar Profile with its Favorites and folders, with ids', run: () => core('sidebar.list') })
+  .command(sidebarProfiles)
+  .command('add-folder', {
+    description: 'Make a folder',
+    options: z.object({ name: z.string(), ...sidebarProfileOption, to: z.string().optional().describe('"top" or a folder id to put it in'), position: whereOptions.position }),
+    run: (c) => core('sidebar.folders.add', c.options),
+  })
+  .command('add-link', {
+    description: 'Save a link in a folder, at the top level, or as a Favorite',
+    options: z.object({ url: z.string(), title: z.string().optional(), ...sidebarProfileOption, ...whereOptions }),
+    run: (c) => core('sidebar.links.add', c.options),
+  })
+  .command('update', {
+    description: 'Rename a Favorite, folder or saved link, or point a link at another page',
+    args: z.object({ id: z.string().describe('Id from sidebar list') }),
+    options: z.object({ name: z.string().optional().describe('New name or title'), url: z.string().optional(), ...sidebarProfileOption }),
+    run: (c) => core('sidebar.items.update', { id: c.args.id, ...c.options }),
+  })
+  .command('move', {
+    description: 'Move or reorder a Favorite, folder or saved link (into Favorites, a folder, or the top level)',
+    args: z.object({ id: z.string().describe('Id from sidebar list') }),
+    options: z.object({ ...sidebarProfileOption, ...whereOptions }),
+    run: (c) => core('sidebar.items.move', { id: c.args.id, ...c.options }),
+  })
+  .command('remove', {
+    description: 'Delete a Favorite, folder or saved link',
+    args: z.object({ id: z.string().describe('Id from sidebar list') }),
+    options: z.object({ ...sidebarProfileOption, withContents: z.boolean().optional().describe('Needed to delete a folder that has things in it') }),
+    run: (c) => core('sidebar.items.remove', { id: c.args.id, ...c.options }),
+  })
+  .command('expand', {
+    description: 'Open or close a folder',
+    args: z.object({ id: z.string().describe('Folder id from sidebar list') }),
+    options: z.object({ ...sidebarProfileOption, open: onOff('the folder') }),
+    run: (c) => core('sidebar.items.expand', { id: c.args.id, profile: c.options.profile, expanded: isOn(c.options.open) }),
+  })
+  .command('import', {
+    description: 'Import bookmarks (into one closed folder) or Arc\'s sidebar (each Space becomes a Sidebar Profile)',
+    options: z.object({
+      from: z.enum(['browser', 'file', 'arc']).describe('browser: a Chromium profile\'s bookmarks; file: bookmarks.html, a Bookmarks file or StorableSidebar.json; arc: Arc on this Mac'),
+      path: z.string().optional().describe('With from file'),
+      browser: z.string().optional().describe('With from browser'),
+      browserProfile: z.string().optional().describe('With from browser: "Default", "Profile 1"'),
+      ...sidebarProfileOption,
+    }),
+    run: (c) => core('sidebar.import', c.options),
+  })
+  .command(sidebarSettings)
+
+// Live tabs, through the browser's Tabs extension. Tab and window ids come from `tabs list`.
+const tabId = z.object({ tab: z.number().int().describe('Tab id from tabs list') })
+const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the betterlink Tabs extension: list, open, close, move and more' })
+  .command('list', { description: 'Every connected browser window and its tabs', run: () => core('tabs.list') })
+  .command('open', {
+    description: 'Open a page in a new tab',
+    args: z.object({ url: z.string() }),
+    options: z.object({ window: z.number().int().optional().describe('Window id; default is the focused window') }),
+    run: (c) => core('tabs.open', { url: c.args.url, window: c.options.window }),
+  })
+  .command('close', {
+    description: 'Close tabs',
+    args: z.object({ tabs: z.string().describe('Tab ids, comma separated') }),
+    run: (c) => {
+      const ids = c.args.tabs.split(',').map((t) => t.trim()).filter(Boolean).map(Number)
+      if (ids.length === 0 || ids.some((n) => !Number.isInteger(n))) {
+        throw new Errors.IncurError({ code: 'REFUSED', message: 'Give tab ids from tabs list, comma separated, such as 12,34.' })
+      }
+      return core('tabs.close', { tabs: ids })
+    },
+  })
+  .command('activate', { description: 'Switch to a tab', options: tabId, run: (c) => core('tabs.activate', c.options) })
+  .command('move', {
+    description: 'Move a tab within its window, or into another window',
+    options: tabId.extend({ position: z.number().int().positive().describe('1 is first'), window: z.number().int().optional() }),
+    run: (c) => core('tabs.move', c.options),
+  })
+  .command('mute', { description: 'Mute a tab', options: tabId, run: (c) => core('tabs.mute', { ...c.options, muted: true }) })
+  .command('unmute', { description: 'Unmute a tab', options: tabId, run: (c) => core('tabs.mute', { ...c.options, muted: false }) })
+  .command('duplicate', { description: 'Open the same page in a second tab', options: tabId, run: (c) => core('tabs.duplicate', c.options) })
+  .command('reload', { description: 'Reload a tab', options: tabId, run: (c) => core('tabs.reload', c.options) })
+  .command('navigate', {
+    description: 'Send a tab to another page',
+    options: tabId.extend({ url: z.string() }),
+    run: (c) => core('tabs.navigate', c.options),
+  })
+  .command('new-window', { description: 'Move a tab to a new window', options: tabId, run: (c) => core('tabs.new-window', c.options) })
+  .command('close-others', {
+    description: "Close the window's other tabs (saved links' tabs stay open)",
+    options: tabId,
+    run: (c) => core('tabs.close-others', c.options),
+  })
+  .command('close-below', {
+    description: 'Close the tabs below this one (saved links\' tabs stay open)',
+    options: tabId,
+    run: (c) => core('tabs.close-below', c.options),
+  })
+
+const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
-    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings. (The app keeps its log in memory only, so it is not here.)',
+    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders, saved links, imports and settings; ' +
+    'and open tabs in browsers with the Tabs extension. (The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).
   version: process.env.BETTERLINK_VERSION ?? 'dev',
   update: false,
@@ -284,5 +454,7 @@ export const cli = Cli.create('betterlink', {
   .command(menuBar)
   .command(toast)
   .command(updates)
+  .command(sidebar)
+  .command(tabs)
 
 if (import.meta.main) cli.serve()

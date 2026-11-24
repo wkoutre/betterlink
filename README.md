@@ -152,9 +152,22 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - the menu bar icon;
 - automatic update checks;
 - the link toast;
-- default browser.
+- default browser;
+- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
+- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open).
 
-The app keeps its log in memory only, so the command can't read it.
+The app keeps its log in memory only, so the command can't read it. A few sidebar actions still need the sidebar itself: opening a saved link so it holds its tab, Back to Saved Page, and Save This Page Here.
+
+```sh
+betterlink sidebar list                                       # every Sidebar Profile, with ids
+betterlink sidebar add-link --url https://mail.google.com --to favorites
+betterlink sidebar add-folder --name Reading
+betterlink sidebar move 3f2a --to favorites --position 1      # the first 4+ characters of an id are enough
+betterlink sidebar profiles assign --profile Work --browser "Google Chrome" --browserProfile "Profile 1"
+betterlink sidebar settings set --side left --width 300
+betterlink tabs list
+betterlink tabs close-others --tab 1234
+```
 
 The command ships inside the app at `betterlink.app/Contents/Helpers/betterlink`. **Agents › Install Command** in the window links it into `~/.local/bin`, creating that folder if needed (it never replaces a file, or a link that isn't betterlink's). Or link it yourself, using wherever betterlink.app is (usually `/Applications`):
 

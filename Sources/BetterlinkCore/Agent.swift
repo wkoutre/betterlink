@@ -48,7 +48,7 @@ public enum Agent {
         "settings.get", "settings.set",
         "config.path", "config.init", "config.check",
         "test",
-    ]
+    ] + sidebarCommands
 
     public static func run(_ command: String, input: [String: Any], env: AgentEnvironment) -> AgentResponse {
         do {
@@ -78,6 +78,7 @@ public enum Agent {
             case "config.check": return configCheck(env)
             case "test": return try test(input, env)
             default:
+                if let r = try sidebarRun(command, input, env) { return r }
                 return .failure("Unknown command \(command). Commands: \(commands.joined(separator: ", ")).")
             }
         } catch let e as AgentError {
@@ -88,7 +89,7 @@ public enum Agent {
     }
 
     struct AgentError: Error { let message: String }
-    private static func fail(_ m: String) -> AgentError { AgentError(message: m) }
+    static func fail(_ m: String) -> AgentError { AgentError(message: m) }
 
     // MARK: Helpers
 
@@ -102,7 +103,7 @@ public enum Agent {
     // Inputs are checked for type, never coerced: a position of 1.5 or a
     // showLog of 1 is refused, because rule order and settings decide routing.
 
-    private static func string(_ input: [String: Any], _ key: String) throws -> String? {
+    static func string(_ input: [String: Any], _ key: String) throws -> String? {
         guard let v = input[key], !(v is NSNull) else { return nil }
         guard let s = v as? String else { throw fail("\(key) must be text.") }
         return s.trimmingCharacters(in: .whitespaces)
@@ -110,13 +111,13 @@ public enum Agent {
 
     /// A list position, counted from 1. Refuses 0 and below (the smallest
     /// Int would overflow `position - 1`).
-    private static func position(_ input: [String: Any], _ key: String) throws -> Int? {
+    static func position(_ input: [String: Any], _ key: String) throws -> Int? {
         guard let n = try int(input, key) else { return nil }
         guard n >= 1 else { throw fail("\(key) must be 1 or more.") }
         return n
     }
 
-    private static func int(_ input: [String: Any], _ key: String) throws -> Int? {
+    static func int(_ input: [String: Any], _ key: String) throws -> Int? {
         guard let v = input[key], !(v is NSNull) else { return nil }
         guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), !CFNumberIsFloatType(n),
               // Int(exactly:) is nil for a value Int can't hold, instead of wrapping it.
@@ -126,7 +127,7 @@ public enum Agent {
         return i
     }
 
-    private static func bool(_ input: [String: Any], _ key: String) throws -> Bool? {
+    static func bool(_ input: [String: Any], _ key: String) throws -> Bool? {
         guard let v = input[key], !(v is NSNull) else { return nil }
         guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { throw fail("\(key) must be true or false.") }
         return n.boolValue

@@ -44,6 +44,24 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(help).not.toContain('--update')
   })
 
+  test('builds a sidebar: Sidebar Profiles, folders, links, Favorites, moves', () => {
+    const d = home()
+    expect(run(d, 'sidebar', 'profiles', 'add', '--name', 'Work').code).toBe(0)
+    const folder = run(d, 'sidebar', 'add-folder', '--profile', 'Work', '--name', 'Docs').json.id as string
+    const link = run(d, 'sidebar', 'add-link', '--profile', 'Work', '--url', 'https://example.com/a', '--title', 'A', '--to', folder.slice(0, 8)).json.id as string
+    expect(run(d, 'sidebar', 'add-link', '--profile', 'Work', '--url', 'https://mail.example.com', '--to', 'favorites').code).toBe(0)
+    expect(run(d, 'sidebar', 'move', link, '--profile', 'Work', '--to', 'favorites', '--position', '1').code).toBe(0)
+    expect(run(d, 'sidebar', 'remove', folder, '--profile', 'Work').code).toBe(0) // empty now
+    const work = run(d, 'sidebar', 'list').json.find((p: any) => p.name === 'Work')
+    expect(work.favorites.map((f: any) => f.url)).toEqual(['https://example.com/a', 'https://mail.example.com'])
+    expect(work.items).toEqual([])
+    // Several Sidebar Profiles: which one must be said.
+    expect(run(d, 'sidebar', 'add-link', '--url', 'https://x.example').code).not.toBe(0)
+    for (const c of ['sidebar profiles assign', 'sidebar import', 'sidebar settings set', 'tabs list', 'tabs close-others']) {
+      expect(spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout).toContain(`betterlink ${c}`)
+    }
+  })
+
   test('adds, lists, tests, moves and removes rules', () => {
     const d = home()
     const browser = chromium(d)
