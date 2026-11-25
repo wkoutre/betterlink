@@ -50,7 +50,7 @@ struct SidebarPage: View {
             Toggle(isOn: $sidebar.enabled) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Show the sidebar")
-                    Text("Sits against the front browser window's edge and moves with it. Drag the edge between them to resize it.")
+                    Text("Sits against the edge of every browser window and moves with it. Drag the edge between them to resize that window's.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }

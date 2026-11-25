@@ -13,6 +13,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 |---|---|
 | Idle, no browser in front | app under 0.1% of a core, under 1 wakeup a second |
 | Quiet browser in front | the same |
+| Several quiet browser windows, each with its sidebar | the same |
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
@@ -20,9 +21,10 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 
 How it stays there:
 
-- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, or every 2 seconds while the sidebar is hidden or no browser is in front.
+- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, or every 2 seconds while no sidebar is on screen.
 - **Tab rows are drawn again only when something they show or use changed** (`SkipUnchanged`, `RowKey` in SidebarView): another tab's title isn't such a thing.
 - **The host drains its pool per read** (`e2e/host-memory.test.mjs` fails if its memory grows).
 - **The extension says nothing** when an update changes nothing the app sees.
-- **Mouse drags are watched** only while a browser is in front.
+- **A sidebar per window adds nothing while nothing changes.** No timer runs for a sidebar at rest. Each is handed what it shows only when its own window's tabs, Browser Profile or held tabs differ (`SidebarLook`, unit tested), so a tab changing in one window redraws no other window's sidebar, and one that isn't on screen is handed nothing. Their places among the windows are checked on app and window events, with one reading of the window list for all of them, and once more 0.3 s later.
+- **Mouse drags are watched** only while a browser is in front, or until the button comes up after a window moved with it down.
 - **The sync rescan** skips this Mac's own file and may run up to 10 s late.
