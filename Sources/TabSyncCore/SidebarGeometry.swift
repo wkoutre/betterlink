@@ -109,7 +109,9 @@ public enum SidebarGeometry {
     /// True when every edge of `w` lies on a half, third or quarter line of
     /// `screen` (the visible frame): the window was snapped, not placed by hand.
     /// The tolerance covers the gaps window managers leave around tiles.
-    public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = 10) -> Bool {
+    public static let snapTolerance: CGFloat = 10
+
+    public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = snapTolerance) -> Bool {
         snapError(w, screen: s) <= tolerance
     }
 

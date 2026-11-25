@@ -154,6 +154,45 @@ import Testing
         #expect(seen.loan?.givenBack(from: inner, screen: big) == tile)
     }
 
+    /// A browser that narrows late, exactly as asked: only then has it lent
+    /// the width, and the loan is not at rest before that is seen. Moved
+    /// afterwards, hiding gives the whole width back at the new place.
+    @Test func aLateAnswerAsAskedThenAMoveGivesTheWidthBack() throws {
+        for side in SidebarSide.allCases {
+            let tile = CGRect(x: 0, y: 0, width: 960, height: 1049)
+            let inner = side == .left ? CGRect(x: 280, y: 0, width: 680, height: 1049) : CGRect(x: 0, y: 0, width: 680, height: 1049)
+            let asked = WidthLoan.asking(outer: tile, inner: inner, side: side)
+            #expect(!asked.rests(at: inner)) // narrowed, but not yet seen to be
+            #expect(!asked.rests(at: tile))
+            let seen = asked.seen(at: inner, screen: screen)
+            #expect(seen.correction == nil)
+            let lent = try #require(seen.loan)
+            #expect(lent.phase == .lent && lent.rests(at: inner))
+            let moved = inner.offsetBy(dx: 300, dy: 40)
+            #expect(!lent.rests(at: moved))
+            let there = try #require(lent.seen(at: moved, screen: screen).loan)
+            #expect(there.givenBack(from: moved, screen: screen) == tile.offsetBy(dx: 300, dy: 40))
+        }
+    }
+
+    /// What a window lent can leave it on a snap line of its own (a 320 pt
+    /// sidebar beside the right half of a 1920 pt screen leaves the right
+    /// third). Nudged a few points, it is still that window, not a new tile.
+    @Test func aLentFrameOnASnapLineIsNotANewTile() throws {
+        let s = CGRect(x: 0, y: 0, width: 1920, height: 1049)
+        let outer = CGRect(x: 960, y: 0, width: 960, height: 1049), inner = CGRect(x: 1280, y: 0, width: 640, height: 1049)
+        #expect(SidebarGeometry.isSnapped(inner, screen: s))
+        let loan = WidthLoan.lent(outer: outer, inner: inner, side: .left)
+        let nudged = CGRect(x: 1284, y: 0, width: 636, height: 1049)
+        #expect(SidebarGeometry.isSnapped(nudged, screen: s))
+        let kept = try #require(loan.seen(at: nudged, screen: s).loan)
+        #expect(kept.taken == 320)
+        #expect(kept.givenBack(from: nudged, screen: s) == CGRect(x: 964, y: 0, width: 956, height: 1049))
+        // Snapped somewhere else, it starts over.
+        #expect(loan.seen(at: CGRect(x: 0, y: 0, width: 640, height: 1049), screen: s).loan == nil)
+        #expect(loan.seen(at: outer, screen: s).loan == nil)
+    }
+
     @Test func showHideShowHideNeverDrifts() {
         var window = CGRect(x: 0, y: 0, width: 960, height: 1049)
         for i in 0..<20 {

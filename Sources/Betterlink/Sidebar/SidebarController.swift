@@ -491,7 +491,7 @@ final class SidebarController: ObservableObject {
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         let screen = screen(for: t.frame)
         if let f = fits[t.windowHash] {
-            if Self.same(f.inner, t.frame) { return layout() }
+            if f.loan.rests(at: t.frame) { return layout() }
             if refused != nil { return layout() } // still the answer it gave
             if f.loan.phase == .asked, learnMinWidth(asked: f.inner, got: t) {
                 fits[t.windowHash] = nil
@@ -524,9 +524,18 @@ final class SidebarController: ObservableObject {
     /// the pair stays on the screen.
     private func fit(_ t: WindowTracker.Target, into outer: CGRect) {
         let screen = screen(for: outer)
-        for _ in 0..<2 {
+        // Back where it was, its edge covered. What was asked stands, for a
+        // browser that answers late.
+        func putBack(from now: CGRect) {
+            if !Self.same(now, t.frame) { tracker.setWindowFrame(t.frame) }
+            observe(t.windowHash, at: t.frame, window: tracker.boundWindow)
+            refused = t.frame
+        }
+        for pass in 0..<2 {
             guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: side,
                                                       minWindowWidth: minWidths[t.windowHash] ?? 500) else {
+                // At its minimum width the pair has no place on this screen.
+                if pass > 0, let now = current, now.windowHash == t.windowHash { return putBack(from: now.frame) }
                 return coverIfNoRoom(t, on: screen)
             }
             fits[t.windowHash] = makeFit(.asking(outer: outer, inner: inner, side: side), t)
@@ -534,15 +543,10 @@ final class SidebarController: ObservableObject {
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }
             if Self.same(now.frame, inner) { observe(t.windowHash, at: now.frame, window: tracker.boundWindow); return }
-            if Self.same(now.frame, t.frame) || SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) {
-                // It would not narrow, only move: put it back and cover its edge.
-                // What was asked stands, for a browser that answers late.
-                if !Self.same(now.frame, t.frame) { tracker.setWindowFrame(t.frame) }
-                observe(t.windowHash, at: t.frame, window: tracker.boundWindow)
-                refused = t.frame
-                return
-            }
+            // It narrowed, as far as it goes: asked again knowing that, as after a slide.
             if learnMinWidth(asked: inner, got: now) { continue }
+            // It would not narrow, only move.
+            if Self.same(now.frame, t.frame) || SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
             observe(t.windowHash, at: now.frame, window: tracker.boundWindow)
             return
         }
