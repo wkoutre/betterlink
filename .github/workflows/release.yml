@@ -240,17 +240,32 @@ jobs:
           tag="v$VERSION"
           files="dist/betterlink-$VERSION.zip dist/betterlink-macos.zip dist/SHA256SUMS dist/betterlink.rb dist/appcast.xml"
           # Upload everything to a draft first, then publish in one step, so
-          # the appcast never goes live before the zip it points at.
-          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null | grep -qx false; then
-            echo "$tag is already published; nothing to do."
-            exit 0
-          elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber $files
-          else
-            gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-              --title "betterlink $VERSION" --generate-notes $files
-          fi
-          gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          # the appcast never goes live before the zip it points at. Each try
+          # starts from what GitHub has now, so a call that answered 500 but
+          # did create the draft is picked up, not repeated.
+          publish() {
+            if gh release view "$tag" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null | grep -qx false; then
+              echo "$tag is already published; nothing to do."
+              return 0
+            elif gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+              gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber $files || return 1
+            else
+              gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
+                --title "betterlink $VERSION" --generate-notes $files || return 1
+            fi
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+          }
+          # GitHub's API sometimes answers 500 (0.3.5's run failed that way
+          # after signing and notarizing). Try again rather than lose the run.
+          for attempt in 1 2 3 4; do
+            publish && break
+            if [ "$attempt" = 4 ]; then
+              echo "Publishing $tag failed 4 times; re-run the failed job." >&2
+              exit 1
+            fi
+            echo "::warning::Publishing $tag failed (try $attempt); retrying in $((attempt * 20))s."
+            sleep $((attempt * 20))
+          done
           {
             echo "### Published betterlink $VERSION"
             echo '```'

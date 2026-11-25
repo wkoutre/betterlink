@@ -126,7 +126,23 @@ Merge a pull request. That's it. On every push to `main` that changes more than 
 
 Merges while a release runs wait for it, then release together.
 
-If `release` has a required reviewer (Settings › Environments › release), each release pauses before the signing job until you approve it in the run. The tap job uses its own environment, so that is the only click.
+Merges that land while a release runs collapse: GitHub keeps one waiting run, a newer merge replaces it, and that run tests and ships `main`'s tip, so it carries every change merged in the meantime. A burst of merges costs at most two releases.
+
+### Approval or a wait timer
+
+The `release` environment (Settings › Environments › release) decides whether a release waits for a person:
+
+- **Wait timer, no reviewer** (recommended): each release waits a few minutes before the signing job, then ships by itself. To stop one, open the run and click **Cancel workflow** during the wait. Nobody has to click anything for a release to go out.
+- **Required reviewer**: each release pauses before the signing job until you click **Approve** in the run. While it waits, it holds the release queue, so every later merge waits too. The tap job uses its own environment, so that is the only click.
+
+Switch to the wait timer (10 minutes) from a Mac where `gh` is signed in as the owner:
+
+```sh
+printf '%s' '{"wait_timer":10,"reviewers":[],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+  | gh api -X PUT repos/wkoutre/betterlink/environments/release --input -
+```
+
+This keeps the main-only branch rule. What the reviewer guarded against: without it, anyone who can push to `main` (you, and any token or app you've given push access) can ship a signed update to every installed copy, after the timer. Everything else stays: the keys reach only runs from `main`, `main` can't be force-pushed or deleted, release tags can't move, actions are pinned to commits, and pull requests from forks never see the secrets.
 
 To release a docs-only change anyway: **Actions › release › Run workflow**, check **publish**.
 
