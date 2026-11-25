@@ -302,10 +302,12 @@ extension AgentCommand {
             return AgentResponseJSON.failure("Give any of enabled, shown, side, width, takeOverTabs, browsers.")
         }
         if let enabled { d.set(enabled, forKey: "sidebar.enabled") }
-        if let shown { d.set(!shown, forKey: "sidebar.collapsed") }
+        // For every window, also one hidden or shown on its own: the running
+        // app (or the next launch) takes the marks as "apply to all".
+        if let shown { d.set(!shown, forKey: "sidebar.collapsed"); d.set(true, forKey: "sidebar.shownForAll") }
         if let take { d.set(take, forKey: "sidebar.takeOverTabs") }
         if let side { d.set(side, forKey: "sidebar.side") }
-        if let width { d.set(width, forKey: "sidebar.width") }
+        if let width { d.set(width, forKey: "sidebar.width"); d.set(true, forKey: "sidebar.widthForAll") }
         if let browsers { d.set(browsers, forKey: "sidebar.browsers") }
         d.synchronize()  // the running app reads it as soon as it is notified
         var out = sidebarSettings()
