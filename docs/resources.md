@@ -14,6 +14,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 | Idle, no browser in front | app under 0.1% of a core, under 1 wakeup a second |
 | Quiet browser in front | the same |
 | Several quiet browser windows, each with its sidebar | the same |
+| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | not measured yet |
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
@@ -21,7 +22,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 
 How it stays there:
 
-- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, or every 2 seconds while no sidebar is on screen.
+- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, but only while a sidebar is on screen and an attached browser is the front app (`PublishPacer.interval`, unit tested). Otherwise every 2 seconds: with no sidebar on screen, and with sidebars on screen beside their windows while another app is in front, which is most of the day. When a browser comes to the front, what was held back goes on at once.
 - **Tab rows are drawn again only when something they show or use changed** (`SkipUnchanged`, `RowKey` in SidebarView): another tab's title isn't such a thing.
 - **The host drains its pool per read** (`e2e/host-memory.test.mjs` fails if its memory grows).
 - **The extension says nothing** when an update changes nothing the app sees.

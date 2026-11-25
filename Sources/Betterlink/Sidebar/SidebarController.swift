@@ -379,9 +379,10 @@ final class SidebarController: ObservableObject {
             let onScreen = WindowServer.onScreen()
             for i in instances.values { i.present(onScreen: onScreen, settled: settled) }
         }
-        // The tab lists keep to the moment only while a sidebar can be seen.
-        let watched = instances.values.contains(where: \.isShown)
-        if TabsModel.shared.isWatched != watched { TabsModel.shared.isWatched = watched }
+        // What tabs show keeps to the moment only while someone can be
+        // watching it change: a sidebar on screen and a browser in front.
+        let interval = PublishPacer.interval(sidebarOnScreen: instances.values.contains(where: \.isShown), browserInFront: tracker.browserInFront)
+        if TabsModel.shared.interval != interval { TabsModel.shared.interval = interval }
         refreshLooks()
         updateHotKey()
     }

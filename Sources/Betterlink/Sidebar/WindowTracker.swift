@@ -154,6 +154,9 @@ final class WindowTracker: NSObject {
         (NSWorkspace.shared.frontmostApplication?.processIdentifier).flatMap { watchers[$0] }
     }
 
+    /// Whether an attached browser is the front app.
+    var browserInFront: Bool { frontWatcher != nil }
+
     /// The focused window of the attached browser in front, if one is.
     var frontWindow: TrackedWindow? { frontWatcher?.focused }
 
