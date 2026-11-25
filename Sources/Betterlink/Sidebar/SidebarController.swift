@@ -315,6 +315,7 @@ final class SidebarController: ObservableObject {
 
     private func stop() {
         endResize()
+        TabsModel.shared.isWatched = false
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
@@ -588,6 +589,7 @@ final class SidebarController: ObservableObject {
     }
 
     private func layout() {
+        TabsModel.shared.isWatched = enabled && !collapsed && current != nil
         // The shortcut works only while an attached browser is in front.
         updateHotKey()
         // A slide places the panel itself, frame by frame.

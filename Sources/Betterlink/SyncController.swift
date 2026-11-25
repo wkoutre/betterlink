@@ -108,6 +108,8 @@ final class SyncController: ObservableObject {
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated { self?.schedulePull() }
         }
+        // Any time about then: macOS can do it when the Mac is awake anyway.
+        timer?.tolerance = 10
         schedulePull()
     }
 

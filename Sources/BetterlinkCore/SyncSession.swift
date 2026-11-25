@@ -50,12 +50,13 @@ public struct SyncFolder: Sendable {
     /// that sits in such a folder, is refused and named in `unsafe`: device
     /// files carry Link Rules and config.ts, which is code (FileSafety, the
     /// check config.ts itself gets).
-    public func readAll(uid: uid_t = getuid()) -> (files: [SyncDeviceFile], skipped: [String], newer: [String], unsafe: [String]) {
+    public func readAll(except device: String? = nil, uid: uid_t = getuid()) -> (files: [SyncDeviceFile], skipped: [String], newer: [String], unsafe: [String]) {
         let d = JSONDecoder()
         d.dateDecodingStrategy = .iso8601
         var files: [SyncDeviceFile] = [], skipped: [String] = [], newer: [String] = [], unsafe: [String] = []
         let names = (try? FileManager.default.contentsOfDirectory(atPath: devices.path)) ?? []
-        for n in names.sorted() where n.hasSuffix(".json") {
+        let own = device.map { file(for: $0).lastPathComponent }
+        for n in names.sorted() where n.hasSuffix(".json") && n != own {
             if let problem = FileSafety.problem(with: devices.appendingPathComponent(n), uid: uid) { unsafe.append("\(n): \(problem)"); continue }
             guard let data = FileManager.default.contents(atPath: devices.appendingPathComponent(n).path) else { skipped.append(n); continue }
             if let head = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -225,7 +226,8 @@ public final class SyncSession {
         // Local edits first, so they are stamped before anything newer lands.
         let snap = try snapshot()
         _ = try push(snap, now: now)
-        let read = folder.readAll()
+        // This Mac's own file says nothing it doesn't know, and can be megabytes.
+        let read = folder.readAll(except: device)
         report.skipped = read.skipped; report.newer = read.newer; report.unsafe = read.unsafe
         var merged = state
         for f in read.files where f.device != device { merged = merged.merged(with: f.state) }

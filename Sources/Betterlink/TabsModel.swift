@@ -1,4 +1,5 @@
 import AppKit
+import os
 import BetterlinkCore
 import SwiftUI
 import TabSyncCore
@@ -33,7 +34,7 @@ final class TabsModel: ObservableObject {
     func start() {
         guard hub == nil else { return }
         refreshExtension()
-        let hub = SyncHub(onLine: { path, m in
+        let hub = SyncHub(onLine: { [weak self] path, m in
             // Two things saved links' held tabs need the moment the browser says
             // them: the tab an open made (its ack), and a tab closed on its own.
             if m.type == "ack", let id = m.id, let tab = m.tabId {
@@ -41,14 +42,50 @@ final class TabsModel: ObservableObject {
             } else if m.type == "event", m.kind == "tabRemoved", m.isWindowClosing != true, let tab = m.tabId {
                 DispatchQueue.main.async { SidebarHoldsModel.shared.closed(tab: tab, socketPath: path) }
             }
+            // Whether the change that follows is only what a tab shows.
+            if !PublishPacer.isContent(m) { self?.urgent.withLock { $0 = true } }
         }, onChange: { [weak self] s in
-            DispatchQueue.main.async {
-                SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
-                self?.sessions = s; self?.lookUpProfiles(s); self?.reloadOutdatedExtensions(s)
-            }
+            guard let self else { return }
+            // Taken here, on the hub's queue, so it belongs to this change.
+            let urgent = self.urgent.withLock { u in defer { u = false }; return u || s.count != self.seen.withLock({ $0 }) }
+            self.seen.withLock { $0 = s.count }
+            DispatchQueue.main.async { self.changed(s, urgent: urgent) }
         })
         self.hub = hub
         hub.start()
+    }
+
+    /// Whether the sidebar is on screen: its tab list is worth keeping to the
+    /// moment. Hidden, or with no browser in front, what tabs show can wait.
+    var isWatched = false {
+        didSet { if isWatched, !oldValue, latest != nil { publish() } }
+    }
+    /// The newest tab lists, when not published yet.
+    private var latest: [BrowserSession]?
+    private var pacer = PublishPacer()
+    private nonisolated let urgent = OSAllocatedUnfairLock(initialState: false)
+    private nonisolated let seen = OSAllocatedUnfairLock(initialState: 0)
+
+    private func changed(_ s: [BrowserSession], urgent: Bool) {
+        latest = s
+        switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: isWatched ? 0.1 : 2) {
+        case .now: publish()
+        case .after(let seconds):
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
+                if self?.latest != nil { self?.publish() }
+            }
+        case .waiting: break
+        }
+    }
+
+    private func publish() {
+        guard let s = latest else { return }
+        latest = nil
+        pacer.published(now: CACurrentMediaTime())
+        SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
+        sessions = s
+        lookUpProfiles(s)
+        reloadOutdatedExtensions(s)
     }
 
     /// Puts this app's copy of the Tabs extension where browsers load it from,

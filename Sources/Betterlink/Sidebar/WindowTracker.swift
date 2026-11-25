@@ -73,9 +73,6 @@ final class WindowTracker: NSObject {
             let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
             MainActor.assumeIsolated { self?.frontAppChanged(app) }
         }
-        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] e in
-            MainActor.assumeIsolated { self?.mouseEvent(e.type) }
-        }
         frontAppChanged(NSWorkspace.shared.frontmostApplication)
     }
 
@@ -91,8 +88,6 @@ final class WindowTracker: NSObject {
     }
 
     func stop() {
-        if let m = mouseMonitor { NSEvent.removeMonitor(m) }
-        mouseMonitor = nil
         if let t = workspaceToken { NSWorkspace.shared.notificationCenter.removeObserver(t) }
         workspaceToken = nil
         detach()
@@ -209,10 +204,16 @@ final class WindowTracker: NSObject {
         observer = obs
         observedPid = pid
         appElement = appEl
+        // Only while a browser is in front: a drag in any other app isn't ours.
+        mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] e in
+            MainActor.assumeIsolated { self?.mouseEvent(e.type) }
+        }
     }
 
     private func detach() {
         stopDragTracking()
+        if let m = mouseMonitor { NSEvent.removeMonitor(m) }
+        mouseMonitor = nil
         settleWork?.cancel()
         windowNumber = nil
         if let obs = observer {

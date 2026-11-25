@@ -65,6 +65,8 @@ public final class SyncHub: @unchecked Sendable {
         self.onLine = onLine
     }
 
+    private let dec = JSONDecoder()
+
     public func start() {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
                                                  attributes: [.posixPermissions: 0o700])
@@ -116,7 +118,7 @@ public final class SyncHub: @unchecked Sendable {
             while true {
                 let n = read(fd, &buf, buf.count)
                 if n <= 0 { if n < 0 && errno == EINTR { continue }; break }
-                let lines = dec.feed(Data(buf[0..<n]))
+                let lines = pooled { dec.feed(Data(buf[0..<n])) }
                 let received = nowMs()
                 guard let hub = self else { return }
                 hub.q.async { hub.handle(lines, from: path, receivedAt: received) }
@@ -133,7 +135,6 @@ public final class SyncHub: @unchecked Sendable {
 
     private func handle(_ lines: [Data], from path: String, receivedAt: Double) {
         guard var s = sessions[path] else { return }
-        let dec = JSONDecoder()
         for line in lines {
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
             onLine?(path, m)
