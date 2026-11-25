@@ -87,6 +87,54 @@ struct SidebarGeometryTests {
         #expect(width(440, min: 950) == 280)  // already narrower than that: no more
     }
 
+    /// Nick, 2026-11-25, on a laptop: a window filling the screen, the sidebar
+    /// on the left. It shrinks from its left side; its right edge stays.
+    @Test func aWindowFillingTheScreenIsNeverPushedOffIt() {
+        for (w, h) in [(CGFloat(1512), CGFloat(944)), (1920, 1049), (1280, 775), (1000, 700)] {
+            let s = CGRect(x: 0, y: 0, width: w, height: h)
+            for side in SidebarSide.allCases {
+                for minWidth in [CGFloat(500), 626, 900, w] { // w: won't narrow at all
+                    for sidebar in [CGFloat(200), 280, 440] {
+                        let out = SidebarGeometry.settled(window: s, screen: s, width: sidebar, side: side, minWindowWidth: minWidth) ?? s
+                        #expect(!SidebarGeometry.leaves(s, from: s, to: out), "\(s) \(side) \(minWidth) \(sidebar) \(out)")
+                        #expect(side == .left ? abs(out.maxX - s.maxX) < 1 : abs(out.minX - s.minX) < 1, "\(s) \(side) \(minWidth) \(out)")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func everyFrameOfTheSlideKeepsTheFarEdge() {
+        let full = CGRect(x: 0, y: 0, width: 1512, height: 944)
+        for side in SidebarSide.allCases {
+            let shown = SidebarGeometry.settled(window: full, screen: full, width: 280, side: side)!
+            for i in 0...20 {
+                let f = SidebarSlide.frames(hiddenWindow: full, shownWindow: shown, outerEdge: side == .left ? 0 : 1512, width: 280,
+                                            side: side, progress: Double(i) / 20)
+                #expect(side == .left ? f.window.maxX == 1512 : f.window.minX == 0)
+                #expect(f.window.width <= 1512)
+            }
+        }
+    }
+
+    /// A window that lent less than the sidebar's width goes no further than it
+    /// gets back, while the sidebar's own edge runs out to the end.
+    @Test func aPartlyLentWindowDoesNotOvershootWhenHiding() {
+        let hidden = CGRect(x: 960, y: 0, width: 960, height: 1049), shown = CGRect(x: 960, y: 0, width: 816, height: 1049)
+        for i in 0...20 {
+            let f = SidebarSlide.frames(hiddenWindow: hidden, shownWindow: shown, outerEdge: 2056, width: 280, side: .right, progress: Double(i) / 20)
+            #expect(f.window.maxX <= hidden.maxX && f.window.maxX >= shown.maxX && f.window.minX == 960)
+        }
+        #expect(SidebarSlide.frames(hiddenWindow: hidden, shownWindow: shown, outerEdge: 2056, width: 280, side: .right, progress: 0).innerEdge == 2056)
+    }
+
+    @Test func leavingTheScreenIsOnlyForAnEdgeThatWasOnIt() {
+        let s = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        #expect(SidebarGeometry.leaves(s, from: s, to: s.offsetBy(dx: 280, dy: 0)))
+        #expect(SidebarGeometry.leaves(s, from: s, to: s.offsetBy(dx: -5, dy: 0)))
+        #expect(!SidebarGeometry.leaves(s, from: CGRect(x: 600, y: 0, width: 600, height: 500), to: CGRect(x: 700, y: 0, width: 600, height: 500)))
+    }
+
     /// A saved "auto" (removed) reads as no side, so the default is used.
     @Test func autoIsNoLongerASide() { #expect(SidebarSide(rawValue: "auto") == nil) }
 
@@ -226,5 +274,20 @@ struct SidebarGeometryTests {
         let c2 = SidebarGeometry.cocoa(fromAX: ax2, mainScreenHeight: 900)
         #expect(c2.maxY == 875)
         #expect(SidebarGeometry.ax(fromCocoa: c2, mainScreenHeight: 900) == ax2)
+    }
+
+    /// A browser shows its minimum width by narrowing to it where it was asked
+    /// to go. One no narrower than before it was asked has not answered yet, or
+    /// won't narrow: that width is no minimum, whatever space it was lent before.
+    @Test func aWindowThatHasNotAnsweredTeachesNoMinimumWidth() {
+        // Narrowed once already (700 of a 920 pt space), asked for 600, not answered.
+        let asked = CGRect(x: 1000, y: 0, width: 600, height: 900), still = CGRect(x: 1000, y: 0, width: 700, height: 900)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: still, wasWidth: 700) == nil)
+        // It narrowed, to 650 and no further: that is its minimum.
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 1000, y: 0, width: 650, height: 900), wasWidth: 700) == 650)
+        // As asked, or somewhere else, or another height: nothing learned.
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: asked, wasWidth: 700) == nil)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 950, y: 0, width: 650, height: 900), wasWidth: 700) == nil)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 1000, y: 0, width: 650, height: 800), wasWidth: 700) == nil)
     }
 }

@@ -67,9 +67,22 @@ public struct SidebarSlide: Equatable, Sendable {
         let q = CGFloat(min(max(p, 0), 1))
         let inner = side == .left ? outerEdge + width * q : outerEdge - width * q
         guard hiddenWindow != shownWindow else { return (hiddenWindow, inner) }
+        // No further out than the window gets back: one that lent less than the
+        // sidebar's width stops there while the sidebar's edge goes on.
         var w = hiddenWindow
-        if side == .left { w.origin.x = inner; w.size.width = hiddenWindow.maxX - inner }
-        else { w.size.width = inner - hiddenWindow.minX }
+        if side == .left { w.origin.x = max(inner, hiddenWindow.minX); w.size.width = hiddenWindow.maxX - w.origin.x }
+        else { w.size.width = min(inner, hiddenWindow.maxX) - hiddenWindow.minX }
         return (w, inner)
+    }
+
+    /// Where the sidebar is revealed up to, given where the window's seam edge
+    /// really is (`windowEdge`), where this moment of the slide puts the
+    /// sidebar's inner edge, and the window's edge at its full width.
+    public static func seam(windowEdge: CGFloat, innerEdge: CGFloat, hiddenEdge: CGFloat, side: SidebarSide) -> CGFloat {
+        // The window's real edge, however late the browser is: the sidebar
+        // never runs ahead of it. Past the window's full width, where the
+        // window never goes, the sidebar goes on alone once the window is there.
+        let past = side == .left ? innerEdge < hiddenEdge : innerEdge > hiddenEdge
+        return past && abs(windowEdge - hiddenEdge) <= 1 ? innerEdge : windowEdge
     }
 }
