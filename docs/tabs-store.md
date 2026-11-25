@@ -44,7 +44,7 @@ The extension does nothing without a betterlink that has the Sidebar page, and a
   > • Your tabs in a sidebar that follows the browser window. Click to switch, close, reorder, mute, duplicate or reload.
   > • A grid of Favorites and nested folders of saved links above your tabs. A saved link keeps its tab, like a pinned tab.
   > • One Sidebar Profile per browser profile, tinted with that profile's color.
-  > • Changes show the moment they happen. Nothing polls.
+  > • Changes show as they happen. Nothing polls.
   >
   > THIS EXTENSION NEEDS THE BETTERLINK APP
   > It does nothing by itself. Install betterlink for macOS from github.com/wkoutre/betterlink, open its Sidebar page and press Set Up next to this browser. Install the extension in each browser profile you want in the sidebar.

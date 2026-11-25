@@ -49,7 +49,12 @@ final class TabsModel: ObservableObject {
             // Taken here, on the hub's queue, so it belongs to this change.
             let urgent = self.urgent.withLock { u in defer { u = false }; return u || s.count != self.seen.withLock({ $0 }) }
             self.seen.withLock { $0 = s.count }
-            DispatchQueue.main.async { self.changed(s, urgent: urgent) }
+            DispatchQueue.main.async {
+                // Every list, not only the ones drawn: a held tab's address
+                // must be known the moment it changes, before it closes.
+                SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
+                self.changed(s, urgent: urgent)
+            }
         })
         self.hub = hub
         hub.start()
@@ -63,6 +68,8 @@ final class TabsModel: ObservableObject {
     /// The newest tab lists, when not published yet.
     private var latest: [BrowserSession]?
     private var pacer = PublishPacer()
+    /// A paced publish waiting to happen; one that goes early takes its place.
+    private var later: DispatchWorkItem?
     private nonisolated let urgent = OSAllocatedUnfairLock(initialState: false)
     private nonisolated let seen = OSAllocatedUnfairLock(initialState: 0)
 
@@ -71,18 +78,20 @@ final class TabsModel: ObservableObject {
         switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: isWatched ? 0.1 : 2) {
         case .now: publish()
         case .after(let seconds):
-            DispatchQueue.main.asyncAfter(deadline: .now() + seconds) { [weak self] in
-                if self?.latest != nil { self?.publish() }
-            }
+            let work = DispatchWorkItem { [weak self] in self?.publish() }
+            later?.cancel()
+            later = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: work)
         case .waiting: break
         }
     }
 
     private func publish() {
+        later?.cancel()
+        later = nil
         guard let s = latest else { return }
         latest = nil
         pacer.published(now: CACurrentMediaTime())
-        SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
         sessions = s
         lookUpProfiles(s)
         reloadOutdatedExtensions(s)

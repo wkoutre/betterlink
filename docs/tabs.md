@@ -1,6 +1,6 @@
 # Sidebar and tabs
 
-betterlink keeps a live mirror of every open tab in your Chromium browsers, in true realtime, both ways, and shows it in the sidebar beside the browser window. Open or close a tab in the browser and the sidebar changes in the same instant; open, focus or close a tab from the sidebar and the browser does it immediately. No polling anywhere. The Sidebar page holds the sidebar's settings and browser setup; it doesn't list tabs itself.
+betterlink keeps a live mirror of every open tab in your Chromium browsers, in true realtime, both ways, and shows it in the sidebar beside the browser window. Open, close, move or switch a tab in the browser and the sidebar changes in the same instant (a title or icon that keeps changing shows at most 10 times a second, see docs/resources.md); open, focus or close a tab from the sidebar and the browser does it immediately. No polling anywhere. The Sidebar page holds the sidebar's settings and browser setup; it doesn't list tabs itself.
 
 The extension runs a short list of tab commands: open, focus, close (one or several), move, mute, duplicate, reload, send to an address, and move to a new window.
 
@@ -25,7 +25,7 @@ The extension runs a short list of tab commands: open, focus, close (one or seve
 - **Self-healing.** `TabStore` is a pure reducer over the event stream. A gap in sequence numbers makes it ask for a fresh snapshot.
 - **Multiple browsers at once.** Each browser (and each profile) runs its own host, so the app follows Chrome and Brave at once and the sidebar shows whichever is in front. The host names itself after the app that launched it.
 
-The only timer in the system is the extension's reconnect backoff (1s doubling to 60s) for when the host is not installed.
+Nothing polls. The timers are the extension's reconnect backoff (1s doubling to 60s) for when the host is not installed, and the app's pacing of titles and icons (docs/resources.md).
 
 ## Measured
 

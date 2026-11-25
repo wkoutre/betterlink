@@ -56,8 +56,10 @@ public struct SyncFolder: Sendable {
         var files: [SyncDeviceFile] = [], skipped: [String] = [], newer: [String] = [], unsafe: [String] = []
         let names = (try? FileManager.default.contentsOfDirectory(atPath: devices.path)) ?? []
         let own = device.map { file(for: $0).lastPathComponent }
-        for n in names.sorted() where n.hasSuffix(".json") && n != own {
+        for n in names.sorted() where n.hasSuffix(".json") {
+            // This Mac's own file is checked (other Macs refuse it the same way) but not read.
             if let problem = FileSafety.problem(with: devices.appendingPathComponent(n), uid: uid) { unsafe.append("\(n): \(problem)"); continue }
+            if n == own { continue }
             guard let data = FileManager.default.contents(atPath: devices.appendingPathComponent(n).path) else { skipped.append(n); continue }
             if let head = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                let format = head["format"] as? Int, format > SyncDeviceFile.format {

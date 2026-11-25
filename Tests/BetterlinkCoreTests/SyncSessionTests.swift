@@ -227,4 +227,15 @@ struct SyncSessionTests {
         #expect(Set(f.readAll().files.map(\.device)) == ["A", "B"])
         #expect(f.readAll(except: "A").files.map(\.device) == ["B"])
     }
+
+    /// Other Macs refuse this Mac's file when others can write it: this Mac
+    /// is still told, though it doesn't read its own file.
+    @Test func thisMacsOwnFileIsStillCheckedForSafety() throws {
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: d) }
+        let f = SyncFolder(d)
+        try f.write(SyncDeviceFile(device: "A", name: "A", written: Date(), state: SyncState(), applied: [:]))
+        chmod(f.file(for: "A").path, 0o666)
+        #expect(f.readAll(except: "A").unsafe.count == 1)
+    }
 }
