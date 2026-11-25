@@ -474,10 +474,11 @@ final class SidebarInstance: ObservableObject {
     /// windows, or out of sight. One reading of the window list for them all.
     private func layout() { sidebar.arrange() }
 
-    /// The window moved or resized: the panel stays beside it.
+    /// The window moved or resized: the panel stays beside it, on a Space
+    /// that isn't showing too.
     func follow() {
         // A slide places the panel itself, frame by frame.
-        guard slideRun == nil, isShown else { return }
+        guard slideRun == nil, panel?.isVisible == true else { return }
         placePanel(placement(beside: window.target.frame))
     }
 
@@ -497,6 +498,7 @@ final class SidebarInstance: ObservableObject {
             panel?.fadeOut()
         case .asleep:
             isShown = false
+            if panel?.isVisible == true { placePanel(p) }
         case .shown(let rehome, let reorder):
             isShown = true
             let panel = placePanel(p)
