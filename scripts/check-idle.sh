@@ -33,7 +33,6 @@ grep -aq '"snapshot"' "$work/commands" || { echo "The app never connected to the
 # over the limits prints what the app was doing, so the log names it.
 for look in 1 2 3; do
   .build/measure-resources --max-cpu 1 --max-wakeups 5 15 "${pids[@]}" && exit 0
-  kill -0 "${pids[@]}" 2>/dev/null || exit 1 # one of them is gone: no later look will pass
   echo "::group::What the app was doing after look $look"
   sample "${pids[1]}" 3 -file "$work/sample.txt" > /dev/null 2>&1 && cat "$work/sample.txt" || echo "(no sample)"
   echo "::endgroup::"
