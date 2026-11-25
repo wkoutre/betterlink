@@ -25,7 +25,7 @@ struct SidebarView: View {
     /// The last delete, for Undo: which profile, what went and from where.
     @State private var undo: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)?
     /// A folder with things in it waiting for its delete to be confirmed.
-    @State private var confirmDelete: (id: UUID, name: String, count: Int)?
+    @State private var confirmDelete: (id: UUID, name: String)?
     /// What is being dragged from the sidebar, so a row can refuse a drop
     /// that wouldn't move anything (a folder into itself, say).
     @State private var dragging: String?
@@ -110,10 +110,17 @@ struct SidebarView: View {
                     }
                     // One stop for the keyboard: the arrows move the cursor
                     // through the rows, Return opens, Delete closes or removes.
-                    .focusable()
-                    .focusEffectDisabled()
-                    .focused($listFocused)
-                    .onKeyPress(phases: [.down, .repeat]) { key($0, rows, profile, m) }
+                    // Beside the rows, not around them: a container's focus is
+                    // also on while a field inside it has the keyboard, and the
+                    // keys typed there would act on the rows.
+                    .background {
+                        Color.clear
+                            .focusable()
+                            .focusEffectDisabled()
+                            .focused($listFocused)
+                            .onKeyPress(phases: [.down, .repeat]) { key($0, rows, profile, m) }
+                            .accessibilityHidden(true)
+                    }
                     .onChange(of: listFocused) { _, on in
                         cursor = on ? cursor ?? rows.first : nil
                     }
@@ -428,8 +435,7 @@ struct SidebarView: View {
     }
 
     private func deleteFolder(_ f: SidebarFolder, _ p: SidebarProfile) {
-        let n = SidebarProfile.links(in: f.items).count + Self.folders(f.items, prefix: "").count
-        if n == 0 { deleteWithUndo(f.id, f.name, p) } else { confirmDelete = (f.id, f.name, n) }
+        if f.items.isEmpty { deleteWithUndo(f.id, f.name, p) } else { confirmDelete = (f.id, f.name) }
     }
 
     /// How far each level of folders is set in.
@@ -440,7 +446,6 @@ struct SidebarView: View {
     private func isCursor(_ row: SidebarRowID) -> Bool { listFocused && cursor == row }
 
     private func key(_ press: KeyPress, _ rows: [SidebarRowID], _ p: SidebarProfile, _ m: Match) -> KeyPress.Result {
-        // A rename or the New Tab field is being typed in: its keys are its own.
         guard listFocused, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
         switch press.key {
         case .downArrow: cursor = SidebarRows.move(cursor, by: 1, in: rows)
@@ -468,8 +473,11 @@ struct SidebarView: View {
     private func openCursor(_ p: SidebarProfile, _ m: Match) {
         switch cursor {
         case .folder(let id)?: edit(p.id) { $0.toggleExpanded(id) }
-        case .favorite(let id)?, .link(let id)?: if let l = p.savedLink(id) { openOrSwitch(l, m) }
+        case .favorite(let id)?, .link(let id)?:
+            listFocused = false
+            if let l = p.savedLink(id) { openOrSwitch(l, m) }
         case .tab(let id)?:
+            listFocused = false
             if let t = m.byId[id] { tabs.activate(t, in: m.session); sidebar.returnFocusToBrowser() }
         case nil: break
         }
@@ -651,7 +659,10 @@ struct SidebarView: View {
         if let m = downKeyMonitor { NSEvent.removeMonitor(m); downKeyMonitor = nil }
         guard on else { return }
         downKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
-            guard e.specialKey == .downArrow,
+            // Only this panel's own field, and not while an input method is
+            // choosing among candidates.
+            guard e.specialKey == .downArrow, e.window is SidebarPanel,
+                  (e.window?.firstResponder as? NSTextView)?.hasMarkedText() == false,
                   e.modifierFlags.isDisjoint(with: [.command, .control, .option, .shift]) else { return e }
             listFocused = true
             return nil
@@ -1038,24 +1049,12 @@ private struct FocusRing: ViewModifier {
 }
 
 /// The edge between the sidebar and the browser window: drag it to resize.
-/// Its own frame moves with the drag, so it follows the pointer on screen.
 private struct ResizeHandle: View {
     let sidebar: SidebarController
-    @State private var start: CGFloat?
 
     var body: some View {
-        Color.clear
-            .frame(width: 6)
-            .contentShape(Rectangle())
-            .pointerStyle(.columnResize)
-            .gesture(DragGesture(minimumDistance: 1, coordinateSpace: .global)
-                .onChanged { _ in
-                    let x = NSEvent.mouseLocation.x
-                    if start == nil { start = sidebar.beginResize() ? x : nil }
-                    guard let start else { return }
-                    sidebar.resize(by: sidebar.placedSide == .right ? start - x : x - start)
-                }
-                .onEnded { _ in start = nil; sidebar.endResize() })
+        ResizeHandleView(sidebar: sidebar)
+            .frame(width: 8)
             .accessibilityElement()
             .accessibilityLabel("Sidebar width")
             .accessibilityValue("\(Int(sidebar.width)) points")
@@ -1064,6 +1063,30 @@ private struct ResizeHandle: View {
                 sidebar.resize(by: direction == .increment ? 10 : -10)
                 sidebar.endResize()
             }
+    }
+}
+
+/// AppKit, not a SwiftUI gesture: the first press on a panel without the
+/// keyboard must already drag, and dragging must not take the keyboard.
+private struct ResizeHandleView: NSViewRepresentable {
+    let sidebar: SidebarController
+    func makeNSView(context: Context) -> Handle { Handle(sidebar) }
+    func updateNSView(_ view: Handle, context: Context) {}
+
+    final class Handle: NSView {
+        private let sidebar: SidebarController
+
+        init(_ sidebar: SidebarController) { self.sidebar = sidebar; super.init(frame: .zero) }
+        required init?(coder: NSCoder) { fatalError("not used") }
+
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+        override var needsPanelToBecomeKey: Bool { false }
+        override func resetCursorRects() { addCursorRect(bounds, cursor: .resizeLeftRight) }
+
+        override func mouseDown(with event: NSEvent) {
+            // Where the press was: it can arrive late, the pointer already moving.
+            sidebar.dragEdge(from: window?.convertPoint(toScreen: event.locationInWindow).x ?? NSEvent.mouseLocation.x)
+        }
     }
 }
 
@@ -1124,11 +1147,13 @@ struct SidebarColors {
     }
 }
 
-/// Sets the color scheme only when there is one to set.
+/// Sets the color scheme when there is one to set. The same view either way: a
+/// branch would rebuild the whole sidebar each time a profile color comes or goes.
 private struct SchemeOverride: ViewModifier {
     var scheme: ColorScheme?
+    @Environment(\.colorScheme) private var current
     func body(content: Content) -> some View {
-        if let scheme { content.environment(\.colorScheme, scheme) } else { content }
+        content.environment(\.colorScheme, scheme ?? current)
     }
 }
 

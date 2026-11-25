@@ -94,7 +94,7 @@ struct SidebarPage: View {
             Toggle(isOn: $sidebar.takeOverTabs) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Take over the browser's tabs")
-                    Text("Hides the browser's own tab strip.")
+                    Text("Collapses the browser's own tab strip.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 }
             }

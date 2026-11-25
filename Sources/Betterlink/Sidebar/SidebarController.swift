@@ -139,7 +139,8 @@ final class SidebarController: ObservableObject {
         if let a = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Browser.sidebarHosts), a != attachTo { attachTo = a }
         if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
         let w = defaults.double(forKey: "sidebar.width")
-        if w >= 200, w != width { width = w }
+        // Mid-drag the saved width is the one from before it.
+        if resizing == nil, w >= 200, w != width { width = w }
         let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
         if take != takeOverTabs { takeOverTabs = take }
         let on = defaults.bool(forKey: "sidebar.enabled")
@@ -184,6 +185,7 @@ final class SidebarController: ObservableObject {
     /// Hides: the sidebar's inner edge and the window's edge slide toward the
     /// outer edge together; at the end the window fills the tile.
     private func slideOut() {
+        endResize() // hiding mid-drag: the drag ends here
         collapsed = true
         save()
         if var run = slideRun { // turning back mid-show
@@ -312,6 +314,7 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
+        endResize()
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
@@ -384,6 +387,8 @@ final class SidebarController: ObservableObject {
 
     private func targetChanged(_ t: WindowTracker.Target?) {
         let newWindow = t != nil && t?.windowHash != current?.windowHash
+        // Another window came forward mid-drag: the drag ends on its own window.
+        if let r = resizing, t?.windowHash != r.windowHash { endResize() }
         current = t
         if newWindow, let t {
             // A window already taken over isn't pressed again on coming back
@@ -523,6 +528,33 @@ final class SidebarController: ObservableObject {
         return true
     }
 
+    private var edgeTimer: Timer?
+
+    /// The edge was pressed at `start` (screen x): follows the pointer until
+    /// the button is up. Here and by the button's state, not by the view's
+    /// events: the view can be rebuilt, and a mouse-up lost, mid-drag.
+    func dragEdge(from start: CGFloat) {
+        guard edgeTimer == nil, beginResize() else { return }
+        var last: CGFloat?
+        let follow = { [weak self] in
+            guard let self else { return }
+            let x = NSEvent.mouseLocation.x
+            if x != last {
+                last = x
+                self.resize(by: self.placedSide == .right ? start - x : x - start)
+            }
+            // Over: the button is up, or something else ended the resize.
+            guard self.resizing == nil || NSEvent.pressedMouseButtons & 1 == 0 else { return }
+            self.edgeTimer?.invalidate()
+            self.edgeTimer = nil
+            self.endResize()
+            self.returnFocusToBrowser()
+        }
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { follow() } }
+        RunLoop.main.add(t, forMode: .common)
+        edgeTimer = t
+    }
+
     /// The sidebar `delta` points wider than when the drag began.
     func resize(by delta: CGFloat) {
         guard let r = resizing, let t = current, t.windowHash == r.windowHash else { return }
@@ -538,6 +570,8 @@ final class SidebarController: ObservableObject {
                 return resize(by: delta)
             }
         }
+        // The tab list finds its window by this frame: keep it with the window.
+        if let now = current, target != now { target = now }
         layout()
     }
 
@@ -684,7 +718,12 @@ final class SidebarController: ObservableObject {
     @Published private(set) var palette: SidebarPalette?
 
     /// After a click or a typed link in the sidebar, hand the keyboard back to the browser.
-    func returnFocusToBrowser() { tracker.activateBrowser() }
+    func returnFocusToBrowser() {
+        tracker.activateBrowser()
+        // The browser is usually the active app already, so activating it takes
+        // nothing from this non-activating panel: let the keyboard go by hand.
+        if let panel, panel.isKeyWindow { panel.releaseKeyboard() }
+    }
 }
 
 private extension CGRect {
@@ -931,6 +970,13 @@ final class SidebarPanel: NSPanel {
         fade = Fade(shown: true)
         alphaValue = 1
         if !isVisible { orderFrontRegardless() }
+    }
+
+    /// Gives the keyboard back to the active app's window. A key panel keeps
+    /// it until it is ordered out; with no animation it is back the same frame.
+    func releaseKeyboard() {
+        super.orderOut(nil)
+        orderFrontRegardless()
     }
 
     /// Hides at once, at the end of a slide.
