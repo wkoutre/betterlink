@@ -68,3 +68,38 @@ public struct TabStripReading: Equatable, Sendable {
         }
     }
 }
+
+/// One window's takeover, one look at a time: what to do after each reading.
+/// At most two presses (vertical, then collapsed), each only when the window
+/// is seen to be in the other state, each checked on the following looks.
+public struct TabStripTakeoverFlow: Equatable, Sendable {
+    public enum Step: Equatable, Sendable {
+        case press(TabStripReading.Press)
+        /// It did not show: undo it, and leave this browser's tabs alone.
+        case pressBack(TabStripReading.Press)
+        case lookAgain
+        case done
+    }
+    private var pressed: TabStripReading.Press?
+    private var presses = 0, looks = 0
+
+    public init() {}
+
+    public mutating func step(_ r: TabStripReading) -> Step {
+        looks += 1
+        if let p = pressed, !r.shows(p) {
+            // A browser still laying out gets a second look, no more.
+            guard looks >= 2 else { return .lookAgain }
+            pressed = nil
+            return .pressBack(p)
+        }
+        guard let next = r.next, presses < 2 else {
+            // Just gone vertical: a browser that can collapse offers it a
+            // moment later. Two more looks, then this is how it stays.
+            if pressed == .showVertically, r.column != .collapsed, looks <= 2 { return .lookAgain }
+            return .done
+        }
+        pressed = next; presses += 1; looks = 0
+        return .press(next)
+    }
+}

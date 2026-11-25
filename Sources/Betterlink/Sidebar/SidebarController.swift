@@ -413,40 +413,42 @@ final class SidebarController: ObservableObject {
     /// (Chromium browsers). The sidebar sits beside the collapsed column and
     /// never covers it (Nick, 2026-11-24).
     ///
-    /// One step at a time, each from what the window is seen to be
-    /// (`TabStripReading`): an item is pressed only when the window shows the
-    /// other state, and the next look checks the press did what it was for. If
-    /// not, it is pressed back and that browser is left alone. A window whose
-    /// state can't be seen is left as it is (Nick, 2026-11-25: Brave with
-    /// vertical tabs on was switched back and forth on every return).
+    /// One look at a time (`TabStripTakeoverFlow`), each from what the window
+    /// is seen to be (`TabStripReading`): an item is pressed only when the
+    /// window shows the other state, and the next looks check the press did
+    /// what it was for. If not, it is pressed back and that browser is left
+    /// alone. A window whose state can't be seen is left as it is (Nick,
+    /// 2026-11-25: Brave with vertical tabs on was switched back and forth on
+    /// every return).
     ///
     /// The browser's menu acts on whichever of its windows is focused and only
     /// catches up a moment after a window comes forward, so nothing is read or
     /// pressed until the bound window is the browser's focused main window,
     /// and each look waits for the browser to lay the strip out.
-    private func takeOver(_ t: WindowTracker.Target, look: Int = 0, pressed: TabStripReading.Press? = nil, lookedTwice: Bool = false) {
-        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, !takeoverGaveUp.contains(t.bundleId), look < 8 else { return }
+    private func takeOver(_ t: WindowTracker.Target, look: Int = 0, flow: TabStripTakeoverFlow = .init()) {
+        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, !takeoverGaveUp.contains(t.bundleId), look < 12 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, self.takeOverTabs, self.current?.windowHash == t.windowHash else { return }
             guard self.tracker.boundWindowIsFocusedMain(), let window = self.tracker.boundWindow else {
-                return self.takeOver(t, look: look + 1, pressed: pressed, lookedTwice: lookedTwice)
+                return self.takeOver(t, look: look + 1, flow: flow)
             }
-            let reading = TabStripTakeover.read(pid: t.pid, window: window)
-            if let pressed, !reading.shows(pressed) {
-                // A browser still laying out gets one more look.
-                guard lookedTwice else { return self.takeOver(t, look: look + 1, pressed: pressed, lookedTwice: true) }
-                let undone = TabStripTakeover.press(pressed, pid: t.pid)
-                DragTrace.log("takeover: \(pressed) did not show in \(t.bundleId); pressed back \(undone), left alone from now")
+            var flow = flow
+            switch flow.step(TabStripTakeover.read(pid: t.pid, window: window)) {
+            case .press(let item):
+                // An item that can't be pressed after all: nothing more for this window.
+                guard TabStripTakeover.press(item, pid: t.pid) else { self.takenOver.insert(t.windowHash); return }
+                DragTrace.log("takeover: pressed \(item) in \(t.bundleId)")
+                self.takeOver(t, look: look + 1, flow: flow)
+            case .pressBack(let item):
+                let undone = TabStripTakeover.press(item, pid: t.pid)
+                DragTrace.log("takeover: \(item) did not show in \(t.bundleId); pressed back \(undone), left alone from now")
                 self.takeoverGaveUp.insert(t.bundleId)
                 self.takenOver.insert(t.windowHash)
-                return
+            case .lookAgain:
+                self.takeOver(t, look: look + 1, flow: flow)
+            case .done:
+                self.takenOver.insert(t.windowHash) // as wanted, or can't be told
             }
-            guard let next = reading.next, TabStripTakeover.press(next, pid: t.pid) else {
-                self.takenOver.insert(t.windowHash) // as wanted, or can't be told: nothing more for this window
-                return
-            }
-            DragTrace.log("takeover: pressed \(next) in \(t.bundleId)")
-            self.takeOver(t, look: look + 1, pressed: next)
         }
     }
 

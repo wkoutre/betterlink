@@ -77,4 +77,55 @@ import Testing
         r = chromeVertical; r.collapse = Item(enabled: false, mark: nil)
         #expect(r.next == nil)
     }
+
+    // MARK: - One window's takeover, look by look
+
+    typealias Flow = TabStripTakeoverFlow
+
+    private func run(_ looks: [R]) -> [Flow.Step] {
+        var flow = Flow(), steps: [Flow.Step] = []
+        for r in looks {
+            steps.append(flow.step(r))
+            if steps.last == .done || steps.last.map({ if case .pressBack = $0 { true } else { false } }) == true { break }
+        }
+        return steps
+    }
+
+    @Test func aWindowAlreadyAsWantedIsLookedAtOnceAndLeft() {
+        #expect(run([braveVertical]) == [.done])
+        #expect(run([chromeCollapsed]) == [.done])
+        var unseen = chromeTop; unseen.tabs = nil
+        #expect(run([unseen]) == [.done])
+    }
+
+    /// Brave has no Collapse item: one press, seen to have worked, then done.
+    @Test func braveAcrossTheTopIsSwitchedOnce() {
+        #expect(run([braveTop, braveVertical, braveVertical, braveVertical]) == [.press(.showVertically), .lookAgain, .lookAgain, .done])
+    }
+
+    /// Chrome offers Collapse a moment after it goes vertical, and the column
+    /// narrows over a few frames: both are waited for, nothing is pressed twice.
+    @Test func chromeIsSwitchedThenCollapsedOnceItCanBe() {
+        var notYet = chromeVertical; notYet.collapse = nil
+        var narrowing = chromeVertical; narrowing.tabs = Self.rect(0, 0, 100, 800); narrowing.collapse = marked
+        #expect(run([chromeTop, notYet, chromeVertical, narrowing, chromeCollapsed])
+                == [.press(.showVertically), .lookAgain, .press(.collapse), .lookAgain, .done])
+    }
+
+    /// A press that does not show in the window after a second look is pressed
+    /// back, and that is the end for this browser.
+    @Test func aPressThatDoesNotShowIsPressedBack() {
+        #expect(run([braveTop, braveTop, braveTop]) == [.press(.showVertically), .lookAgain, .pressBack(.showVertically)])
+        #expect(run([chromeVertical, chromeVertical, chromeVertical]) == [.press(.collapse), .lookAgain, .pressBack(.collapse)])
+        var unseen = braveTop; unseen.toolbar = nil
+        #expect(run([braveTop, unseen, unseen]) == [.press(.showVertically), .lookAgain, .pressBack(.showVertically)])
+    }
+
+    @Test func neverMoreThanTheTwoPressesAndItEnds() {
+        // A browser that flips back and forth whatever is pressed.
+        let looks = Array(repeating: [chromeTop, chromeVertical], count: 10).flatMap { $0 }
+        let steps = run(looks)
+        #expect(steps.filter { if case .press = $0 { true } else { false } }.count <= 2)
+        #expect(steps.count < looks.count)
+    }
 }
