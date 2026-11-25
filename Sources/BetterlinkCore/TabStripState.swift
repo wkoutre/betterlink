@@ -86,8 +86,8 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
         case lookAgain
         case done
     }
-    /// How many looks a press gets to show in the window, and Collapse to be
-    /// offered after going vertical, before that is how things are.
+    /// How many looks a press gets to show in the window, and a window not
+    /// yet as wanted gets to become pressable, before that is how things are.
     public static let patience = 4
     private var pressed: TabStripReading.Press?
     private var presses = 0, looks = 0
@@ -110,12 +110,12 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
             }
         }
         guard let next = r.next, presses < 2 else {
-            // A window still opening shows no tabs yet: two more looks, where
-            // the browser has the item at all.
-            if presses == 0, r.layout == .unknown, r.show != nil, looks < 3 { return .lookAgain }
-            // Just gone vertical: a browser that can collapse offers it a moment later.
-            if pressed == .showVertically, r.column != .collapsed, looks < Self.patience { return .lookAgain }
-            return .done
+            // Collapsed, or a browser without the item: this is how it stays.
+            if r.column == .collapsed || r.show == nil { return .done }
+            // Anything else may yet change: a window still opening shows no
+            // tabs, the menu follows the focused window a moment late, and a
+            // browser that can collapse offers it a moment after going vertical.
+            return looks < Self.patience ? .lookAgain : .done
         }
         pressed = next; presses += 1; looks = 0
         return .press(next)

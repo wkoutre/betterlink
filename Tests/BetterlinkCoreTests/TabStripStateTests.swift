@@ -91,17 +91,34 @@ import Testing
         return steps
     }
 
-    @Test func aWindowAlreadyAsWantedIsLookedAtOnceAndLeft() {
-        #expect(run([braveVertical]) == [.done])
+    @Test func aWindowAlreadyCollapsedIsLookedAtOnceAndLeft() {
         #expect(run([chromeCollapsed]) == [.done])
     }
 
-    /// A window still opening has no tabs to see yet: it gets two more looks
+    /// Brave with vertical tabs (Nick's report): looked at a few times in case
+    /// the browser comes to offer Collapse, and never pressed.
+    @Test func braveWithVerticalTabsIsLookedAtAndNeverPressed() {
+        #expect(run(Array(repeating: braveVertical, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+    }
+
+    /// The browser's menu follows the focused window a moment late: a window
+    /// that comes forward expanded while the menu still shows the last
+    /// window's checkmark is looked at again, and collapsed once they agree.
+    @Test func aMenuStillShowingTheLastWindowIsWaitedFor() {
+        var stale = chromeVertical; stale.collapse = marked
+        #expect(run([stale, stale, chromeVertical, chromeCollapsed]) == [.lookAgain, .lookAgain, .press(.collapse), .done])
+        var staleTop = chromeTop; staleTop.show = marked
+        #expect(run([staleTop, chromeTop, chromeCollapsed]) == [.lookAgain, .press(.showVertically), .done])
+        // They never agree: left as it is, nothing pressed.
+        #expect(run(Array(repeating: stale, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+    }
+
+    /// A window still opening has no tabs to see yet: it is looked at again
     /// before it is left alone, and is taken over once it can be seen. A
     /// browser with no such menu item (Arc, Dia) is done at the first look.
     @Test func aWindowNotYetReadableIsLookedAtAgain() {
         var unseen = chromeTop; unseen.tabs = nil
-        #expect(run([unseen, unseen, unseen, unseen]) == [.lookAgain, .lookAgain, .done])
+        #expect(run(Array(repeating: unseen, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
         #expect(run([unseen, chromeTop, chromeCollapsed]) == [.lookAgain, .press(.showVertically), .done])
         #expect(run([R(tabs: nil, toolbar: nil, tabHeight: nil, show: nil, collapse: nil)]) == [.done])
     }
