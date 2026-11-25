@@ -300,9 +300,12 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
                 .strokeBorder(pal.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
             .contentShape(Rectangle())
-            .dropDestination(for: String.self) { keys, _ in
-                dragging = nil
-                return apply(keys, at: spot, p, open)
+            .onDrop(of: [SidebarDrag.type], isTargeted: nil) { providers in
+                SidebarDrag.keys(from: providers) { keys in
+                    dragging = nil
+                    apply(keys, at: spot, p, open)
+                }
+                return true
             }
     }
 
@@ -340,9 +343,12 @@ struct SidebarView: View {
         .animation(Motion.quick(reduceMotion), value: p.favorites.map(\.id))
         .animation(Motion.quick(reduceMotion), value: open.map(\.url))
         // Dropped on the grid's empty space: the end of the Favorites.
-        .dropDestination(for: String.self) { keys, _ in
-            dragging = nil
-            return apply(keys, at: .favorites(p.favorites.count), p, open)
+        .onDrop(of: [SidebarDrag.type], isTargeted: nil) { providers in
+            SidebarDrag.keys(from: providers) { keys in
+                dragging = nil
+                apply(keys, at: .favorites(p.favorites.count), p, open)
+            }
+            return true
         }
     }
 
@@ -551,7 +557,7 @@ struct SidebarView: View {
             try? await Task.sleep(for: .milliseconds(300))
             if dragCount == mine, dragging != nil { animate { dragging = nil } }
         }
-        return NSItemProvider(object: key as NSString)
+        return SidebarDrag.provider(for: key)
     }
 
     /// Where `zone` of the row for `id` puts what is dropped there.
@@ -574,7 +580,7 @@ struct SidebarView: View {
         }
     }
 
-    /// Dropped strings, in order: a tab is saved there, a favorite, saved link
+    /// Dropped keys, in order: a tab is saved there, a favorite, saved link
     /// or folder moves there.
     @discardableResult
     private func apply(_ keys: [String], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
