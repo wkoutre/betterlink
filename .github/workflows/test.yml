@@ -25,6 +25,7 @@ jobs:
       - run: swift --version
       - run: make test
       - run: make test-cli
+      - run: make test-tabs
       # Package.resolved pins Sparkle to a commit. A build that had to change
       # it means the committed pins are stale: run `swift package resolve`
       # and commit the result.

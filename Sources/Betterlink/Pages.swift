@@ -489,6 +489,7 @@ struct GeneralPage: View {
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            SyncSettingsSection()
             DSSection("Menu bar") {
                 Toggle("Show betterlink in the menu bar", isOn: $model.showsMenuBarIcon)
                 Text(model.showsMenuBarIcon

@@ -17,6 +17,8 @@ make test-cli   # builds dist/betterlink.app, then runs the command's tests agai
 make build      # dist/betterlink.app only
 ```
 
+`make build` signs the app with a Developer ID Application certificate from your keychain (`scripts/sign.sh`, the sequence releases use), so macOS keeps the permissions you gave it across rebuilds. With none the build is ad-hoc signed, and macOS asks again after each build. Pick another identity with `make build DEV_SIGN_IDENTITY="…"`, or none with `DEV_SIGN_IDENTITY=`.
+
 CI runs `make test` and `make test-cli` on macOS for every pull request, and [zizmor](https://github.com/zizmorcore/zizmor) lints the workflows.
 
 ## Never test against your real settings
