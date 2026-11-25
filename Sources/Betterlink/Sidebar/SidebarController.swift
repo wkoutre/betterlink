@@ -210,6 +210,7 @@ final class SidebarController: ObservableObject {
     /// together, the reverse of a hide.
     private func slideIn() {
         collapsed = false
+        updateWatched() // the list is on screen from the first frame of the slide
         save()
         if var run = slideRun { // turning back mid-hide
             run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
@@ -315,6 +316,7 @@ final class SidebarController: ObservableObject {
 
     private func stop() {
         endResize()
+        TabsModel.shared.isWatched = false
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
@@ -587,7 +589,11 @@ final class SidebarController: ObservableObject {
         layout()
     }
 
+    /// The tab list keeps to the moment only while the sidebar can be seen.
+    private func updateWatched() { TabsModel.shared.isWatched = enabled && !collapsed && current != nil }
+
     private func layout() {
+        updateWatched()
         // The shortcut works only while an attached browser is in front.
         updateHotKey()
         // A slide places the panel itself, frame by frame.

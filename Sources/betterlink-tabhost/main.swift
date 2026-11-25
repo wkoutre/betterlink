@@ -158,11 +158,13 @@ Thread.detachNewThread {
             while true {
                 let n = read(fd, &buf, buf.count)
                 if n <= 0 { if n < 0 && errno == EINTR { continue }; break }
-                for line in dec.feed(Data(buf[0..<n])) {
-                    // Only well-formed commands go to the browser.
-                    guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                          obj["type"] as? String == "cmd" else { continue }
-                    toBrowser(line)
+                pooled {
+                    for line in dec.feed(Data(buf[0..<n])) {
+                        // Only well-formed commands go to the browser.
+                        guard let obj = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+                              obj["type"] as? String == "cmd" else { continue }
+                        toBrowser(line)
+                    }
                 }
             }
             drop(fd)
@@ -175,17 +177,24 @@ Thread.detachNewThread {
 toBrowser(hostHello) // tells the extension the host is really up (resets its backoff)
 log("listening on \(socketPath) for \(browserName)")
 
+let helloMark = Data("\"hello\"".utf8)
 var dec = NativeFraming.Decoder()
 var buf = [UInt8](repeating: 0, count: 256 * 1024)
 while true {
     let n = read(STDIN_FILENO, &buf, buf.count)
     if n == 0 { break }                       // browser closed the pipe: it quit or the extension disconnected
     if n < 0 { if errno == EINTR { continue }; break }
-    for msg in dec.feed(Data(buf[0..<n])) {
-        if let obj = try? JSONSerialization.jsonObject(with: msg) as? [String: Any], obj["type"] as? String == "hello" {
-            helloLock.lock(); lastHello = msg; helloLock.unlock()
+    // This loop never returns to a run loop, so it drains its own pool: without
+    // it every message's JSON stayed in memory for as long as the browser ran.
+    pooled {
+        for msg in dec.feed(Data(buf[0..<n])) {
+            // Parsed only when it could be the hello; the rest pass straight through.
+            if msg.range(of: helloMark) != nil,
+               let obj = try? JSONSerialization.jsonObject(with: msg) as? [String: Any], obj["type"] as? String == "hello" {
+                helloLock.lock(); lastHello = msg; helloLock.unlock()
+            }
+            toApps(msg)
         }
-        toApps(msg)
     }
 }
 cleanupAndExit(0)

@@ -61,6 +61,22 @@ test("every tab and window event is pushed the moment it fires, in sequence", ()
   assert.deepEqual(out[1], { type: "event", kind: "tabMoved", seq: 2, t: 1234, tabId: 11, windowId: 1, fromIndex: 1, toIndex: 0 });
 });
 
+test("an update that changes nothing the app sees is not sent", async () => {
+  const { chrome, out, b } = setup();
+  const tab = { id: 10, windowId: 1, index: 0, title: "A", url: "https://a.test/" };
+  chrome.tabs.onUpdated.fire(10, { title: "A" }, tab);
+  chrome.tabs.onUpdated.fire(10, { frozen: true }, tab);
+  chrome.tabs.onUpdated.fire(10, { title: "A" }, tab);
+  const updates = () => out.filter((m) => m.kind === "tabUpdated");
+  assert.equal(updates().length, 1);
+  chrome.tabs.onUpdated.fire(10, { title: "B" }, { ...tab, title: "B" });
+  assert.deepEqual(updates().map((m) => m.seq), [1, 2], "no gap in the sequence");
+  // A reconnecting app starts from a snapshot: everything may be said again.
+  await b.snapshot();
+  chrome.tabs.onUpdated.fire(10, { title: "B" }, { ...tab, title: "B" });
+  assert.equal(updates().length, 3);
+});
+
 test("attach/detach moves tabs between windows with positions", () => {
   const { chrome, out } = setup();
   chrome.tabs.onDetached.fire(10, { oldWindowId: 1, oldPosition: 0 });

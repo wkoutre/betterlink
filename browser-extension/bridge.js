@@ -48,6 +48,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   let seq = 0;
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
   const iconSent = new Map(); // tabId -> page URL whose icon was last sent
+  const tabSent = new Map(); // tabId -> the tab as last sent in an update
 
   async function sendFavicon(tab) {
     const page = tab.url || tab.pendingUrl || "";
@@ -76,17 +77,26 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     });
     // Icons follow the snapshot, one event per tab, so the list appears at once.
     iconSent.clear();
+    tabSent.clear();
     for (const w of wins) for (const t of w.tabs || []) sendFavicon(t);
   }
 
   const listeners = [
     [chrome.tabs.onCreated, (tab) => emit("tabCreated", { tab: serializeTab(tab) })],
     [chrome.tabs.onUpdated, (tabId, changes, tab) => {
-      emit("tabUpdated", { tab: serializeTab(tab), changes: Object.keys(changes) });
+      // Chrome also fires for what the app never sees (groups, freezing, a
+      // title set to what it was): nothing to say then.
+      const body = serializeTab(tab);
+      const same = JSON.stringify(body);
+      if (tabSent.get(tabId) !== same) {
+        tabSent.set(tabId, same);
+        emit("tabUpdated", { tab: body, changes: Object.keys(changes) });
+      }
       if (changes.favIconUrl || changes.status === "complete") sendFavicon(tab);
     }],
     [chrome.tabs.onRemoved, (tabId, info) => {
       iconSent.delete(tabId);
+      tabSent.delete(tabId);
       emit("tabRemoved", { tabId, windowId: info.windowId, isWindowClosing: !!info.isWindowClosing });
     }],
     [chrome.tabs.onMoved, (tabId, info) => emit("tabMoved", { tabId, windowId: info.windowId, fromIndex: info.fromIndex, toIndex: info.toIndex })],
