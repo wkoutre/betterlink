@@ -16,8 +16,10 @@ import Testing
         var got = inner
         got.size.width = max(minWidth, inner.width - error)
         if side == .left { got.origin.x += inner.width - got.width }
-        let asked = WidthLoan(outer: tile, inner: inner, side: side)
-        return (asked.settled(at: got, screen: s, justAsked: true) ?? WidthLoan(outer: got, inner: got, side: side), got)
+        // Lands by its own rounding, keeping the tile's far edge.
+        let asked = WidthLoan.asking(outer: tile, inner: inner, side: side)
+        let seen = asked.seen(at: got, screen: s)
+        return (seen.loan ?? asked, seen.correction ?? got)
     }
 
     private var tiles: [CGRect] {
@@ -32,7 +34,7 @@ import Testing
             for side in SidebarSide.allCases {
                 for error in [CGFloat(0), 1, 3, 8] {
                     let (loan, window) = show(tile, side, error: error)
-                    if loan.taken < 10 { continue } // room beside it: nothing was lent
+                    if loan.taken < 10 && SidebarGeometry.settled(window: tile, screen: screen, width: 280, side: side) == nil { continue } // room beside it: nothing was lent
                     #expect(loan.givenBack(from: window, screen: screen) == tile, "\(tile) \(side) off by \(error)")
                 }
             }
@@ -44,7 +46,7 @@ import Testing
         for side in SidebarSide.allCases {
             let (loan, window) = show(tile, side)
             let moved = window.offsetBy(dx: 137, dy: -40)
-            let after = loan.settled(at: moved, screen: screen, justAsked: false)
+            let after = loan.seen(at: moved, screen: screen).loan
             #expect(after?.givenBack(from: moved, screen: screen) == tile.offsetBy(dx: 137, dy: -40), "\(side)")
             // Hidden in the same breath, before the window settled.
             #expect(loan.givenBack(from: moved, screen: screen) == tile.offsetBy(dx: 137, dy: -40), "\(side)")
@@ -57,7 +59,7 @@ import Testing
             let (loan, window) = show(tile, side)
             var taller = window
             taller.size.height -= 133; taller.size.width += 61
-            let after = try #require(loan.settled(at: taller, screen: screen, justAsked: false))
+            let after = try #require(loan.seen(at: taller, screen: screen).loan)
             let back = after.givenBack(from: taller, screen: screen)
             #expect(back.width == taller.width + 280 && back.height == taller.height, "\(side)")
             #expect(side == .left ? back.maxX == taller.maxX : back.minX == taller.minX, "\(side)")
@@ -67,14 +69,14 @@ import Testing
     @Test func movingToAnotherDisplayKeepsTheLoan() throws {
         let (loan, window) = show(CGRect(x: 0, y: 0, width: 960, height: 1049), .left)
         let there = CGRect(x: 2300, y: 11, width: window.width, height: window.height)
-        let after = try #require(loan.settled(at: there, screen: second, justAsked: false))
+        let after = try #require(loan.seen(at: there, screen: second).loan)
         #expect(after.givenBack(from: there, screen: second).width == 960)
     }
 
     /// Snapped again: the new tile is the pair's, so the window starts over.
     @Test func snappingAgainEndsTheLoan() {
         let (loan, _) = show(CGRect(x: 0, y: 0, width: 960, height: 1049), .left)
-        #expect(loan.settled(at: CGRect(x: 960, y: 0, width: 960, height: 1049), screen: screen, justAsked: false) == nil)
+        #expect(loan.seen(at: CGRect(x: 960, y: 0, width: 960, height: 1049), screen: screen).loan == nil)
         // Hidden before it settled: the window keeps the tile it was just given.
         let right = CGRect(x: 960, y: 0, width: 960, height: 1049)
         #expect(loan.givenBack(from: right, screen: screen) == right)
@@ -101,7 +103,7 @@ import Testing
             for past in [CGFloat(0.5), 10, 200, 600] {
                 let w = CGRect(x: 0, y: 0, width: 680, height: 900)
                 let frame = side == .left ? w.offsetBy(dx: -past, dy: 0) : w.offsetBy(dx: 1920 - 680 + past, dy: 0)
-                let loan = WidthLoan(outer: CGRect(x: 0, y: 0, width: 960, height: 900), inner: CGRect(x: 280, y: 0, width: 680, height: 900), side: side)
+                let loan = WidthLoan.lent(outer: CGRect(x: 0, y: 0, width: 960, height: 900), inner: CGRect(x: 280, y: 0, width: 680, height: 900), side: side)
                 let back = loan.givenBack(from: frame, screen: screen)
                 #expect(side == .left ? back.minX >= frame.minX : back.maxX <= frame.maxX, "\(side) \(past) \(back)")
                 #expect(side == .left ? abs(back.maxX - frame.maxX) < 1 : abs(back.minX - frame.minX) < 1)
@@ -109,13 +111,47 @@ import Testing
         }
     }
 
-    /// A browser that hasn't narrowed yet has lent nothing.
-    @Test func aWindowStillAtItsFullWidthGetsNothingMore() {
-        let tile = CGRect(x: 100, y: 50, width: 1500, height: 800) // no tile of the screen
-        let loan = WidthLoan(outer: tile, inner: CGRect(x: 380, y: 50, width: 1220, height: 800), side: .left)
-        #expect(loan.givenBack(from: tile, screen: screen) == tile)
-        // And when it does narrow, late, the loan still stands.
-        #expect(loan.settled(at: loan.inner, screen: screen, justAsked: false) == loan)
+    /// A browser that hasn't narrowed yet has lent nothing, and one that never
+    /// does never will have: dragged off, hiding leaves its width alone.
+    @Test func askingLendsNothing() {
+        for tile in [CGRect(x: 100, y: 50, width: 1500, height: 800), CGRect(x: 0, y: 0, width: 960, height: 1049)] {
+            for side in SidebarSide.allCases {
+                let inner = side == .left ? CGRect(x: tile.minX + 280, y: tile.minY, width: tile.width - 280, height: tile.height)
+                                          : CGRect(x: tile.minX, y: tile.minY, width: tile.width - 280, height: tile.height)
+                let loan = WidthLoan.asking(outer: tile, inner: inner, side: side)
+                #expect(loan.taken == 0)
+                #expect(loan.givenBack(from: tile, screen: screen) == tile)
+                let dragged = CGRect(x: 250, y: 60, width: tile.width, height: 900)
+                #expect(loan.givenBack(from: dragged, screen: screen) == dragged)
+                #expect(loan.seen(at: dragged, screen: screen).loan == nil)
+            }
+        }
+    }
+
+    /// Late, and from the wrong side: the width it gave counts, and it is put
+    /// where that width belongs, its far edge where it was.
+    @Test func aLateAnswerLendsWhatItGave() throws {
+        let tile = CGRect(x: 0, y: 0, width: 960, height: 1049)
+        let loan = WidthLoan.asking(outer: tile, inner: CGRect(x: 280, y: 0, width: 680, height: 1049), side: .left)
+        #expect(loan.seen(at: tile, screen: screen).loan == loan)
+        let wrong = CGRect(x: 0, y: 0, width: 680, height: 1049)
+        let seen = loan.seen(at: wrong, screen: screen)
+        #expect(seen.correction == CGRect(x: 280, y: 0, width: 680, height: 1049))
+        let lent = try #require(seen.loan)
+        #expect(lent.taken == 280)
+        #expect(lent.givenBack(from: seen.correction!, screen: screen) == tile)
+        // Hidden before the correction took: still the whole tile.
+        #expect(loan.givenBack(from: wrong, screen: screen) == tile)
+    }
+
+    /// A pair shifted so both fit the screen (a browser at its minimum) is where
+    /// it was asked to be.
+    @Test func aShiftedPairIsNotCorrected() throws {
+        let tile = CGRect(x: 1371, y: 0, width: 685, height: 1049), big = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        let inner = try #require(SidebarGeometry.settled(window: tile, screen: big, width: 280, side: .right, minWindowWidth: 500))
+        let seen = WidthLoan.asking(outer: tile, inner: inner, side: .right).seen(at: inner, screen: big)
+        #expect(seen.correction == nil)
+        #expect(seen.loan?.givenBack(from: inner, screen: big) == tile)
     }
 
     @Test func showHideShowHideNeverDrifts() {
