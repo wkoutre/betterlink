@@ -118,7 +118,7 @@ Merge a pull request. That's it. On every push to `main` that changes more than 
 1. **test**: runs `make test` and `make test-cli` on `main`.
 2. **version**: reads `CFBundleShortVersionString` from `Info.plist`.
    - If that version has no tag yet, it is released as is. This is how to ship a minor or major version: set it in your pull request with `scripts/set-version.sh minor` (or `major`, or `0.4.0`).
-   - Otherwise it bumps the patch (`scripts/set-version.sh patch`), commits `betterlink X.Y.Z` to `main` as `github-actions[bot]`, and tags it `vX.Y.Z`. Pushes made with the workflow token never start another workflow run, so the bump commit doesn't loop.
+   - Otherwise it bumps the patch (`scripts/set-version.sh patch`), commits `betterlink X.Y.Z [skip ci]` to `main` with the release bot's token (a GitHub App kept in the `release-bot` environment, the only non-person the `main` rulesets let push), and tags it `vX.Y.Z`. `[skip ci]` keeps the bump commit from looping back into the workflow.
 
    Don't bump the patch by hand in a pull request; CI does it.
 3. **release**: builds, signs, notarizes and staples the app, uploads `betterlink-<version>.zip`, `betterlink-macos.zip` (the same file under a fixed name, which simplyautomated.io/betterlink/download points at), `SHA256SUMS`, `betterlink.rb` (the Homebrew cask) and `appcast.xml` (the Sparkle feed) to a draft, then publishes it in one step. Installed copies see the update within a day: their feed URL follows GitHub's latest published release. A run without the signing secrets, or with an update key that doesn't match `SUPublicEDKey`, fails instead of shipping.
@@ -132,17 +132,19 @@ Merges that land while a release runs collapse: GitHub keeps one waiting run, a 
 
 The `release` environment (Settings › Environments › release) decides whether a release waits for a person:
 
-- **Wait timer, no reviewer** (recommended): each release waits a few minutes before the signing job, then ships by itself. To stop one, open the run and click **Cancel workflow** during the wait. Nobody has to click anything for a release to go out.
+- **Wait timer, no reviewer** (what betterlink uses): each release waits 10 minutes before the signing job, then ships by itself. To ship sooner, open the run and click **Start all waiting jobs** (admins can bypass the timer). To stop one, click **Cancel workflow** during the wait. Nobody has to click anything for a release to go out.
 - **Required reviewer**: each release pauses before the signing job until you click **Approve** in the run. While it waits, it holds the release queue, so every later merge waits too. The tap job uses its own environment, so that is the only click.
 
-Switch to the wait timer (10 minutes) from a Mac where `gh` is signed in as the owner:
+Switch to the wait timer (10 minutes, skippable by an admin) from a Mac where `gh` is signed in as the owner:
 
 ```sh
-printf '%s' '{"wait_timer":10,"reviewers":[],"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
+printf '%s' '{"wait_timer":10,"reviewers":[],"can_admins_bypass":true,"deployment_branch_policy":{"protected_branches":false,"custom_branch_policies":true}}' \
   | gh api -X PUT repos/wkoutre/betterlink/environments/release --input -
 ```
 
 This keeps the main-only branch rule. What the reviewer guarded against: without it, anyone who can push to `main` (you, and any token or app you've given push access) can ship a signed update to every installed copy, after the timer. Everything else stays: the keys reach only runs from `main`, `main` can't be force-pushed or deleted, release tags can't move, actions are pinned to commits, and pull requests from forks never see the secrets.
+
+Change the environment only while no release run is waiting in it: removing a required reviewer rejects a job that is waiting for that reviewer.
 
 To release a docs-only change anyway: **Actions › release › Run workflow**, check **publish**.
 
