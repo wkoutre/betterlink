@@ -68,12 +68,13 @@ config.ts is code and can't be merged field by field.
 
 - Every Mac watches the sync folder (FSEvents; the existing PathWatcher, 0.3 s debounce) and its settings folder (0.5 s), and syncs 0.2 s after either changes. It also checks every 30 s, since a cloud app can replace a file without the folder noticing. Live, a change reached the other copy in about a second.
 - A Mac rewrites its own file only when its state changed.
+- The CLI, an editor and the app can write the settings files while a sync runs. A sync works from one reading of them and writes rules.json or sidebar.json only if, under that file's lock, it is still what the sync read; otherwise it starts over. It keeps the other Macs' changes to a file only once that file holds them. Editors take no lock, so config.ts changes places with its new version in one step; what was displaced is then compared, and either kept as a .bak or, when someone saved meanwhile, put back before the sync starts over. A linked config.ts stays a link, with its .bak beside the real file.
 - A merge that changes anything saves rules.json and sidebar.json as usual. So the rest of betterlink, the CLI and the folder watch see ordinary file changes.
 
 ## Failure and edge cases
 
 - **An unreadable or half-written device file** is skipped until it changes.
-- **An unreadable rules.json or sidebar.json on this Mac** stops the sync with an error in Sync settings. Reading it as empty would delete everything in it on every Mac.
+- **An unreadable rules.json, sidebar.json or config.ts on this Mac** (no permission, or a config.ts that isn't UTF-8 text) stops the sync with an error in Sync settings. Reading it as empty would delete everything in it on every Mac.
 - **A Mac joining Macs that already sync:** its first sync stamps what it already has older than anything shared. Shared settings win every conflict, and what only this Mac has (a rule, a profile) is added for everyone. The first Mac in a folder stamps normally, so the next Mac to join can't override it.
 - **A device file another user owns or can change** (or one in such a folder) is refused and named in the Log, with the check config.ts itself gets (FileSafety). Device files carry Link Rules and config.ts, which is code: anyone who can write into the sync folder as you can change what betterlink runs. Share the folder with no one.
 - **A file from a newer format version** (`v2`) is ignored, and the Log asks to update betterlink.
