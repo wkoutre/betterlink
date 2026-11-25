@@ -16,7 +16,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
-`make check-idle` fails when the built app (its Sidebar page open, so the tab sync runs) or the tab host uses more than 1% of a core or wakes more than 5 times a second with nothing happening. The sidebar and Sync are off in it, so their timers and observers are not covered. CI runs it on every pull request; the limits are loose because CI machines are noisy.
+`make check-idle` fails when the built app (its Sidebar page open, so the tab sync runs) or the tab host uses more than 1% of a core or wakes more than 5 times a second with nothing happening. The sidebar and Sync are off in it, so their timers and observers are not covered. CI runs it on every pull request; the limits are loose because CI machines are noisy. It looks three times, 15 s each, and passes on the first look within the limits: a slow machine may still be settling after the launch in the first. A look over the limits prints a `sample` of the app, so the log shows what it was doing.
 
 How it stays there:
 

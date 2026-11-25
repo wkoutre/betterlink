@@ -27,4 +27,16 @@ sleep 12 # launch, its window, the first look at the sockets
 # The host asks the browser for its tabs when the app connects. Without that the
 # tab sync never ran and there is nothing to measure.
 grep -aq '"snapshot"' "$work/commands" || { echo "The app never connected to the tab host."; exit 1; }
-.build/measure-resources --max-cpu 1 --max-wakeups 5 15 "${pids[@]}"
+# Three looks of 15 s; one within the limits passes. A CI machine can take a
+# while to settle after a launch, and a busy look there says nothing about idle.
+# Something that keeps the app busy is over the limits in every look. A look
+# over the limits prints what the app was doing, so the log names it.
+for look in 1 2 3; do
+  .build/measure-resources --max-cpu 1 --max-wakeups 5 15 "${pids[@]}" && exit 0
+  kill -0 "${pids[@]}" 2>/dev/null || exit 1 # one of them is gone: no later look will pass
+  echo "::group::What the app was doing after look $look"
+  sample "${pids[1]}" 3 -file "$work/sample.txt" > /dev/null 2>&1 && cat "$work/sample.txt" || echo "(no sample)"
+  echo "::endgroup::"
+done
+echo "Still busy after three looks."
+exit 1
