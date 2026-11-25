@@ -70,7 +70,7 @@ struct SidebarPage: View {
                 }
                 .labelsHidden()
                 .pickerStyle(.segmented)
-                .frame(maxWidth: 200)
+                .fixedSize()
             }
             LabeledContent("Show or hide") {
                 HStack {
