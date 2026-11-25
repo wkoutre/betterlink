@@ -28,7 +28,8 @@ enum TabStripTakeover {
         func walk(_ e: AXUIElement, _ depth: Int) {
             seen += 1
             guard depth < 14, seen < 1500 else { return }
-            let role: String = copy(e, kAXRoleAttribute as String) ?? ""
+            // Role and children in one round trip to the browser.
+            let (role, children) = roleAndChildren(e)
             if role == "AXWebArea" { return }
             if role == kAXTabGroupRole as String {
                 if let f = frame(e), let h = firstTabHeight(in: e, depth: 0) { groups.append((f, h)) }
@@ -38,7 +39,7 @@ enum TabStripTakeover {
                 if let f = frame(e), holdsTextField(e, depth: 0) { toolbars.append(f) }
                 return
             }
-            for c in children(e) { walk(c, depth + 1) }
+            for c in children { walk(c, depth + 1) }
         }
         walk(window, 0)
         // Exactly one of each, or it isn't known which is the window's own.
@@ -87,6 +88,13 @@ enum TabStripTakeover {
         var origin = CGPoint.zero, size = CGSize.zero
         guard AXValueGetValue(p, .cgPoint, &origin), AXValueGetValue(s, .cgSize, &size) else { return nil }
         return CGRect(origin: origin, size: size)
+    }
+
+    private static func roleAndChildren(_ e: AXUIElement) -> (String, [AXUIElement]) {
+        var values: CFArray?
+        let names = [kAXRoleAttribute, kAXChildrenAttribute] as CFArray
+        guard AXUIElementCopyMultipleAttributeValues(e, names, [], &values) == .success, let v = values as? [Any], v.count == 2 else { return ("", []) }
+        return (v[0] as? String ?? "", v[1] as? [AXUIElement] ?? [])
     }
 
     private static func children(_ e: AXUIElement) -> [AXUIElement] {
