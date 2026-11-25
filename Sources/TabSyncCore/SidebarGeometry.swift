@@ -51,6 +51,27 @@ public enum SidebarGeometry {
                                 side: side, overlaps: x != outside)
     }
 
+    /// The free width beside the window on the sidebar's side.
+    public static func room(beside w: CGRect, screen: CGRect, side: SidebarSide) -> CGFloat {
+        side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+    }
+
+    /// Whether going from `a` to `b` pushes the window off the screen: an edge
+    /// that was on it is now past it.
+    public static func leaves(_ screen: CGRect, from a: CGRect, to b: CGRect) -> Bool {
+        (a.maxX <= screen.maxX + 2 && b.maxX > screen.maxX + 2) || (a.minX >= screen.minX - 2 && b.minX < screen.minX - 2)
+    }
+
+    /// The browser's minimum width, when its answer to being asked to narrow
+    /// to `asked` shows one: it took the place asked and narrowed from
+    /// `wasWidth`, but not as far as asked. A window as wide as before has not
+    /// answered yet, or won't narrow: that width is no minimum.
+    public static func minimumWidth(asked: CGRect, got: CGRect, wasWidth: CGFloat) -> CGFloat? {
+        guard abs(got.minX - asked.minX) < 2, abs(got.height - asked.height) < 2,
+              got.width > asked.width + 2, got.width < wasWidth - 2 else { return nil }
+        return got.width
+    }
+
     /// The narrowest and widest the sidebar gets.
     public static let widths: ClosedRange<CGFloat> = 200...440
 
@@ -98,7 +119,9 @@ public enum SidebarGeometry {
     /// True when every edge of `w` lies on a half, third or quarter line of
     /// `screen` (the visible frame): the window was snapped, not placed by hand.
     /// The tolerance covers the gaps window managers leave around tiles.
-    public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = 10) -> Bool {
+    public static let snapTolerance: CGFloat = 10
+
+    public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = snapTolerance) -> Bool {
         snapError(w, screen: s) <= tolerance
     }
 
@@ -124,7 +147,7 @@ public enum SidebarGeometry {
     public static func settled(window: CGRect, screen: CGRect, width: CGFloat, side: SidebarSide,
                                minWindowWidth: CGFloat = 500) -> CGRect? {
         let w = window.integral
-        let room = side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+        let room = room(beside: w, screen: screen, side: side)
         let need: CGFloat
         if isSnapped(w, screen: screen) {
             need = width
@@ -141,6 +164,9 @@ public enum SidebarGeometry {
         } else {
             out.origin.x = max(screen.minX, min(w.minX, screen.maxX - width - out.width))
         }
+        // A browser too wide for the sidebar to fit beside it on this screen at
+        // all keeps its place: never pushed off the screen's other edge.
+        if leaves(screen, from: w, to: out) || out.width + width > screen.width + 2 { return nil }
         return out == w ? nil : out
     }
 }
@@ -167,14 +193,9 @@ public struct FitMemory: Codable, Equatable, Sendable {
     public private(set) var entries: [Entry] = []
     public init(entries: [Entry] = []) { self.entries = entries }
 
-    /// Frames within a point count as the same: browsers round.
-    static func same(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
-    }
-
     /// The record for this window when it is still exactly as narrowed.
     public func fitted(_ frame: CGRect, window: UInt32) -> Entry? {
-        entries.last { $0.window == window && Self.same($0.inner, frame) }
+        entries.last { $0.window == window && WidthLoan.same($0.inner, frame) }
     }
 
     public mutating func record(_ e: Entry) {
