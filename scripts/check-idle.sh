@@ -15,9 +15,12 @@ work="$(mktemp -d /tmp/bl-idle.XXXXXX)" # short: a socket's path has a limit
 pids=()
 browser_pid="" suite=""
 cleanup() {
-  for p in "${pids[@]:-}" "$browser_pid"; do [ -n "$p" ] && kill "$p" 2>/dev/null || true; done
-  [ -n "$suite" ] && defaults delete "$suite" > /dev/null 2>&1 || true
-  rm -rf "$work"
+  set +e # nothing here decides whether the check passed
+  for p in "${pids[@]:-}" "$browser_pid"; do [ -n "$p" ] && kill "$p" 2>/dev/null; done
+  for p in "${pids[@]:-}" "$browser_pid"; do [ -n "$p" ] && wait "$p" 2>/dev/null; done
+  [ -n "$suite" ] && defaults delete "$suite" > /dev/null 2>&1
+  # A browser's helpers go on writing to its profile for a moment after it quits.
+  for _ in 1 2 3 4 5; do rm -rf "$work" 2>/dev/null && break; sleep 1; done
 }
 trap cleanup EXIT
 mkdir -p "$work/home" "$work/sockets" "$work/sync"
