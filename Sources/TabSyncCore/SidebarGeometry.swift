@@ -10,13 +10,12 @@ import CoreGraphics
 /// screen, y up). `SidebarGeometry.cocoa(fromAX:mainScreenHeight:)` converts
 /// the Accessibility API's top-left frames.
 public enum SidebarSide: String, Codable, CaseIterable, Sendable {
-    case left, right, auto
+    case left, right
 }
 
 public struct SidebarPlacement: Equatable, Sendable {
     /// Where the sidebar panel goes.
     public var sidebar: CGRect
-    /// The side actually used (resolves `.auto`).
     public var side: SidebarSide
     /// True when the sidebar sits over the window's edge instead of beside it
     /// (only when the browser refused to make room).
@@ -35,12 +34,6 @@ public enum SidebarGeometry {
         CGRect(x: r.minX, y: h - r.maxY, width: r.width, height: r.height)
     }
 
-    /// `.auto`: the side with more free room, right on a tie.
-    public static func resolve(_ side: SidebarSide, window w: CGRect, screen: CGRect) -> SidebarSide {
-        guard side == .auto else { return side }
-        return max(0, w.minX - screen.minX) > max(0, screen.maxX - w.maxX) ? .left : .right
-    }
-
     /// Places a `width`-wide sidebar flush against the outside of `window`'s
     /// edge, the full height of the window. The pair moves like one window, so
     /// while it is dragged the sidebar may run off the screen. With
@@ -49,14 +42,30 @@ public enum SidebarGeometry {
     public static func place(window: CGRect, screen: CGRect, width: CGFloat,
                              side: SidebarSide, keepOnScreen: Bool = false) -> SidebarPlacement {
         let w = window.integral
-        let resolved = resolve(side, window: w, screen: screen)
         // Clip the vertical span so the sidebar never runs under the menu bar or the Dock.
         let minY = max(w.minY, screen.minY)
         let height = max(0, min(w.maxY, screen.maxY) - minY)
-        let outside = resolved == .left ? w.minX - width : w.maxX
+        let outside = side == .left ? w.minX - width : w.maxX
         let x = keepOnScreen ? min(max(outside, screen.minX), screen.maxX - width) : outside
         return SidebarPlacement(sidebar: CGRect(x: x, y: minY, width: width, height: height),
-                                side: resolved, overlaps: x != outside)
+                                side: side, overlaps: x != outside)
+    }
+
+    /// The narrowest and widest the sidebar gets.
+    public static let widths: ClosedRange<CGFloat> = 200...440
+
+    /// The sidebar's new width and the window's new frame when the edge
+    /// between them is dragged so the sidebar would be `wanted` wide: the pair
+    /// keeps its outer edges. The window never goes below `minWindowWidth`
+    /// (one already narrower gives up nothing more).
+    public static func resized(window w: CGRect, width: CGFloat, to wanted: CGFloat, side: SidebarSide,
+                               minWindowWidth: CGFloat) -> (width: CGFloat, window: CGRect) {
+        let most = min(widths.upperBound, width + max(0, w.width - minWindowWidth))
+        let new = min(max(wanted, widths.lowerBound), max(most, widths.lowerBound)).rounded()
+        var out = w
+        out.size.width = w.width + width - new
+        if side == .left { out.origin.x = w.minX + new - width }
+        return (new, out)
     }
 
     /// The browser window's frame when the pair (window plus sidebar) is to
@@ -115,8 +124,7 @@ public enum SidebarGeometry {
     public static func settled(window: CGRect, screen: CGRect, width: CGFloat, side: SidebarSide,
                                minWindowWidth: CGFloat = 500) -> CGRect? {
         let w = window.integral
-        let resolved = resolve(side, window: w, screen: screen)
-        let room = resolved == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+        let room = side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
         let need: CGFloat
         if isSnapped(w, screen: screen) {
             need = width
@@ -127,7 +135,7 @@ public enum SidebarGeometry {
         }
         var out = w
         out.size.width = max(minWindowWidth, w.width - need)
-        if resolved == .left {
+        if side == .left {
             out.origin.x = w.minX + need
             out.origin.x = max(screen.minX + width, min(out.origin.x, screen.maxX - out.width))
         } else {

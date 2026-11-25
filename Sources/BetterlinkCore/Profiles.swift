@@ -75,6 +75,16 @@ public struct Browser: Equatable, Hashable, Sendable, Identifiable {
     ]
 
     public static func known(bundleId: String) -> Browser? { known.first { $0.bundleId == bundleId } }
+
+    /// Whether the sidebar can attach to this browser: the Tabs extension and
+    /// its host work in the Chromium family (Safari has no extension yet).
+    public var hostsSidebar: Bool { family == .chromium && dataFolder != nil }
+
+    /// Of `bundleIds`, the browsers the sidebar can attach to. A saved list
+    /// from before Safari was dropped may still name it.
+    public static func sidebarHosts(_ bundleIds: some Sequence<String>) -> Set<String> {
+        Set(bundleIds.filter { known(bundleId: $0)?.hostsSidebar == true })
+    }
 }
 
 /// A browser profile betterlink can open links in.

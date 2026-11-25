@@ -126,9 +126,9 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 - it is gone when betterlink quits;
 - links are never written to disk or the system log.
 
-## Tabs (preview)
+## Sidebar
 
-A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Tabs page, connect a browser and show the sidebar. The extension comes with the app: Tabs page › Browsers › **Show in Finder**, then drag that folder onto chrome://extensions with Developer mode on, once per browser profile. After that it updates with betterlink. See [docs/tabs.md](docs/tabs.md).
+A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Sidebar page, connect a browser and show the sidebar. The extension comes with the app: Sidebar page › Browsers › **Show in Finder**, then drag that folder onto chrome://extensions with Developer mode on, once per browser profile. After that it updates with betterlink. See [docs/tabs.md](docs/tabs.md).
 
 ## Accepted risks
 

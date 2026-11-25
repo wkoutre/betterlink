@@ -40,7 +40,7 @@ extension AgentCommand {
     struct TabError: Error { let message: String }
 
     /// Where browsers load the Tabs extension from on this Mac, after making
-    /// sure this app's copy is there (the Tabs page's Show in Finder).
+    /// sure this app's copy is there (the Sidebar page's Show in Finder).
     static func tabsExtension() -> Data {
         let folder = ExtensionCopy.folder
         if let bundled = ExtensionCopy.bundled() {
@@ -242,19 +242,19 @@ extension AgentCommand {
 
     // MARK: Sidebar settings
 
-    /// The Tabs page's sidebar settings, from the same keys SidebarController uses.
+    /// The Sidebar page's settings, from the same keys SidebarController uses.
     static func sidebarSettings() -> [String: Any] {
         let d = MenuBarIcon.defaults()
         let w = d.double(forKey: "sidebar.width")
         return [
             "enabled": d.bool(forKey: "sidebar.enabled"),
             "shown": !d.bool(forKey: "sidebar.collapsed"),
-            "side": d.string(forKey: "sidebar.side") ?? "right",
+            "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
-            "browsers": (d.array(forKey: "sidebar.browsers") as? [String])
-                // Until changed, every installed Chromium browser and Safari (SidebarController.defaultBrowsers).
-                ?? Browser.known.filter { ($0.family == .chromium || $0.bundleId == "com.apple.Safari")
+            "browsers": (d.array(forKey: "sidebar.browsers") as? [String]).map { Browser.sidebarHosts($0).sorted() }
+                // Until changed, every installed browser the sidebar can attach to (SidebarController.defaultBrowsers).
+                ?? Browser.known.filter { $0.hostsSidebar
                     && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }.map(\.bundleId).sorted(),
         ]
     }
@@ -272,13 +272,13 @@ extension AgentCommand {
         var side: String?
         if let s = input["side"] {
             guard let s = s as? String, SidebarSide(rawValue: s) != nil else {
-                return AgentResponseJSON.failure("side must be \(SidebarSide.allCases.map(\.rawValue).joined(separator: ", ")) (auto: whichever side has room).")
+                return AgentResponseJSON.failure("side must be \(SidebarSide.allCases.map(\.rawValue).joined(separator: " or ")).")
             }
             side = s
         }
         var width: Double?
         if let v = input["width"] {
-            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), (200...440).contains(n.doubleValue) else {
+            guard let n = v as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), SidebarGeometry.widths.contains(n.doubleValue) else {
                 return AgentResponseJSON.failure("width must be a number of points from 200 to 440.")
             }
             width = (n.doubleValue / 10).rounded() * 10
@@ -290,6 +290,9 @@ extension AgentCommand {
             for b in list {
                 guard let known = Browser.known.first(where: { $0.bundleId.lowercased() == b.lowercased() || $0.name.lowercased() == b.lowercased() }) else {
                     return AgentResponseJSON.failure("No browser \"\(b)\" betterlink knows (browsers list).")
+                }
+                guard known.hostsSidebar else {
+                    return AgentResponseJSON.failure("The sidebar can't attach to \(known.name): it works with Chromium browsers.")
                 }
                 ids.append(known.bundleId)
             }

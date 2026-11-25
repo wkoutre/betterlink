@@ -145,7 +145,7 @@ struct SidebarImportSection: View {
         panel.allowsMultipleSelection = false
         panel.allowedContentTypes = [.html, .json, .data]
         panel.prompt = "Import"
-        panel.message = "Choose a bookmarks.html export, or a browser profile's Bookmarks file."
+        panel.message = "Choose a bookmarks.html export, or a Browser Profile's Bookmarks file."
         guard panel.runModal() == .OK, let url = panel.url else { return }
         // Arc's own file is recognized too, so "From a File…" works for a copy of it.
         if url.lastPathComponent.hasPrefix("StorableSidebar") { importArc(url) } else { importBookmarks(url, named: "Bookmarks") }

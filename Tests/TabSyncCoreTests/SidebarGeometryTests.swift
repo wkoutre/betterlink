@@ -66,12 +66,29 @@ struct SidebarGeometryTests {
         #expect(p.side == .left)
     }
 
-    @Test func autoPicksTheSideWithMoreRoomAndRightOnATie() {
-        let leftHeavy = CGRect(x: 500, y: 0, width: 800, height: 875)
-        #expect(SidebarGeometry.place(window: leftHeavy, screen: screen, width: 200, side: .auto).side == .left)
-        let centred = CGRect(x: 320, y: 0, width: 800, height: 875)
-        #expect(SidebarGeometry.place(window: centred, screen: screen, width: 200, side: .auto).side == .right)
+    @Test func draggingTheEdgeBetweenThemKeepsThePairsOuterEdges() {
+        let win = CGRect(x: 280, y: 0, width: 900, height: 700)
+        let right = SidebarGeometry.resized(window: win, width: 280, to: 320, side: .right, minWindowWidth: 500)
+        #expect(right.width == 320 && right.window == CGRect(x: 280, y: 0, width: 860, height: 700))
+        let left = SidebarGeometry.resized(window: win, width: 280, to: 320, side: .left, minWindowWidth: 500)
+        #expect(left.width == 320 && left.window == CGRect(x: 320, y: 0, width: 860, height: 700))
+        let narrower = SidebarGeometry.resized(window: win, width: 280, to: 240, side: .left, minWindowWidth: 500)
+        #expect(narrower.width == 240 && narrower.window == CGRect(x: 240, y: 0, width: 940, height: 700))
     }
+
+    @Test func draggingTheEdgeStopsAtTheLimits() {
+        let win = CGRect(x: 280, y: 0, width: 900, height: 700)
+        func width(_ wanted: CGFloat, min m: CGFloat) -> CGFloat {
+            SidebarGeometry.resized(window: win, width: 280, to: wanted, side: .right, minWindowWidth: m).width
+        }
+        #expect(width(50, min: 500) == 200)
+        #expect(width(900, min: 500) == 440)
+        #expect(width(440, min: 850) == 330)  // the browser's own minimum
+        #expect(width(440, min: 950) == 280)  // already narrower than that: no more
+    }
+
+    /// A saved "auto" (removed) reads as no side, so the default is used.
+    @Test func autoIsNoLongerASide() { #expect(SidebarSide(rawValue: "auto") == nil) }
 
     private func settle(_ w: CGRect, _ side: SidebarSide) -> CGRect? {
         SidebarGeometry.settled(window: w, screen: screen, width: 280, side: side)
@@ -174,8 +191,7 @@ struct SidebarGeometryTests {
                      CGRect(x: 0, y: 0, width: 685, height: 1259), CGRect(x: 0, y: 0, width: 514, height: 1259)] {
             for side in SidebarSide.allCases {
                 let win = SidebarGeometry.settled(window: tile, screen: big, width: 280, side: side, minWindowWidth: 626) ?? tile
-                let used = SidebarGeometry.resolve(side, window: tile, screen: big)
-                let pair = win.union(SidebarGeometry.place(window: win, screen: big, width: 280, side: used).sidebar)
+                let pair = win.union(SidebarGeometry.place(window: win, screen: big, width: 280, side: side).sidebar)
                 #expect(win.width == 626, "\(tile) \(side)")
                 #expect(pair.minX >= big.minX && pair.maxX <= big.maxX && pair.width == 906, "\(tile) \(side) \(pair)")
             }

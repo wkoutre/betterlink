@@ -1,7 +1,7 @@
 import BetterlinkCore
 import SwiftUI
 
-/// A saved link's icon: the first of `icons` that is an inline image (the one
+/// A saved link's or a tab's icon: the first of `icons` that is an inline image (the one
 /// it was saved with, its open tab's), else the first letter of its name. An
 /// imported link has no icon until its page has been open once, and a grid of
 /// identical globes says nothing.
@@ -20,10 +20,10 @@ struct SavedIcon: View {
             Favicon(url: shown)
         } else {
             Text(Self.letter(title))
-                .font(.system(size: 10, weight: .semibold, design: .rounded))
+                .font(DS.TextStyle.caption)
                 .foregroundStyle(pal.textSecondary)
                 .frame(width: 16, height: 16)
-                .background(RoundedRectangle(cornerRadius: 4, style: .continuous).fill(pal.hover))
+                .background(RoundedRectangle(cornerRadius: DS.Space.space1, style: .continuous).fill(pal.hover))
                 .accessibilityHidden(true)
         }
     }

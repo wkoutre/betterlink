@@ -12,7 +12,11 @@ final class SidebarController: ObservableObject {
 
     @Published var enabled: Bool { didSet { save(); enabled ? start() : stop() } }
     @Published var side: SidebarSide { didSet { save(); refit() } }
-    @Published var width: Double { didSet { save(); refit() } }
+    @Published var width: Double {
+        // While its edge is dragged, resize(to:) moves the window itself and
+        // the end of the drag saves.
+        didSet { guard resizing == nil else { return }; save(); refit() }
+    }
     /// The browsers the sidebar attaches to, by bundle id.
     @Published var attachTo: Set<String> {
         didSet {
@@ -81,7 +85,7 @@ final class SidebarController: ObservableObject {
     private let defaults = MenuBarIcon.defaults()
 
     private init() {
-        let attach = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Set.init) ?? Self.defaultBrowsers()
+        let attach = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Browser.sidebarHosts) ?? Self.defaultBrowsers()
         tracker = WindowTracker(browserBundleIds: attach)
         attachTo = attach
         collapsed = defaults.bool(forKey: "sidebar.collapsed")
@@ -101,7 +105,7 @@ final class SidebarController: ObservableObject {
         // betterlink's own window coming forward keeps the sidebar bound (the
         // tracker ignores it). The panel then drops to a normal level, just
         // above the browser window, so it stays beside the browser (the Side
-        // and Width settings preview live) without floating over betterlink's
+        // setting previews live) without floating over betterlink's
         // window; the browser coming back lifts it again.
         activationToken = NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
@@ -122,20 +126,21 @@ final class SidebarController: ObservableObject {
 
     func requestTrust() { WindowTracker.requestTrust() }
 
-    /// Every installed Chromium browser, and Safari.
+    /// Every installed browser the sidebar can attach to.
     static func defaultBrowsers() -> Set<String> {
-        Set(AppModel.installedBrowsers().filter { $0.family == .chromium || $0.bundleId == "com.apple.Safari" }.map(\.bundleId))
+        Set(AppModel.installedBrowsers().filter(\.hostsSidebar).map(\.bundleId))
     }
 
     /// Picks up settings another process wrote (`betterlink sidebar settings
     /// set`, through AgentCommand): only what differs is set, so each change
-    /// takes effect as it does from the Tabs page. `sidebar.collapsed` is
+    /// takes effect as it does from the Sidebar page. `sidebar.collapsed` is
     /// applied with the same slide as the shortcut.
     func reloadSettings() {
-        if let a = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Set.init), a != attachTo { attachTo = a }
+        if let a = (defaults.array(forKey: "sidebar.browsers") as? [String]).map(Browser.sidebarHosts), a != attachTo { attachTo = a }
         if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
         let w = defaults.double(forKey: "sidebar.width")
-        if w >= 200, w != width { width = w }
+        // Mid-drag the saved width is the one from before it.
+        if resizing == nil, w >= 200, w != width { width = w }
         let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
         if take != takeOverTabs { takeOverTabs = take }
         let on = defaults.bool(forKey: "sidebar.enabled")
@@ -180,6 +185,7 @@ final class SidebarController: ObservableObject {
     /// Hides: the sidebar's inner edge and the window's edge slide toward the
     /// outer edge together; at the end the window fills the tile.
     private func slideOut() {
+        endResize() // hiding mid-drag: the drag ends here
         collapsed = true
         save()
         if var run = slideRun { // turning back mid-show
@@ -308,6 +314,7 @@ final class SidebarController: ObservableObject {
     }
 
     private func stop() {
+        endResize()
         giveSpaceBack()
         minWidths = [:]
         hotKey.setRegistered(false)
@@ -380,6 +387,8 @@ final class SidebarController: ObservableObject {
 
     private func targetChanged(_ t: WindowTracker.Target?) {
         let newWindow = t != nil && t?.windowHash != current?.windowHash
+        // Another window came forward mid-drag: the drag ends on its own window.
+        if let r = resizing, t?.windowHash != r.windowHash { endResize() }
         current = t
         if newWindow, let t {
             // A window already taken over isn't pressed again on coming back
@@ -441,7 +450,7 @@ final class SidebarController: ObservableObject {
         // Narrowed before (this launch or an earlier one) and not moved since: keep it.
         if fits[t.windowHash] == nil, let n = tracker.boundWindowNumber, let e = memory.fitted(t.frame, window: n) {
             fits[t.windowHash] = Fit(outer: e.outer, inner: t.frame,
-                                     side: SidebarGeometry.resolve(side, window: e.outer, screen: screen(for: e.outer)),
+                                     side: side,
                                      window: tracker.boundWindow, bundleId: t.bundleId, number: n)
             return layout()
         }
@@ -458,7 +467,7 @@ final class SidebarController: ObservableObject {
             guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: side,
                                                       minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
             fits[t.windowHash] = Fit(outer: outer, inner: inner,
-                                     side: SidebarGeometry.resolve(side, window: outer, screen: screen),
+                                     side: side,
                                      window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
             askedAt = Date()
             tracker.setWindowFrame(inner)
@@ -495,6 +504,86 @@ final class SidebarController: ObservableObject {
             tracker.setWindowFrame(f.outer)
         }
         if let now = current { settle(now) }
+        layout()
+    }
+
+    // MARK: - Resizing by the edge
+
+    /// A drag of the edge between the sidebar and the window, from where it began.
+    private struct Resize {
+        var window: CGRect, width: CGFloat, side: SidebarSide, windowHash: Int
+        /// The space a narrowed window gave up, to give back later.
+        var outer: CGRect?
+        /// The sidebar covers the window's edge: only the sidebar changes.
+        var covers: Bool
+    }
+    private var resizing: Resize?
+
+    /// Starts resizing. False when there is no window at rest to resize against.
+    func beginResize() -> Bool {
+        guard slideRun == nil, enabled, !collapsed, let t = current, !t.fullScreen, let panel, panel.isVisible else { return false }
+        resizing = Resize(window: t.frame, width: width, side: placedSide, windowHash: t.windowHash,
+                          outer: fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0.outer : nil },
+                          covers: panel.attachedSide == nil)
+        return true
+    }
+
+    private var edgeTimer: Timer?
+
+    /// The edge was pressed at `start` (screen x): follows the pointer until
+    /// the button is up. Here and by the button's state, not by the view's
+    /// events: the view can be rebuilt, and a mouse-up lost, mid-drag.
+    func dragEdge(from start: CGFloat) {
+        guard edgeTimer == nil, beginResize() else { return }
+        var last: CGFloat?
+        let follow = { [weak self] in
+            guard let self else { return }
+            let x = NSEvent.mouseLocation.x
+            if x != last {
+                last = x
+                self.resize(by: self.placedSide == .right ? start - x : x - start)
+            }
+            // Over: the button is up, or something else ended the resize.
+            guard self.resizing == nil || NSEvent.pressedMouseButtons & 1 == 0 else { return }
+            self.edgeTimer?.invalidate()
+            self.edgeTimer = nil
+            self.endResize()
+            self.returnFocusToBrowser()
+        }
+        let t = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { follow() } }
+        RunLoop.main.add(t, forMode: .common)
+        edgeTimer = t
+    }
+
+    /// The sidebar `delta` points wider than when the drag began.
+    func resize(by delta: CGFloat) {
+        guard let r = resizing, let t = current, t.windowHash == r.windowHash else { return }
+        let new = SidebarGeometry.resized(window: r.window, width: r.width, to: r.width + delta, side: r.side,
+                                          minWindowWidth: r.covers ? 0 : minWidths[r.windowHash] ?? 500)
+        guard new.width != width else { return }
+        width = new.width
+        if !r.covers {
+            askedAt = Date()
+            tracker.setWindowFrame(new.window)
+            // A browser at its minimum keeps its width: later steps stop there.
+            if let now = current, now.windowHash == r.windowHash, learnMinWidth(asked: new.window, got: now) {
+                return resize(by: delta)
+            }
+        }
+        // The tab list finds its window by this frame: keep it with the window.
+        if let now = current, target != now { target = now }
+        layout()
+    }
+
+    func endResize() {
+        guard let r = resizing else { return }
+        resizing = nil
+        save()
+        // A narrowed window stays known as narrowed, at its new width.
+        if let outer = r.outer, let t = current, t.windowHash == r.windowHash {
+            fits[t.windowHash] = Fit(outer: outer, inner: t.frame, side: r.side,
+                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+        }
         layout()
     }
 
@@ -596,7 +685,7 @@ final class SidebarController: ObservableObject {
         guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed),
               enabled, !collapsed, let t = current, !t.fullScreen else { return }
         let rect = panel.frame
-        let side: SidebarSide = placedSide == .left ? .left : .right
+        let side = placedSide
         let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: rect, window: t.frame, width: width, side: side,
                                                           minWindowWidth: minWidths[t.windowHash] ?? 500)
         if abs(rect.width - placed.width) >= 2 {
@@ -629,7 +718,12 @@ final class SidebarController: ObservableObject {
     @Published private(set) var palette: SidebarPalette?
 
     /// After a click or a typed link in the sidebar, hand the keyboard back to the browser.
-    func returnFocusToBrowser() { tracker.activateBrowser() }
+    func returnFocusToBrowser() {
+        tracker.activateBrowser()
+        // The browser is usually the active app already, so activating it takes
+        // nothing from this non-activating panel: let the keyboard go by hand.
+        if let panel, panel.isKeyWindow { panel.releaseKeyboard() }
+    }
 }
 
 private extension CGRect {
@@ -876,6 +970,13 @@ final class SidebarPanel: NSPanel {
         fade = Fade(shown: true)
         alphaValue = 1
         if !isVisible { orderFrontRegardless() }
+    }
+
+    /// Gives the keyboard back to the active app's window. A key panel keeps
+    /// it until it is ordered out; with no animation it is back the same frame.
+    func releaseKeyboard() {
+        super.orderOut(nil)
+        orderFrontRegardless()
     }
 
     /// Hides at once, at the end of a slide.
