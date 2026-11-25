@@ -56,6 +56,11 @@ fi
 
 UPDATES=1 make build
 
+# The Tabs extension reaches other Macs inside the app (docs/tabs.md).
+for f in manifest.json background.js bridge.js icons/128.png; do
+  [ -s "$APP/Contents/Resources/browser-extension/$f" ] || { echo "The app has no browser-extension/$f." >&2; exit 1; }
+done
+
 if [ -n "$SIGN_IDENTITY" ]; then
   scripts/sign.sh "$SIGN_IDENTITY" --release
 else

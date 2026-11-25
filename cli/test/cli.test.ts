@@ -57,9 +57,31 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(work.items).toEqual([])
     // Several Sidebar Profiles: which one must be said.
     expect(run(d, 'sidebar', 'add-link', '--url', 'https://x.example').code).not.toBe(0)
-    for (const c of ['sidebar profiles assign', 'sidebar import', 'sidebar settings set', 'tabs list', 'tabs close-others']) {
+    for (const c of ['sidebar profiles assign', 'sidebar import', 'sidebar settings set', 'tabs list', 'tabs extension', 'tabs close-others']) {
       expect(spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout).toContain(`betterlink ${c}`)
     }
+  })
+
+  // The app carries the Tabs extension and puts it in one folder (under
+  // BETTERLINK_HOME here, so this never touches the one a browser loads).
+  test('says where the Tabs extension is, after putting it there', () => {
+    const d = home()
+    const r = run(d, 'tabs', 'extension')
+    expect(r.code).toBe(0)
+    expect(r.json.path).toBe(join(d, 'tabs-extension'))
+    expect(r.json.id).toBe('gjjllnebeeegbipppiclhlomdppbnljh')
+    const shipped = JSON.parse(readFileSync(join(root, 'browser-extension/manifest.json'), 'utf8'))
+    const placed = JSON.parse(readFileSync(join(d, 'tabs-extension', 'manifest.json'), 'utf8'))
+    expect(r.json.version).toBe(shipped.version)
+    expect(placed).toEqual(shipped)
+    for (const f of ['background.js', 'bridge.js', 'icons/128.png']) {
+      expect(readFileSync(join(d, 'tabs-extension', f))).toEqual(readFileSync(join(root, 'browser-extension', f)))
+    }
+    // Only what the browser runs: no tests, no package.json.
+    expect(existsSync(join(d, 'tabs-extension', 'tests'))).toBe(false)
+    expect(existsSync(join(d, 'tabs-extension', 'package.json'))).toBe(false)
+    // A second call changes nothing and says the same.
+    expect(run(d, 'tabs', 'extension').json).toEqual(r.json)
   })
 
   test('adds, lists, tests, moves and removes rules', () => {

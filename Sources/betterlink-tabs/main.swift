@@ -10,6 +10,7 @@
 //   reload <tabId>         load the page again
 //   navigate <tabId> <url> send a tab to another page
 //   list                   print every window and tab
+//   reload-extension       ask the extension to restart from its files on disk
 //
 // --json prints one JSON object per state change instead (used by the e2e test).
 import Foundation
@@ -34,6 +35,7 @@ func render(_ sessions: [BrowserSession]) -> [[String: Any]] {
                  "tabs": w.tabs.map { ["id": $0.id, "url": $0.url, "title": $0.title, "active": $0.active, "muted": $0.muted] as [String: Any] }] as [String: Any]
             },
             "ops": s.ops.sorted(),
+            "extension": s.extensionVersion ?? "",
         ]
     }
 }
@@ -89,7 +91,8 @@ while let line = readLine() {
         let p = arg.split(separator: " ", maxSplits: 1).map(String.init)
         if p.count == 2, let id = Int(p[0]) { hub.send(.navigate(id, to: p[1]), to: target.socketPath) }
     case "list": listAll()
-    default: print("commands: open <url> | close <tabId> [...] | activate | move <tabId> <index> | mute | unmute | duplicate | reload | navigate <tabId> <url> | list")
+    case "reload-extension": hub.send(.reloadSelf(), to: target.socketPath)
+    default: print("commands: open <url> | close <tabId> [...] | activate | move <tabId> <index> | mute | unmute | duplicate | reload | navigate <tabId> <url> | list | reload-extension")
     }
 }
 // stdin closed: keep streaming until killed

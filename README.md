@@ -128,7 +128,7 @@ Turn on **General › Show the log in the sidebar** to see every link, where it 
 
 ## Sidebar
 
-A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Sidebar page, connect a browser and show the sidebar. See [docs/tabs.md](docs/tabs.md).
+A sidebar beside your Chromium browser window, Arc-style, with every open tab synced both ways the instant anything changes and no polling: a small browser extension pushes each tab event to betterlink over native messaging, and betterlink's open, switch and close commands go back the same way. Off until you open the Sidebar page, connect a browser and show the sidebar. The extension comes with the app: Sidebar page › Browsers › **Show in Finder**, then drag that folder onto chrome://extensions with Developer mode on, once per browser profile. After that it updates with betterlink. See [docs/tabs.md](docs/tabs.md).
 
 ## Accepted risks
 
@@ -167,6 +167,7 @@ betterlink sidebar profiles assign --profile Work --browser "Google Chrome" --br
 betterlink sidebar settings set --side left --width 300
 betterlink tabs list
 betterlink tabs close-others --tab 1234
+betterlink tabs extension                                     # where the Tabs extension is, for Load unpacked
 ```
 
 The command ships inside the app at `betterlink.app/Contents/Helpers/betterlink`. **Agents › Install Command** in the window links it into `~/.local/bin`, creating that folder if needed (it never replaces a file, or a link that isn't betterlink's). Or link it yourself, using wherever betterlink.app is (usually `/Applications`):
@@ -218,6 +219,7 @@ For screenshots and manual checks, these environment variables change how better
 | Variable | Effect |
 |---|---|
 | `BETTERLINK_HOME` | Settings folder to use instead of the standard one. Use a temporary folder so tests never touch your real rules. |
+| `BETTERLINK_TABS_EXTENSION_DIR` | Folder betterlink keeps the Tabs extension in, instead of the standard one (under `BETTERLINK_HOME`, `tabs-extension` in there). |
 | `BETTERLINK_APPEARANCE` | `light` or `dark`, regardless of the system setting. |
 | `BETTERLINK_PAGE` | Page to open: `rules`, `profiles`, `permissions`, `config`, `general`, `log`, `about`. |
 | `BETTERLINK_SYNC_DEVICE` | Tests only: this copy's sync device id, with its own sync settings, so two copies on one Mac sync like two Macs. |

@@ -26,6 +26,7 @@ struct SidebarPage: View {
 
     private var browsers: some View {
         DSSection {
+            ExtensionRow()
             ForEach(model.browsers.filter(\.hostsSidebar)) { b in
                 SidebarBrowserRow(browser: b, version: tabs.registrationVersion)
             }
@@ -33,10 +34,10 @@ struct SidebarPage: View {
             Text("Browsers")
         } footer: {
             VStack(alignment: .leading, spacing: DS.Space.space1) {
-                if let err = tabs.registrationError {
+                if let err = tabs.registrationError ?? tabs.extensionError {
                     Text(err).foregroundStyle(DS.Palette.danger)
                 }
-                Text("Set Up writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then load the Tabs extension in each Browser Profile (chrome://extensions › Developer mode › Load unpacked › browser-extension). For Incognito windows, also turn on Allow in Incognito for it.")
+                Text("Set Up writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then add the Tabs extension, once per Browser Profile: open chrome://extensions, turn on Developer mode, and drag the extension's folder from Finder onto the page. Leave Developer mode on, or the browser turns the extension off. For Incognito windows, also turn on Allow in Incognito for it.")
                     .foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -97,6 +98,31 @@ struct SidebarPage: View {
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 }
             }
+        }
+    }
+}
+
+/// The Tabs extension on this Mac: its version, and its folder in Finder for
+/// dragging onto a browser's Extensions page.
+private struct ExtensionRow: View {
+    @ObservedObject private var tabs = TabsModel.shared
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tabs extension")
+                Group {
+                    if let version = tabs.extensionVersion {
+                        Text("Version \(version). Updates with betterlink.")
+                    } else {
+                        Text("Not in this build. Load browser-extension from the source folder.")
+                    }
+                }
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+            }
+            Spacer()
+            Button("Show in Finder") { tabs.showExtensionFolder() }
+                .disabled(tabs.extensionVersion == nil)
         }
     }
 }

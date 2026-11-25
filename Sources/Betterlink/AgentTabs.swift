@@ -11,12 +11,14 @@ extension AgentCommand {
     static let tabCommands = [
         "tabs.list", "tabs.open", "tabs.close", "tabs.activate", "tabs.move", "tabs.mute",
         "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below",
+        "tabs.extension",
         "sidebar.settings.get", "sidebar.settings.set",
     ]
 
     static func runTabCommand(_ command: String, _ input: [String: Any]) -> Data {
         if command == "sidebar.settings.get" { return AgentResponseJSON.success(sidebarSettings()) }
         if command == "sidebar.settings.set" { return setSidebarSettings(input) }
+        if command == "tabs.extension" { return tabsExtension() }
         let hub = SyncHub(onChange: { _ in })
         hub.start()
         let sessions = waitForSessions(hub)
@@ -36,6 +38,25 @@ extension AgentCommand {
     }
 
     struct TabError: Error { let message: String }
+
+    /// Where browsers load the Tabs extension from on this Mac, after making
+    /// sure this app's copy is there (the Sidebar page's Show in Finder).
+    static func tabsExtension() -> Data {
+        let folder = ExtensionCopy.folder
+        if let bundled = ExtensionCopy.bundled() {
+            do { try ExtensionCopy.refresh(from: bundled, to: folder) }
+            catch { return AgentResponseJSON.failure("Couldn't put the Tabs extension in its folder: \(error.localizedDescription)") }
+        }
+        guard let version = ExtensionCopy.version(of: folder) else {
+            return AgentResponseJSON.failure("This build of betterlink has no Tabs extension in it. Load browser-extension from the source folder.")
+        }
+        return AgentResponseJSON.success([
+            "path": folder.path,
+            "version": version,
+            "id": HostRegistration.extensionId,
+            "load": "Once per browser profile: open chrome://extensions, turn on Developer mode, click Load unpacked and choose this folder. Leave Developer mode on. The extension then updates with betterlink.",
+        ])
+    }
 
     /// Waits until every connected host has said hello and sent its windows,
     /// at most 2 s.

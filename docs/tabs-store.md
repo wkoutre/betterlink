@@ -16,7 +16,7 @@ A copy loaded before that change had another id. Reload it, then press Set Up Ag
 scripts/package-extension.sh        # writes dist/betterlink-tabs-<version>.zip
 ```
 
-The zip holds the manifest without its `key`, `background.js`, `bridge.js` and `icons/`. The icons are betterlink's app icon (`swift scripts/make-icon.swift browser-extension/icons/128.png 128`, and 48, 32, 16).
+The zip holds the manifest without its `key`, `background.js`, `bridge.js` and `icons/`. The app bundle carries the same files with the `key` (docs/tabs.md, "The extension on a Mac without the repository"): that is how the extension reaches a Mac until the store item is published. The icons are betterlink's app icon (`swift scripts/make-icon.swift browser-extension/icons/128.png 128`, and 48, 32, 16).
 
 ## When to submit
 
