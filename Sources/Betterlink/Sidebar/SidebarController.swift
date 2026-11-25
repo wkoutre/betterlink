@@ -281,11 +281,8 @@ final class SidebarController: ObservableObject {
             if let n = run.windowNumber, let real = tracker.windowServerFrame(n) {
                 let edge = run.side == .left ? real.minX : real.maxX
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
-                // The sidebar follows the window's real edge, however late. Once
-                // a hiding window is as wide as it gets, the sidebar goes on alone.
-                let full = run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX
-                let goesOnAlone = run.slide.phase == .hiding && abs(edge - full) <= 1
-                seam = !goesOnAlone ? edge : run.side == .left ? min(edge, f.innerEdge) : max(edge, f.innerEdge)
+                seam = SidebarSlide.seam(windowEdge: edge, innerEdge: f.innerEdge,
+                                         hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
             }
         }
         panel.reveal = seam
