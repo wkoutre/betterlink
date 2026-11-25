@@ -1,9 +1,8 @@
 // Runs the CLI as a user or agent would, against the real app binary
 // (`make build` first) and a temporary settings folder.
-import { afterAll, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { createHash } from 'node:crypto'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -14,19 +13,8 @@ const bin = join(import.meta.dir, '..', 'src', 'bin.ts')
 function home(): string {
   const d = mkdtempSync(join(tmpdir(), 'bl-cli-'))
   chmodSync(d, 0o700)
-  homes.push(d)
   return d
 }
-
-const homes: string[] = []
-// Each folder has its own preferences domain (MenuBarIcon.developmentSuite):
-// don't leave one behind per test. Foundation drops /private from these paths.
-afterAll(() => {
-  for (const d of homes) {
-    const id = createHash('sha256').update(realpathSync(d).replace(/^\/private(?=\/(var|tmp|etc)\/)/, '')).digest('hex').slice(0, 16)
-    spawnSync('defaults', ['delete', `com.wkoutre.betterlink.development.${id}`])
-  }
-})
 
 function run(dir: string, ...args: string[]) {
   const r = spawnSync('bun', [bin, ...args, '--json'], {
