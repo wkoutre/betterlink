@@ -78,9 +78,16 @@ test-tabs:
 	mkdir -p .build
 	$(SWIFTPM_LOCK) swiftc -O $< -o $@
 
-# Fails when the built app (tab sync on, sidebar and Sync off) or the tab host
-# keeps busy while nothing happens (scripts/check-idle.sh). Opens the app's
-# window for half a minute.
+.build/idle-probe: scripts/idle-probe.swift
+	mkdir -p .build
+	$(SWIFTPM_LOCK) swiftc -O $< -o $@
+
+# Fails when the built app (tab sync and Sync on) or the tab host keeps busy
+# while nothing happens (scripts/check-idle.sh). Opens the app's window for
+# half a minute. With the sidebar on too, beside a browser the script starts:
+#   CHECK_IDLE_SIDEBAR="/Applications/Google Chrome.app" make check-idle
+# The sidebar attaches to every window of that browser: name one you have no
+# windows open in.
 check-idle: build
 	./scripts/check-idle.sh
 
