@@ -60,7 +60,7 @@ struct SidebarView: View {
         let windowTabs = match?.window?.tabs ?? []
         let iconsToLearn = Self.iconsToLearn(profile, match)
         VStack(alignment: .leading, spacing: 0) {
-            header(match: match, profile: profile)
+            header(match: match, profile: profile, open: windowTabs)
                 // Another profile now: an open rename belonged to the last one.
                 .onChange(of: profile?.id) { renamingProfile = nil }
             if let m = match, let profile {
@@ -78,8 +78,12 @@ struct SidebarView: View {
                             // A closed folder lists its open items, which come and go
                             // with tabs: animate those in place too (review F1).
                             .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
-                            dropZone("Drag here to save", at: .items(parent: nil, index: profile.items.count), profile, windowTabs)
-                            newTabField(m)
+                            let end = SidebarProfile.Spot.items(parent: nil, index: profile.items.count)
+                            DropSwap(showing: allowed(end, profile), height: DS.Size.sizeRow) {
+                                dropZone("Drag here to save", at: end, profile, windowTabs)
+                            } line: {
+                                newTabField(m)
+                            }
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
@@ -164,7 +168,29 @@ struct SidebarView: View {
     /// window's traffic lights when bound on the left.
     private static let titleBarHeight = NSWindow.frameRect(forContentRect: .zero, styleMask: [.titled]).height
 
-    private func header(match: Match?, profile: SidebarProfile?) -> some View {
+    private func header(match: Match?, profile: SidebarProfile?, open: [BrowserTab]) -> some View {
+        // Until there is a Favorite, dropping one here makes the first.
+        let first = profile.flatMap { $0.favorites.isEmpty && match != nil && allowed(.favorites(0), $0) ? $0 : nil }
+        return DropSwap(showing: first != nil, height: 24) {
+            if let first { dropZone("Drag here for a Favorite", at: .favorites(0), first, open) }
+        } line: {
+            headerLine(match: match, profile: profile)
+        }
+        .padding(.horizontal, DS.Space.space4)
+        .padding(.top, Self.titleBarHeight)
+        .padding(.bottom, DS.Space.space2)
+        .confirmationDialog("Delete the Sidebar Profile \"\(confirmProfileDelete?.name ?? "")\"?",
+                            isPresented: Binding(get: { confirmProfileDelete != nil }, set: { if !$0 { confirmProfileDelete = nil } })) {
+            Button("Delete Sidebar Profile", role: .destructive) {
+                if let p = confirmProfileDelete { animate { lib.change { $0.removeProfile(p.id) } } }
+                confirmProfileDelete = nil
+            }
+        } message: {
+            Text("Its Favorites and folders are deleted with it. Browser Profiles that showed it show another one.")
+        }
+    }
+
+    private func headerLine(match: Match?, profile: SidebarProfile?) -> some View {
         let known = match.map { $0.certain && tabs.profileRef($0.session) != nil } ?? false
         return HStack(spacing: DS.Space.space1) {
             if let p = profile, renamingProfile == p.id {
@@ -201,18 +227,6 @@ struct SidebarView: View {
             .disabled(!known)
             .help(known ? "Sidebar Profile settings" : "Waiting to learn this window's Browser Profile")
             .accessibilityLabel("Sidebar Profile settings")
-        }
-        .padding(.horizontal, DS.Space.space4)
-        .padding(.top, Self.titleBarHeight)
-        .padding(.bottom, DS.Space.space2)
-        .confirmationDialog("Delete the Sidebar Profile \"\(confirmProfileDelete?.name ?? "")\"?",
-                            isPresented: Binding(get: { confirmProfileDelete != nil }, set: { if !$0 { confirmProfileDelete = nil } })) {
-            Button("Delete Sidebar Profile", role: .destructive) {
-                if let p = confirmProfileDelete { animate { lib.change { $0.removeProfile(p.id) } } }
-                confirmProfileDelete = nil
-            }
-        } message: {
-            Text("Its Favorites and folders are deleted with it. Browser Profiles that showed it show another one.")
         }
     }
 
@@ -262,30 +276,23 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
-        if p.favorites.isEmpty {
-            dropZone("Drag here for a Favorite", at: .favorites(0), p, open)
-        } else {
-            favoritesGrid(p, m, open)
-        }
+        // With none, the header turns into the place to drop the first.
+        if !p.favorites.isEmpty { favoritesGrid(p, m, open) }
     }
 
-    /// Somewhere to drop what is being dragged; nothing is there otherwise.
-    @ViewBuilder
+    /// Somewhere to drop what is being dragged (see DropSwap).
     private func dropZone(_ text: String, at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> some View {
-        if allowed(spot, p) {
-            Text(text)
-                .font(DS.TextStyle.caption)
-                .foregroundStyle(pal.textTertiary)
-                .frame(maxWidth: .infinity, minHeight: DS.Size.sizeRow)
-                .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
-                    .strokeBorder(pal.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
-                .contentShape(Rectangle())
-                .dropDestination(for: String.self) { keys, _ in
-                    dragging = nil
-                    return apply(keys, at: spot, p, open)
-                }
-                .transition(Motion.reveal(reduceMotion))
-        }
+        Text(text)
+            .font(DS.TextStyle.caption)
+            .foregroundStyle(pal.textTertiary)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
+                .strokeBorder(pal.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+            .contentShape(Rectangle())
+            .dropDestination(for: String.self) { keys, _ in
+                dragging = nil
+                return apply(keys, at: spot, p, open)
+            }
     }
 
     private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {

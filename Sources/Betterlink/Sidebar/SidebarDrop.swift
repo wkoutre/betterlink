@@ -125,3 +125,20 @@ struct DropRowModifier: ViewModifier {
             .overlay { DropMarker(zone: target?.id == id ? target?.zone : nil, horizontal: horizontal, color: color) }
     }
 }
+
+/// A line of the sidebar that turns into a place to drop while something is
+/// dragged, at the same height: a zone that came and went on its own pushed
+/// the rows away from the pointer mid-drag.
+struct DropSwap<Zone: View, Line: View>: View {
+    let showing: Bool
+    let height: CGFloat
+    @ViewBuilder let zone: Zone
+    @ViewBuilder let line: Line
+
+    var body: some View {
+        ZStack {
+            if showing { zone.transition(.opacity) } else { line.transition(.opacity) }
+        }
+        .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+    }
+}

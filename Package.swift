@@ -40,6 +40,8 @@ let package = Package(
             dependencies: ["BetterlinkCore"],
             resources: [.copy("Fixtures")],
         ),
+        // The app's own views, where a layout promise needs a test.
+        .testTarget(name: "BetterlinkTests", dependencies: ["Betterlink"]),
         .testTarget(name: "TabSyncCoreTests", dependencies: ["TabSyncCore"]),
     ],
     swiftLanguageModes: [.v5],
