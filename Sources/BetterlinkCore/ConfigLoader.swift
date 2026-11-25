@@ -52,7 +52,9 @@ public struct SettingsFolder: Equatable, Sendable {
     /// a dotfiles repo, say) is linked again, not copied: see below.
     public func copySettings(to target: SettingsFolder) throws {
         let fm = FileManager.default
-        let copies = [(rulesFile, target.rulesFile), (configFile, target.configFile)]
+        let sidebar = directory.appendingPathComponent("sidebar.json")
+        let copies = [(rulesFile, target.rulesFile), (configFile, target.configFile),
+                      (sidebar, target.directory.appendingPathComponent("sidebar.json"))]
             .filter { fm.fileExists(atPath: $0.0.path) && !fm.fileExists(atPath: $0.1.path) }
         // Copying must not turn a file betterlink would refuse into one it trusts.
         for (from, _) in copies {

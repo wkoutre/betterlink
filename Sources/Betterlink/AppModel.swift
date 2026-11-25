@@ -313,6 +313,7 @@ final class AppModel: ObservableObject {
         rulesWatcher = PathWatcher(url: store.file) { [weak self] in
             Task { @MainActor in self?.reloadRules() }
         }
+        SyncController.shared.localChanged()
         do {
             apply(try store.load())
             rulesError = nil
@@ -443,6 +444,9 @@ final class AppModel: ObservableObject {
                 if folder != self.paths { self.adoptFolder(folder) }
                 self.reloadRules()
                 self.reloadConfig(force: true)
+                SidebarLibraryModel.shared.reload()
+                // `betterlink sidebar settings set` writes the sidebar's settings.
+                SidebarController.shared.reloadSettings()
                 self.refreshPermissions()
                 // `betterlink menu-bar set` writes the setting from another process.
                 let shown = MenuBarIcon.isShown(in: MenuBarIcon.defaults())
@@ -458,6 +462,7 @@ final class AppModel: ObservableObject {
     }
 
     func startConfig(resourceDirectory: URL) {
+        defer { SyncController.shared.attach(settings: paths, note: { [weak self] in self?.note($0) }) }
         if paths.directory == SettingsFolder.defaultDirectory {
             do {
                 if try paths.adoptLegacyConfig() { note("Copied config.ts here from ~/.config/betterlink (the old copy is untouched).") }
@@ -487,7 +492,7 @@ final class AppModel: ObservableObject {
                                                  attributes: [.posixPermissions: 0o700])
         try? ConfigLoader.writeEditorSupport(paths: paths, catalog: catalog)
         dirWatcher = PathWatcher(url: paths.directory) { [weak self] in
-            Task { @MainActor in self?.reloadRules(); self?.reloadConfig() }
+            Task { @MainActor in self?.reloadRules(); self?.reloadConfig(); SidebarLibraryModel.shared.reload() }
         }
     }
 
@@ -510,9 +515,11 @@ final class AppModel: ObservableObject {
     private func adoptFolder(_ target: SettingsFolder) {
         paths = target
         note("Settings folder is now \(target.directory.path).")
+        SyncController.shared.attach(settings: target, note: { [weak self] in self?.note($0) })
         watchFolder()
         reloadRules()
         reloadConfig(force: true)
+        SidebarLibraryModel.shared.reload(folder: target)
     }
 
     func revealSettingsFolder() { NSWorkspace.shared.activateFileViewerSelecting([paths.directory]) }
@@ -524,6 +531,7 @@ final class AppModel: ObservableObject {
         fileWatcher = PathWatcher(url: paths.configFile) { [weak self] in
             Task { @MainActor in self?.reloadConfig() }
         }
+        SyncController.shared.localChanged()
         guard let compiler else { finishInitialLoad(); return }
         let source = try? String(contentsOf: paths.configFile, encoding: .utf8)
         // Same text and it loaded: nothing to do. After a failure, check again
@@ -701,4 +709,6 @@ final class AppModel: ObservableObject {
 
 extension Notification.Name {
     static let betterlinkNeedsAttention = Notification.Name("betterlinkNeedsAttention")
+    /// Shows a page of betterlink's window; the object is the page's raw value.
+    static let betterlinkOpenPage = Notification.Name("betterlinkOpenPage")
 }

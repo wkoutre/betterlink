@@ -1,0 +1,132 @@
+import AppKit
+import BetterlinkCore
+import SwiftUI
+
+/// General › Sync: the folder, and what this Mac syncs (docs/sync.md).
+struct SyncSettingsSection: View {
+    @ObservedObject private var sync = SyncController.shared
+    @ObservedObject private var lib = SidebarLibraryModel.shared
+
+    var body: some View {
+        DSSection {
+            LabeledContent("Sync folder") {
+                Text(sync.folder.map { $0.path.replacingOccurrences(of: NSHomeDirectory(), with: "~") } ?? "Off")
+                    .font(DS.TextStyle.code).foregroundStyle(DS.Palette.textSecondary).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            HStack(spacing: DS.Space.space2) {
+                Text(sync.status).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary).lineLimit(2)
+                Spacer()
+                if sync.folder != nil { Button("Turn Off") { sync.turnOff() } }
+                Button(sync.folder == nil ? "Choose Folder…" : "Change…") { chooseFolder() }
+            }
+            if sync.folder != nil {
+                Toggle(isOn: $sync.selection.global) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Global settings")
+                        Text("Link Rules, held-key rules, the fallback profile, Show log and config.ts.")
+                            .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    }
+                }
+                ForEach(lib.library.profiles) { p in
+                    profileRow(p.id, p.name)
+                }
+                ForEach(sync.offered, id: \.id) { o in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(o.name)
+                            Text("Shared from another Mac").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                        }
+                        Spacer()
+                        Button("Add") { sync.add(o.id) }
+                    }
+                }
+            }
+        } header: {
+            Text("Sync")
+        } footer: {
+            Text("Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes only its own file there and reads the others', so edits made on two Macs at once both land; when both change the same thing, the later change wins and the Log says so. Which Sidebar Profile each Chrome profile shows stays on each Mac.")
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private func profileRow(_ id: UUID, _ name: String) -> some View {
+        let on = Binding(get: { sync.selection.profiles[id] != nil },
+                         set: { sync.selection.profiles[id] = $0 ? .init() : nil })
+        let parts = sync.selection.profiles[id]
+        VStack(alignment: .leading, spacing: DS.Space.space2) {
+            Toggle(isOn: on) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Sidebar Profile \u{201C}\(name.trimmingCharacters(in: .whitespaces))\u{201D}")
+                    Text(summary(parts)).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                }
+            }
+            if let parts {
+                HStack(spacing: DS.Space.space2) {
+                    SyncPartChip(label: "Favorites", symbol: "star", isOn: parts.favorites) { sync.selection.profiles[id]?.favorites.toggle() }
+                    SyncPartChip(label: "Folders", symbol: "folder", isOn: parts.folders) { sync.selection.profiles[id]?.folders.toggle() }
+                    SyncPartChip(label: "Name", symbol: "textformat", isOn: parts.appearance) { sync.selection.profiles[id]?.appearance.toggle() }
+                }
+                .transition(.opacity)
+            }
+        }
+        .animation(.easeOut(duration: 0.15), value: parts != nil)
+    }
+
+    /// What this profile's switch covers now, in words.
+    private func summary(_ parts: SyncSelection.Parts?) -> String {
+        guard let parts else { return "Stays on this Mac." }
+        let names = [parts.favorites ? "favorites" : nil, parts.folders ? "folders" : nil, parts.appearance ? "name" : nil].compactMap { $0 }
+        switch names.count {
+        case 0: return "Pick what syncs below."
+        case 1: return "Syncs its \(names[0])."
+        default: return "Syncs its \(names.dropLast().joined(separator: ", ")) and \(names.last!)."
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Sync Here"
+        panel.message = "Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync."
+        if panel.runModal() == .OK, let url = panel.url { sync.choose(folder: url) }
+    }
+}
+
+/// One part of a Sidebar Profile that can sync, as a pill: filled with a
+/// check when it syncs, outlined when it doesn't.
+private struct SyncPartChip: View {
+    let label: String
+    let symbol: String
+    let isOn: Bool
+    let toggle: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: toggle) {
+            HStack(spacing: 5) {
+                Image(systemName: isOn ? "checkmark" : symbol)
+                    .font(.system(size: 10, weight: .semibold))
+                    .frame(width: 12)
+                Text(label).font(DS.TextStyle.caption)
+            }
+            .padding(.horizontal, 10)
+            .frame(height: 24)
+            .foregroundStyle(isOn ? DS.Palette.accentText : DS.Palette.textSecondary)
+            .background(Capsule().fill(isOn ? DS.Palette.accentTint : (hovering ? DS.Palette.hover : Color.clear)))
+            .overlay(Capsule().strokeBorder(isOn ? DS.Palette.accent.opacity(0.35) : DS.Palette.border, lineWidth: 1))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: isOn)
+        .accessibilityLabel(label)
+        .accessibilityValue(isOn ? "Syncs" : "Doesn't sync")
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .help(isOn ? "\(label) syncs. Click to keep it on this Mac." : "\(label) stays on this Mac. Click to sync it.")
+    }
+}
