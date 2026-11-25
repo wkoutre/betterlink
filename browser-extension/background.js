@@ -25,7 +25,15 @@ async function favicon(pageUrl) {
   return "data:image/png;base64," + btoa(bin);
 }
 
-const bridge = createBridge(chrome, send, () => Date.now(), favicon);
+// The version in the manifest.json on disk, read fresh. The browser reads an
+// unpacked copy's files from its folder each time, so this is what a reload
+// would start.
+async function diskVersion() {
+  const r = await fetch(chrome.runtime.getURL("manifest.json"), { cache: "no-store" });
+  return (await r.json()).version;
+}
+
+const bridge = createBridge(chrome, send, () => Date.now(), favicon, diskVersion);
 // Listeners must be registered synchronously at top level so they also wake the worker.
 bridge.attach();
 

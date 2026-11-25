@@ -24,6 +24,9 @@ struct CommandTests {
         #expect(json(.duplicate(7))["op"] as? String == "duplicate")
         #expect(json(.reload(7))["op"] as? String == "reload")
         #expect(json(.newWindow(with: 7))["op"] as? String == "newWindow")
+        let reloadSelf = json(.reloadSelf())
+        #expect(reloadSelf["op"] as? String == "reloadSelf")
+        #expect(reloadSelf["tabId"] == nil)
 
         let nav = json(.navigate(7, to: "https://home.example/"))
         #expect(nav["op"] as? String == "navigate")

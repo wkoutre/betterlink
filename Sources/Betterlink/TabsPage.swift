@@ -20,12 +20,19 @@ final class TabsModel: ObservableObject {
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
     @Published private(set) var registrationVersion = 0
+    /// The version of the Tabs extension in the folder browsers load it from
+    /// (`ExtensionCopy.folder`), or nil when nothing is there.
+    @Published private(set) var extensionVersion: String?
+    @Published private(set) var extensionError: String?
+    /// Sessions already asked to reload their extension: each is asked once.
+    private var askedToReload: Set<String> = []
     private var hub: SyncHub?
 
     /// Starts listening the first time the Tabs page opens or the sidebar
     /// turns on, so betterlink does no tab work for anyone who uses neither.
     func start() {
         guard hub == nil else { return }
+        refreshExtension()
         let hub = SyncHub(onLine: { path, m in
             // Two things saved links' held tabs need the moment the browser says
             // them: the tab an open made (its ack), and a tab closed on its own.
@@ -37,11 +44,45 @@ final class TabsModel: ObservableObject {
         }, onChange: { [weak self] s in
             DispatchQueue.main.async {
                 SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
-                self?.sessions = s; self?.lookUpProfiles(s)
+                self?.sessions = s; self?.lookUpProfiles(s); self?.reloadOutdatedExtensions(s)
             }
         })
         self.hub = hub
         hub.start()
+    }
+
+    /// Puts this app's copy of the Tabs extension where browsers load it from,
+    /// when this app's is newer or none is there yet (see `ExtensionCopy`).
+    func refreshExtension() {
+        let folder = ExtensionCopy.folder
+        if let bundled = ExtensionCopy.bundled() {
+            do {
+                try ExtensionCopy.refresh(from: bundled, to: folder)
+                extensionError = nil
+            } catch {
+                extensionError = "Couldn't put the Tabs extension in its folder: \(error.localizedDescription)"
+            }
+        }
+        extensionVersion = ExtensionCopy.version(of: folder)
+    }
+
+    /// Shows the extension's folder in Finder, ready to drag onto the browser's
+    /// Extensions page.
+    func showExtensionFolder() {
+        refreshExtension()
+        guard extensionVersion != nil else { return }
+        NSWorkspace.shared.activateFileViewerSelecting([ExtensionCopy.folder])
+    }
+
+    /// A browser still running the extension from before betterlink updated is
+    /// told to reload it, once. The extension reloads only if its own files
+    /// really changed, so a copy loaded from somewhere else stays as it is.
+    private func reloadOutdatedExtensions(_ sessions: [BrowserSession]) {
+        for s in sessions where !askedToReload.contains(s.id)
+            && ExtensionCopy.shouldReload(running: s.extensionVersion, folderVersion: extensionVersion, canReload: s.can(.reloadSelf)) {
+            askedToReload.insert(s.id)
+            hub?.send(.reloadSelf(), to: s.socketPath)
+        }
     }
 
     /// The browser profile a session runs in, once known ("Claude", "Work").
@@ -157,6 +198,7 @@ struct TabsPage: View {
             }
 
             DSSection {
+                ExtensionRow()
                 ForEach(model.browsers.filter { $0.family == .chromium && $0.dataFolder != nil }) { b in
                     BrowserRegistrationRow(browser: b, version: tabs.registrationVersion)
                 }
@@ -164,10 +206,10 @@ struct TabsPage: View {
                 Text("Browsers")
             } footer: {
                 VStack(alignment: .leading, spacing: 4) {
-                    if let err = tabs.registrationError {
+                    if let err = tabs.registrationError ?? tabs.extensionError {
                         Text(err).foregroundStyle(DS.Palette.danger)
                     }
-                    Text("Set Up writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then load the Tabs extension in that browser (chrome://extensions › Developer mode › Load unpacked › browser-extension).")
+                    Text("Set Up writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's tab helper. Then add the Tabs extension, once per browser profile: open chrome://extensions, turn on Developer mode, and drag the extension's folder from Finder onto the page. Leave Developer mode on, or the browser turns the extension off.")
                         .foregroundStyle(DS.Palette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -299,6 +341,31 @@ private struct SidebarSettings: View {
             }
         } header: {
             Text("Sidebar")
+        }
+    }
+}
+
+/// The Tabs extension on this Mac: its version, and its folder in Finder for
+/// dragging onto a browser's Extensions page.
+private struct ExtensionRow: View {
+    @ObservedObject private var tabs = TabsModel.shared
+
+    var body: some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Tabs extension")
+                Group {
+                    if let version = tabs.extensionVersion {
+                        Text("Version \(version). Updates with betterlink.")
+                    } else {
+                        Text("Not in this build. Load browser-extension from the source folder.")
+                    }
+                }
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+            }
+            Spacer()
+            Button("Show in Finder") { tabs.showExtensionFolder() }
+                .disabled(tabs.extensionVersion == nil)
         }
     }
 }

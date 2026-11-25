@@ -11,7 +11,7 @@ export const PROTOCOL = 1;
 
 // Every command this copy runs. Sent in the hello, so the app only offers what
 // the installed extension can do (an older copy keeps working, with less).
-export const OPS = ["snapshot", "open", "close", "activate", "move", "mute", "duplicate", "reload", "navigate", "closeMany", "newWindow"];
+export const OPS = ["snapshot", "open", "close", "activate", "move", "mute", "duplicate", "reload", "navigate", "closeMany", "newWindow", "reloadSelf"];
 
 // What the app may ask a tab to load. Never javascript: or data:.
 const OPENABLE = /^(https?|chrome|about|file):/i;
@@ -40,7 +40,11 @@ export function bounds(w) {
   return { left: w.left ?? null, top: w.top ?? null, width: w.width ?? null, height: w.height ?? null };
 }
 
-export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "") {
+//
+// `diskVersion()` resolves to the version in the manifest.json on disk. For a
+// copy loaded unpacked that can be newer than the one running, because the
+// betterlink app replaces the files when it updates.
+export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "", diskVersion = async () => "") {
   let seq = 0;
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
   const iconSent = new Map(); // tabId -> page URL whose icon was last sent
@@ -186,6 +190,17 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
         // The tab leaves its window for a new one of its own.
         await chrome.windows.create({ tabId: tabId(cmd), focused: true });
         return;
+      case "reloadSelf": {
+        // The app says the files this copy was loaded from have changed. Reload
+        // only if they really are another version: a copy loaded from somewhere
+        // the app doesn't manage, or the store's own copy, stays as it is, so
+        // this can never loop.
+        const running = chrome.runtime.getManifest().version;
+        let onDisk = "";
+        try { onDisk = await diskVersion(); } catch {}
+        if (!onDisk || onDisk === running) throw new Error("nothing newer on disk (running " + running + ")");
+        return { reload: true };
+      }
       default:
         throw new Error("unknown op: " + cmd.op);
     }
@@ -194,8 +209,10 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   async function handle(msg) {
     if (!msg || msg.type !== "cmd") return;
     try {
-      const extra = await run(msg);
-      send({ type: "ack", id: msg.id, ok: true, t: now(), ...(extra || {}) });
+      const { reload, ...extra } = (await run(msg)) || {};
+      send({ type: "ack", id: msg.id, ok: true, t: now(), ...extra });
+      // After the ack, so the app hears yes before this copy restarts.
+      if (reload) chrome.runtime.reload();
     } catch (e) {
       send({ type: "ack", id: msg.id, ok: false, error: String((e && e.message) || e), t: now() });
     }
