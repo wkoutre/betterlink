@@ -34,6 +34,8 @@ struct SidebarView: View {
     /// The row the arrow keys are on, while the list has the keyboard.
     @State private var cursor: SidebarRowID?
     @FocusState private var listFocused: Bool
+    @FocusState private var newTabFocused: Bool
+    @State private var downKeyMonitor: Any?
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -456,7 +458,8 @@ struct SidebarView: View {
             sidebar.returnFocusToBrowser()
         // Held down, these must not open or close row after row.
         case .return where press.phase == .down: openCursor(p, m)
-        case .delete where press.phase == .down, .deleteForward where press.phase == .down: deleteCursor(p, m)
+        // The Delete key types U+007F; KeyEquivalent.delete is U+0008.
+        case .delete where press.phase == .down, "\u{7F}" where press.phase == .down, .deleteForward where press.phase == .down: deleteCursor(p, m)
         default: return .ignored
         }
         return .handled
@@ -628,8 +631,11 @@ struct SidebarView: View {
                 .textFieldStyle(.plain)
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
-                // Down from the field is the way into the rows.
-                .onKeyPress(.downArrow) { listFocused = true; return .handled }
+                .focused($newTabFocused)
+                // Down from the field is the way into the rows. The field
+                // editor takes the arrows before onKeyPress, so watch for it.
+                .onChange(of: newTabFocused) { _, on in watchDownKey(on) }
+                .onDisappear { watchDownKey(false) }
                 .onSubmit {
                     guard !newURL.isEmpty else { return }
                     tabs.open(newURL, in: m.session, windowId: m.window?.id)
@@ -639,6 +645,17 @@ struct SidebarView: View {
         }
         .padding(.horizontal, DS.Space.space2)
         .frame(minHeight: DS.Size.sizeRow)
+    }
+
+    private func watchDownKey(_ on: Bool) {
+        if let m = downKeyMonitor { NSEvent.removeMonitor(m); downKeyMonitor = nil }
+        guard on else { return }
+        downKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+            guard e.specialKey == .downArrow,
+                  e.modifierFlags.isDisjoint(with: [.command, .control, .option, .shift]) else { return e }
+            listFocused = true
+            return nil
+        }
     }
 
     @ViewBuilder

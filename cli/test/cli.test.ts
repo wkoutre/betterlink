@@ -135,6 +135,9 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'settings', 'set', '--show-log', 'off').code).toBe(0)
     expect(run(d, 'settings', 'get').json.showLog).toBe(false)
     expect(run(d, 'settings', 'set', '--show-log', 'false').code).not.toBe(0)
+    // Refused before anything is saved: no side but left and right, no Safari.
+    expect(run(d, 'sidebar', 'settings', 'set', '--side', 'auto').code).not.toBe(0)
+    expect(run(d, 'sidebar', 'settings', 'set', '--browsers', 'Safari').code).not.toBe(0)
   })
 
   test('login set off sends enabled: false', () => {
