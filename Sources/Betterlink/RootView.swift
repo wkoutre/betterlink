@@ -7,7 +7,7 @@ struct RootView: View {
     /// The open page, remembered between launches. BETTERLINK_PAGE picks the
     /// first page (a development aid for screenshots).
     @State private var pageRaw = ProcessInfo.processInfo.environment["BETTERLINK_PAGE"]
-        ?? UserDefaults.standard.string(forKey: "page") ?? Page.rules.rawValue
+        ?? MenuBarIcon.defaults().string(forKey: "page") ?? Page.rules.rawValue
 
     enum Page: String, CaseIterable, Identifiable {
         case rules, profiles, permissions, agents
@@ -59,7 +59,7 @@ struct RootView: View {
     private var page: Binding<Page?> {
         Binding(get: { Page(rawValue: pageRaw) ?? .rules }, set: {
             pageRaw = ($0 ?? .rules).rawValue
-            UserDefaults.standard.set(pageRaw, forKey: "page")
+            MenuBarIcon.defaults().set(pageRaw, forKey: "page")
         })
     }
 
@@ -217,7 +217,7 @@ private struct NavHeader: View {
 @MainActor
 enum BetterlinkWindow {
     static func open(_ page: RootView.Page) {
-        UserDefaults.standard.set(page.rawValue, forKey: "page")
+        MenuBarIcon.defaults().set(page.rawValue, forKey: "page")
         (NSApp.delegate as? AppDelegate)?.showWindow()
         NotificationCenter.default.post(name: .betterlinkOpenPage, object: page.rawValue)
     }

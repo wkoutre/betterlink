@@ -25,7 +25,7 @@ CI runs `make test` and `make test-cli` on macOS for every pull request, and [zi
 
 If betterlink is installed on your Mac, your real rules live in its settings folder. A test that writes there can delete a rule you rely on.
 
-- Set `BETTERLINK_HOME` to a temporary folder for anything that writes: running a built app, the CLI, or a script.
+- Set `BETTERLINK_HOME` to a temporary folder for anything that writes: running a built app, the CLI, or a script. It also gives that folder its own preferences (the sidebar, Sync, the toast), so a fresh folder starts with Sync off.
 
   ```sh
   export BETTERLINK_HOME="$(mktemp -d)"
