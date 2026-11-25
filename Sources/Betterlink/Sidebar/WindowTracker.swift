@@ -133,7 +133,16 @@ final class WindowTracker: NSObject {
         var origin = ax.origin, size = ax.size
         func move() { if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) } }
         func resize() { if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) } }
-        if growing { move(); resize() } else { resize(); move() }
+        // The far edge must not move: the origin goes where the width the window
+        // really has leaves it. A browser that is slow to narrow (or won't) is
+        // then simply not moved yet, never pushed off the screen.
+        func keepFarEdge() {
+            guard moveOrigin, let sv: AXValue = copy(win, kAXSizeAttribute) else { return }
+            var real = CGSize.zero
+            guard AXValueGetValue(sv, .cgSize, &real) else { return }
+            origin.x = ax.maxX - real.width
+        }
+        if growing { move(); resize(); keepFarEdge(); move() } else { resize(); keepFarEdge(); move() }
     }
 
     /// Moves/resizes a browser window, the bound one by default. Cocoa coordinates.

@@ -50,15 +50,20 @@ final class SidebarController: ObservableObject {
     private let tracker: WindowTracker
     private var panel: SidebarPanel?
     private var current: WindowTracker.Target?
-    /// A window this sidebar resized, by window: the space the user gave the
-    /// pair, and the frame the window took inside it.
+    /// A window that lent the sidebar width (WidthLoan), by window.
     private struct Fit {
-        var outer: CGRect, inner: CGRect, side: SidebarSide
+        var loan: WidthLoan
         /// The window itself, to give it its space back later.
         var window: AXUIElement?
         var bundleId: String
         /// Its window-server number, which FitMemory knows it by.
         var number: UInt32?
+        var inner: CGRect { loan.inner }
+        var outer: CGRect { loan.outer }
+        var side: SidebarSide { loan.side }
+    }
+    private func makeFit(outer: CGRect, inner: CGRect, side: SidebarSide, _ t: WindowTracker.Target) -> Fit {
+        Fit(loan: WidthLoan(outer: outer, inner: inner, side: side), window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
     }
     /// Mirrored into `memory`, which outlives the app, so a window narrowed
     /// before a relaunch is still known as narrowed (review: geometry alone
@@ -198,9 +203,10 @@ final class SidebarController: ObservableObject {
         }
         let visible = panel.frame
         let outer = attached == .left ? visible.minX : visible.maxX
-        let fit = fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0 : nil }
+        // What the window lent comes back, wherever it has been since.
+        let back = fits[t.windowHash]?.loan.givenBack(from: t.frame, screen: screen(for: t.frame)) ?? t.frame
         var run = SlideRun(slide: SidebarSlide(shown: true), side: attached, outer: outer,
-                           hiddenWindow: fit?.outer ?? t.frame, shownWindow: t.frame, windowHash: t.windowHash,
+                           hiddenWindow: back, shownWindow: t.frame, windowHash: t.windowHash,
                            window: tracker.boundWindow, windowNumber: tracker.boundWindowNumber)
         run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
         start(run)
@@ -230,8 +236,7 @@ final class SidebarController: ObservableObject {
         guard let attached = panel.attachedSide else { layout(); return }
         let outer = attached == .left ? panel.frame.minX : panel.frame.maxX
         if inner != nil {
-            fits[t.windowHash] = Fit(outer: t.frame, inner: shown, side: attached,
-                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+            fits[t.windowHash] = makeFit(outer: t.frame, inner: shown, side: attached, t)
             askedAt = Date()
         }
         panel.reveal = outer
@@ -298,10 +303,28 @@ final class SidebarController: ObservableObject {
             panel?.hideNow()
             panel?.reveal = nil
             fits[run.windowHash] = nil
+            // A browser that answered late or not at all is asked once more:
+            // the window must end up with what it lent.
+            if run.fitted, let win = run.window, let now = tracker.currentFrame(of: win), !Self.same(now, run.hiddenWindow) {
+                tracker.setWindowFrame(run.hiddenWindow, of: win)
+            }
             giveSpaceBack() // any other window narrowed for the sidebar
         } else {
             panel?.reveal = nil
+            if run.fitted, let win = run.window, let now = tracker.currentFrame(of: win) { slidIn(run, at: now) }
             layout()
+        }
+    }
+
+    /// The window's answer to a slide in: what it lent, or a refusal.
+    private func slidIn(_ run: SlideRun, at now: CGRect) {
+        askedAt = Date() // a late answer still counts as the answer
+        if now.width > run.hiddenWindow.width - 2 {
+            // It did not narrow: the sidebar covers its edge instead.
+            fits[run.windowHash] = nil
+            refused = now
+        } else if let l = fits[run.windowHash]?.loan.settled(at: now, screen: screen(for: now), justAsked: true) {
+            fits[run.windowHash]?.loan = l
         }
     }
 
@@ -344,7 +367,8 @@ final class SidebarController: ObservableObject {
             // A window that can't be read now (a hung browser) keeps its record,
             // so it is recognised later instead of narrowed again.
             guard let win = f.window, let now = tracker.currentFrame(of: win) else { continue }
-            if Self.same(now, f.inner) { tracker.setWindowFrame(f.outer, of: win) }
+            let back = f.loan.givenBack(from: now, screen: screen(for: now))
+            if !Self.same(back, now) { tracker.setWindowFrame(back, of: win) }
             fits[k] = nil
         }
         // Removing a window from `fits` forgets its record. A window narrowed
@@ -440,23 +464,33 @@ final class SidebarController: ObservableObject {
         if target != t { target = t }
         guard enabled, !collapsed, !t.fullScreen else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
-        var outer = t.frame
+        let screen = screen(for: t.frame)
         if let f = fits[t.windowHash] {
             if Self.same(f.inner, t.frame) { return }
+            let justAsked = Date().timeIntervalSince(askedAt) < 0.5
             if learnMinWidth(asked: f.inner, got: t) {
-                outer = f.outer // the browser widened it again after we asked
+                fits[t.windowHash] = nil
+                fit(t, into: f.outer) // it stops there: place the pair knowing that
+                return layout()
             }
-            fits[t.windowHash] = nil // otherwise the user moved, resized or snapped it again
+            if let loan = f.loan.settled(at: t.frame, screen: screen, justAsked: justAsked) {
+                fits[t.windowHash]?.loan = loan
+                // Moved to where the sidebar has no room beside it: the window
+                // makes that room, out of what hiding would give back.
+                if !justAsked, SidebarGeometry.room(beside: t.frame, screen: screen, side: side) < width - 2 {
+                    fit(t, into: loan.givenBack(from: t.frame, screen: screen))
+                }
+                return layout()
+            }
+            fits[t.windowHash] = nil // snapped again: the new tile is the pair's
         }
         guard refused == nil else { return }
         // Narrowed before (this launch or an earlier one) and not moved since: keep it.
         if fits[t.windowHash] == nil, let n = tracker.boundWindowNumber, let e = memory.fitted(t.frame, window: n) {
-            fits[t.windowHash] = Fit(outer: e.outer, inner: t.frame,
-                                     side: side,
-                                     window: tracker.boundWindow, bundleId: t.bundleId, number: n)
+            fits[t.windowHash] = makeFit(outer: e.outer, inner: t.frame, side: side, t)
             return layout()
         }
-        fit(t, into: outer)
+        fit(t, into: t.frame)
         layout()
     }
 
@@ -467,24 +501,28 @@ final class SidebarController: ObservableObject {
         let screen = screen(for: outer)
         for _ in 0..<2 {
             guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: side,
-                                                      minWindowWidth: minWidths[t.windowHash] ?? 500) else { return }
-            fits[t.windowHash] = Fit(outer: outer, inner: inner,
-                                     side: side,
-                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+                                                      minWindowWidth: minWidths[t.windowHash] ?? 500) else {
+                // No room beside it and none to take: cover its edge.
+                if SidebarGeometry.room(beside: outer, screen: screen, side: side) < width - 2 { refused = t.frame }
+                return
+            }
+            fits[t.windowHash] = makeFit(outer: outer, inner: inner, side: side, t)
             askedAt = Date()
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }
             if Self.same(now.frame, inner) { return }
-            if learnMinWidth(asked: inner, got: now) { continue }
-            if Self.same(now.frame, t.frame) {
+            if Self.same(now.frame, t.frame) || SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) {
+                // It would not narrow, only move: put it back and cover its edge.
+                if !Self.same(now.frame, t.frame) { tracker.setWindowFrame(t.frame) }
                 fits[t.windowHash] = nil
                 refused = t.frame
-            } else {
-                fits[t.windowHash]?.inner = now.frame
+                return
             }
+            if learnMinWidth(asked: inner, got: now) { continue }
+            fits[t.windowHash]?.loan.inner = now.frame
             return
         }
-        if let now = current, now.windowHash == t.windowHash { fits[t.windowHash]?.inner = now.frame }
+        if let now = current, now.windowHash == t.windowHash { fits[t.windowHash]?.loan.inner = now.frame }
     }
 
     /// True when the window kept the place it was asked to take but is wider
@@ -501,9 +539,9 @@ final class SidebarController: ObservableObject {
     private func refit() {
         guard enabled, let t = current else { return }
         refused = nil
-        if let f = fits[t.windowHash], Self.same(f.inner, t.frame) {
+        if let f = fits[t.windowHash] {
             fits[t.windowHash] = nil
-            tracker.setWindowFrame(f.outer)
+            tracker.setWindowFrame(f.loan.givenBack(from: t.frame, screen: screen(for: t.frame)))
         }
         if let now = current { settle(now) }
         layout()
@@ -525,7 +563,7 @@ final class SidebarController: ObservableObject {
     func beginResize() -> Bool {
         guard slideRun == nil, enabled, !collapsed, let t = current, !t.fullScreen, let panel, panel.isVisible else { return false }
         resizing = Resize(window: t.frame, width: width, side: placedSide, windowHash: t.windowHash,
-                          outer: fits[t.windowHash].flatMap { Self.same($0.inner, t.frame) ? $0.outer : nil },
+                          outer: fits[t.windowHash]?.loan.settled(at: t.frame, screen: screen(for: t.frame), justAsked: false)?.outer,
                           covers: panel.attachedSide == nil)
         return true
     }
@@ -581,10 +619,9 @@ final class SidebarController: ObservableObject {
         guard let r = resizing else { return }
         resizing = nil
         save()
-        // A narrowed window stays known as narrowed, at its new width.
-        if let outer = r.outer, let t = current, t.windowHash == r.windowHash {
-            fits[t.windowHash] = Fit(outer: outer, inner: t.frame, side: r.side,
-                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+        // What the window lent, at its new width: a wider sidebar's extra too.
+        if let t = current, t.windowHash == r.windowHash, r.outer != nil || t.frame.width < r.window.width - 2 {
+            fits[t.windowHash] = makeFit(outer: r.outer ?? r.window, inner: t.frame, side: r.side, t)
         }
         layout()
     }
@@ -696,12 +733,11 @@ final class SidebarController: ObservableObject {
                                                           minWindowWidth: minWidths[t.windowHash] ?? 500)
         if abs(rect.width - placed.width) >= 2 {
             // Given a tile: hiding the sidebar later gives the browser all of it.
-            fits[t.windowHash] = Fit(outer: rect, inner: inner, side: side,
-                                     window: tracker.boundWindow, bundleId: t.bundleId, number: tracker.boundWindowNumber)
+            fits[t.windowHash] = makeFit(outer: rect, inner: inner, side: side, t)
         } else if var f = fits[t.windowHash] {
             // Carried along: the space to give back moves with the window.
-            f.outer = CGRect(x: f.outer.minX + inner.minX - t.frame.minX, y: inner.minY, width: f.outer.width, height: inner.height)
-            f.inner = inner
+            f.loan.outer = CGRect(x: f.outer.minX + inner.minX - t.frame.minX, y: inner.minY, width: f.outer.width, height: inner.height)
+            f.loan.inner = inner
             fits[t.windowHash] = f
         }
         askedAt = Date()

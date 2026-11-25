@@ -51,6 +51,17 @@ public enum SidebarGeometry {
                                 side: side, overlaps: x != outside)
     }
 
+    /// The free width beside the window on the sidebar's side.
+    public static func room(beside w: CGRect, screen: CGRect, side: SidebarSide) -> CGFloat {
+        side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+    }
+
+    /// Whether going from `a` to `b` pushes the window off the screen: an edge
+    /// that was on it is now past it.
+    public static func leaves(_ screen: CGRect, from a: CGRect, to b: CGRect) -> Bool {
+        (a.maxX <= screen.maxX + 2 && b.maxX > screen.maxX + 2) || (a.minX >= screen.minX - 2 && b.minX < screen.minX - 2)
+    }
+
     /// The narrowest and widest the sidebar gets.
     public static let widths: ClosedRange<CGFloat> = 200...440
 
@@ -141,6 +152,9 @@ public enum SidebarGeometry {
         } else {
             out.origin.x = max(screen.minX, min(w.minX, screen.maxX - width - out.width))
         }
+        // A browser too wide for the sidebar to fit beside it on this screen at
+        // all keeps its place: never pushed off the screen's other edge.
+        if leaves(screen, from: w, to: out) || out.width + width > screen.width + 2 { return nil }
         return out == w ? nil : out
     }
 }

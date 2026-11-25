@@ -87,6 +87,43 @@ struct SidebarGeometryTests {
         #expect(width(440, min: 950) == 280)  // already narrower than that: no more
     }
 
+    /// Nick, 2026-11-25, on a laptop: a window filling the screen, the sidebar
+    /// on the left. It shrinks from its left side; its right edge stays.
+    @Test func aWindowFillingTheScreenIsNeverPushedOffIt() {
+        for (w, h) in [(CGFloat(1512), CGFloat(944)), (1920, 1049), (1280, 775), (1000, 700)] {
+            let s = CGRect(x: 0, y: 0, width: w, height: h)
+            for side in SidebarSide.allCases {
+                for minWidth in [CGFloat(500), 626, 900, w] { // w: won't narrow at all
+                    for sidebar in [CGFloat(200), 280, 440] {
+                        let out = SidebarGeometry.settled(window: s, screen: s, width: sidebar, side: side, minWindowWidth: minWidth) ?? s
+                        #expect(!SidebarGeometry.leaves(s, from: s, to: out), "\(s) \(side) \(minWidth) \(sidebar) \(out)")
+                        #expect(side == .left ? abs(out.maxX - s.maxX) < 1 : abs(out.minX - s.minX) < 1, "\(s) \(side) \(minWidth) \(out)")
+                    }
+                }
+            }
+        }
+    }
+
+    @Test func everyFrameOfTheSlideKeepsTheFarEdge() {
+        let full = CGRect(x: 0, y: 0, width: 1512, height: 944)
+        for side in SidebarSide.allCases {
+            let shown = SidebarGeometry.settled(window: full, screen: full, width: 280, side: side)!
+            for i in 0...20 {
+                let f = SidebarSlide.frames(hiddenWindow: full, shownWindow: shown, outerEdge: side == .left ? 0 : 1512, width: 280,
+                                            side: side, progress: Double(i) / 20)
+                #expect(side == .left ? f.window.maxX == 1512 : f.window.minX == 0)
+                #expect(f.window.width <= 1512)
+            }
+        }
+    }
+
+    @Test func leavingTheScreenIsOnlyForAnEdgeThatWasOnIt() {
+        let s = CGRect(x: 0, y: 0, width: 1000, height: 700)
+        #expect(SidebarGeometry.leaves(s, from: s, to: s.offsetBy(dx: 280, dy: 0)))
+        #expect(SidebarGeometry.leaves(s, from: s, to: s.offsetBy(dx: -5, dy: 0)))
+        #expect(!SidebarGeometry.leaves(s, from: CGRect(x: 600, y: 0, width: 600, height: 500), to: CGRect(x: 700, y: 0, width: 600, height: 500)))
+    }
+
     /// A saved "auto" (removed) reads as no side, so the default is used.
     @Test func autoIsNoLongerASide() { #expect(SidebarSide(rawValue: "auto") == nil) }
 
