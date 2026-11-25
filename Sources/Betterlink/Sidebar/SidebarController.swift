@@ -530,7 +530,10 @@ final class SidebarController: ObservableObject {
     /// after asking; later, it is the user widening the window.
     private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target) -> Bool {
         guard Date().timeIntervalSince(askedAt) < 0.5, abs(t.frame.minX - asked.minX) < 2, abs(t.frame.height - asked.height) < 2,
-              t.frame.width > asked.width + 2, t.frame.width > (minWidths[t.windowHash] ?? 0) + 2 else { return false }
+              t.frame.width > asked.width + 2, t.frame.width > (minWidths[t.windowHash] ?? 0) + 2,
+              // It did narrow. One still at its full width hasn't answered yet (or
+              // won't): that width is no minimum.
+              t.frame.width < (fits[t.windowHash]?.outer.width ?? .infinity) - 2 else { return false }
         minWidths[t.windowHash] = t.frame.width
         return true
     }
