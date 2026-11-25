@@ -22,7 +22,8 @@ func seconds(_ t: UInt64) -> Double { Double(t) * Double(base.numer) / Double(ba
 
 var args = Array(CommandLine.arguments.dropFirst())
 func option(_ name: String) -> Double? {
-    guard let i = args.firstIndex(of: name), args.indices.contains(i + 1), let v = Double(args[i + 1]) else { return nil }
+    guard let i = args.firstIndex(of: name) else { return nil }
+    guard args.indices.contains(i + 1), let v = Double(args[i + 1]) else { print("\(name) needs a number"); exit(2) }
     args.removeSubrange(i...(i + 1))
     return v
 }
@@ -31,7 +32,10 @@ var failed = false
 guard let first = args.first, let span = Double(first), args.count > 1 else {
     print("usage: measure-resources [--max-cpu <%>] [--max-wakeups <per second>] <seconds> <pid> [<pid> ...]"); exit(2)
 }
-let pids = args.dropFirst().compactMap { pid_t($0) }
+let pids = args.dropFirst().map { a -> pid_t in
+    guard let p = pid_t(a) else { print("\(a) is not a pid"); exit(2) }
+    return p
+}
 let before = pids.map(usage), start = Date()
 Thread.sleep(forTimeInterval: span)
 let took = Date().timeIntervalSince(start)

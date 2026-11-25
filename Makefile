@@ -74,8 +74,13 @@ test-tabs:
 	$(SWIFTPM_LOCK) swift build --product betterlink-tabs $(SWIFT_JOBS)
 	node --test browser-extension/tests/*.test.mjs e2e/*.test.mjs
 
-# Fails when the built app or the tab host does anything while nothing happens
-# (scripts/check-idle.sh). Opens the app's window for half a minute.
+.build/measure-resources: scripts/measure-resources.swift
+	mkdir -p .build
+	$(SWIFTPM_LOCK) swiftc -O $< -o $@
+
+# Fails when the built app (tab sync on, sidebar and Sync off) or the tab host
+# keeps busy while nothing happens (scripts/check-idle.sh). Opens the app's
+# window for half a minute.
 check-idle: build
 	./scripts/check-idle.sh
 
