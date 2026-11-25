@@ -266,8 +266,8 @@ final class AppModel: ObservableObject {
     /// Before 0.2 the fallback and the log switch lived in the app's
     /// preferences; they now live in rules.json. Moves them once.
     private func migrateDefaultsIntoRulesJSON() {
-        // A run on another folder (BETTERLINK_HOME, for tests) shares the
-        // app's preferences; it must not move them out of the real folder.
+        // A run on another folder (BETTERLINK_HOME, for tests) must not move
+        // the app's own preferences into it.
         guard !folderFromEnvironment else { return }
         let d = UserDefaults.standard
         let oldFallback = d.string(forKey: "fallbackProfile").map(ProfileRef.init(stored:))
