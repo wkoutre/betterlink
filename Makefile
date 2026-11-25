@@ -42,7 +42,7 @@ SWIFT_TEST_FLAGS ?= -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) -Xlinker -F -Xlinker 
 	-Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) -Xlinker -rpath -Xlinker $(DEVELOPER_DIR)/Library/Developer/usr/lib
 endif
 
-.PHONY: fetch tokens icon cli build test test-cli test-tabs install run clean
+.PHONY: fetch tokens icon cli build test test-cli test-tabs check-idle install run clean
 
 # The TypeScript compiler bundled for config.ts, checksum-pinned.
 fetch:
@@ -73,6 +73,11 @@ test-tabs:
 	$(SWIFTPM_LOCK) swift build --product betterlink-tabhost $(SWIFT_JOBS)
 	$(SWIFTPM_LOCK) swift build --product betterlink-tabs $(SWIFT_JOBS)
 	node --test browser-extension/tests/*.test.mjs e2e/*.test.mjs
+
+# Fails when the built app or the tab host does anything while nothing happens
+# (scripts/check-idle.sh). Opens the app's window for half a minute.
+check-idle: build
+	./scripts/check-idle.sh
 
 # Runs the CLI against the built app and a temporary settings folder.
 test-cli: build

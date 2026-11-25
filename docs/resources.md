@@ -16,9 +16,12 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
+`make check-idle` fails when the built app (its Sidebar page open, so the tab sync runs) or the tab host uses more than 1% of a core or wakes more than 5 times a second with nothing happening. CI runs it on every pull request; the limits are loose because CI machines are noisy.
+
 How it stays there:
 
 - **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, or every 2 seconds while the sidebar is hidden or no browser is in front.
+- **Rows are drawn again only when something they show or use changed** (`SkipUnchanged`, `RowKey` in SidebarView): another tab's title isn't such a thing.
 - **The host drains its pool per read** (`e2e/host-memory.test.mjs` fails if its memory grows).
 - **The extension says nothing** when an update changes nothing the app sees.
 - **Mouse drags are watched** only while a browser is in front.

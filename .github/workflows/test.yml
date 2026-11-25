@@ -26,6 +26,7 @@ jobs:
       - run: make test
       - run: make test-cli
       - run: make test-tabs
+      - run: ./scripts/check-idle.sh # against the app test-cli built
       # Package.resolved pins Sparkle to a commit. A build that had to change
       # it means the committed pins are stale: run `swift package resolve`
       # and commit the result.
