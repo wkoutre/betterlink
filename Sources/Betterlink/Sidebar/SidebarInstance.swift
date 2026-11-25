@@ -364,7 +364,8 @@ final class SidebarInstance: ObservableObject {
     /// True when the window shows the browser's minimum width, not known yet
     /// (`SidebarGeometry.minimumWidth`): `wasWidth` is how wide it was before
     /// it was asked. Only right after asking; later, it is the user widening
-    /// the window.
+    /// the window. Never from a drag of the edge (EdgeDrag): mid-drag a window
+    /// that has not answered yet looks the same.
     private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target, wasWidth: CGFloat) -> Bool {
         guard Date().timeIntervalSince(askedAt) < 0.5,
               let w = SidebarGeometry.minimumWidth(asked: asked, got: t.frame, wasWidth: wasWidth),
@@ -395,13 +396,20 @@ final class SidebarInstance: ObservableObject {
 
     // MARK: - Resizing by the edge
 
-    /// A drag of the edge between the sidebar and the window, from where it began.
+    /// A drag of the edge between the sidebar and the window (EdgeDrag): the
+    /// window is asked to make room, and the sidebar is as wide as the room it
+    /// has really made.
     private struct Resize {
-        var window: CGRect, width: CGFloat, side: SidebarSide
+        var drag: EdgeDrag
         /// The space a narrowed window gave up, to give back later.
         var outer: CGRect?
-        /// The sidebar covers the window's edge: only the sidebar changes.
-        var covers: Bool
+        /// How much wider than at the start the pointer wants the sidebar.
+        var delta: CGFloat = 0
+        /// The frame last asked of the window, so it isn't asked twice.
+        var asked: CGRect
+        /// Where it was last put back for that ask, so a browser that won't
+        /// go there isn't told again every tick.
+        var put: CGRect?
     }
     private var resizing: Resize?
 
@@ -410,8 +418,8 @@ final class SidebarInstance: ObservableObject {
         guard slideRun == nil, !hidden, isShown, let panel, panel.isVisible else { return false }
         let t = window.target
         let l = loan?.seen(at: t.frame, screen: screen(for: t.frame)).loan
-        resizing = Resize(window: t.frame, width: width, side: placedSide,
-                          outer: l?.phase == .lent ? l?.outer : nil, covers: panel.attachedSide == nil)
+        resizing = Resize(drag: EdgeDrag(window: t.frame, width: width, side: placedSide, covers: panel.attachedSide == nil),
+                          outer: l?.phase == .lent ? l?.outer : nil, asked: t.frame)
         return true
     }
 
@@ -429,6 +437,8 @@ final class SidebarInstance: ObservableObject {
             if x != last {
                 last = x
                 self.resize(by: self.placedSide == .right ? start - x : x - start)
+            } else {
+                self.keepFarEdge() // an answer that came after the pointer stopped
             }
             // Over: the button is up, or something else ended the resize.
             guard self.resizing == nil || NSEvent.pressedMouseButtons & 1 == 0 else { return }
@@ -442,31 +452,55 @@ final class SidebarInstance: ObservableObject {
         edgeTimer = t
     }
 
-    /// The sidebar `delta` points wider than when the drag began.
+    /// The pointer wants the sidebar `delta` points wider than when the drag
+    /// began. The window is asked for that room; the sidebar takes what the
+    /// window has made (follow()), not what was asked.
     func resize(by delta: CGFloat) {
-        guard let r = resizing else { return }
-        let new = SidebarGeometry.resized(window: r.window, width: r.width, to: r.width + delta, side: r.side,
-                                          minWindowWidth: r.covers ? 0 : minWidth ?? 500)
-        guard new.width != width else { return }
-        width = new.width
-        if !r.covers {
-            askedAt = Date()
-            tracker.setFrame(new.window, of: window)
-            // A browser at its minimum keeps its width: later steps stop there.
-            if learnMinWidth(asked: new.window, got: window.target, wasWidth: loan?.outer.width ?? .infinity) { return resize(by: delta) }
+        guard var r = resizing else { return }
+        r.delta = delta
+        let ask = r.drag.ask(delta: delta).flatMap { $0 == r.asked ? nil : $0 }
+        if let ask { r.asked = ask; r.put = nil }
+        resizing = r
+        if let ask {
+            // One step that keeps the far edge whatever width the browser
+            // takes: a window at its minimum is not moved off its tile.
+            AXWindow.slide(window.element, to: ask, moveOrigin: r.drag.side == .left,
+                           growing: ask.width > window.target.frame.width)
+            window.watcher?.refresh(window)
         }
+        keepFarEdge()
         follow()
+    }
+
+    /// Mid-drag: a window that narrowed where it stood (an answer that came
+    /// late) goes back to the far edge the drag began with.
+    private func keepFarEdge() {
+        guard var r = resizing, let at = r.drag.kept(window.target.frame), at != r.put else { return }
+        r.put = at
+        resizing = r
+        tracker.setFrame(at, of: window)
+    }
+
+    /// Mid-drag the sidebar is as wide as the room the window has made.
+    private func trackResize() {
+        guard let r = resizing else { return }
+        let w = Double(r.drag.width(delta: r.delta, beside: window.target.frame))
+        if w != width { width = w }
     }
 
     func endResize() {
         guard let r = resizing else { return }
+        // Where the window is now, an answer still on its way included: the
+        // width saved and the loan are what it really gave.
+        window.watcher?.refresh(window)
+        if let at = r.drag.kept(window.target.frame) { tracker.setFrame(at, of: window) }
+        trackResize()
         resizing = nil
         sidebar.widthChosen(width, for: self)
-        // What the window lent, at its new width: a wider sidebar's extra too.
-        let t = window.target
-        if r.outer != nil || t.frame.width < r.window.width - 2 {
-            loan = .lent(outer: r.outer ?? r.window, inner: t.frame, side: r.side)
-        }
+        let now = window.target.frame
+        if let l = r.drag.loan(lent: r.outer, at: now) { loan = l }
+        DragTrace.log("edge drag: window \(window.number) \(r.drag.side) wanted \(Int(r.delta)), window \(r.drag.window) -> \(now), "
+                      + "sidebar \(Int(r.drag.width)) -> \(Int(width)), lent \(Int(loan?.taken ?? 0))")
         layout()
     }
 
@@ -479,6 +513,7 @@ final class SidebarInstance: ObservableObject {
     /// The window moved or resized: the panel stays beside it, on a Space
     /// that isn't showing too.
     func follow() {
+        trackResize()
         // A slide places the panel itself, frame by frame.
         guard slideRun == nil, panel?.isVisible == true else { return }
         placePanel(placement(beside: window.target.frame))
