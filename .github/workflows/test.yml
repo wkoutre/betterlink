@@ -1,7 +1,15 @@
 name: test
 on:
+  # Main is tested again only for merges the release workflow skips (its
+  # paths-ignore). Every other merge runs release.yml, whose own test job runs
+  # make test + make test-cli on main before anything ships, so a second
+  # macOS run here would test the same commit twice.
   push:
     branches: ["main"]
+    paths:
+      - "Tests/**"
+      - "cli/test/**"
+      - ".github/workflows/test.yml"
   pull_request:
 permissions: {}
 # A newer push to the same PR replaces the run in progress.
@@ -9,7 +17,45 @@ concurrency:
   group: test-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # macOS minutes cost ten times Linux ones, so a PR that changes nothing
+  # swift-test exercises (docs, other workflows, setup helpers) skips it.
+  # A job skipped by its `if` reports success, so the required swift-test
+  # check still passes and the PR can merge. Anything not on the list below
+  # runs the tests, so a new kind of file is tested by default.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read # list the PR's files
+    outputs:
+      swift: ${{ steps.files.outputs.swift }}
+    steps:
+      - id: files
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          EVENT: ${{ github.event_name }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT" != pull_request ]; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" --jq '.[].filename')
+          tested=$(grep -vE '\.md$|^LICENSE$|^docs/|^\.github/(CODEOWNERS|dependabot\.yml|workflows/(release|zizmor)\.yml)$|^scripts/set-(release-secrets|version)\.sh$' <<< "$files" || true)
+          if [ -n "$tested" ]; then
+            echo "swift=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Only docs, other workflows or setup helpers changed; swift-test is skipped (reports success)."
+            echo "swift=false" >> "$GITHUB_OUTPUT"
+          fi
+
   swift-test:
+    needs: changes
+    # Runs unless changes said "false": if changes itself failed, test anyway
+    # rather than let a skipped check pass.
+    if: ${{ !cancelled() && needs.changes.outputs.swift != 'false' }}
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
@@ -50,7 +96,10 @@ jobs:
   # next release a person merges, which retests it on main first.
   dependabot:
     needs: swift-test
+    # swift-test is skipped when a bump touches only other workflows.
     if: >-
+      !cancelled() &&
+      (needs.swift-test.result == 'success' || needs.swift-test.result == 'skipped') &&
       github.event_name == 'pull_request' &&
       github.event.pull_request.user.login == 'dependabot[bot]' &&
       github.event.pull_request.head.repo.full_name == github.repository
