@@ -12,7 +12,7 @@ It does not read what is on a page, what you type, your passwords, your bookmark
 
 ## Where it goes
 
-Only to the betterlink app on the same Mac, over the browser's native messaging channel, which starts a helper inside the betterlink app and talks to it through a local pipe. Nothing is sent over the network, by the extension or by the app, and there are no servers, accounts, analytics or ads.
+Only to the betterlink app on the same Mac, over the browser's native messaging channel, which starts a helper inside the betterlink app and talks to it through a local pipe. The extension makes no network requests. The app sends none of this over the network (its only network request is its own update check), and there are no servers, accounts, analytics or ads.
 
 Without the betterlink app the extension sends nothing to anyone: it has nowhere to send it.
 
@@ -20,13 +20,15 @@ Without the betterlink app the extension sends nothing to anyone: it has nowhere
 
 betterlink shows your tabs in its sidebar and keeps the links you choose to save, in its settings folder on your Mac. It keeps where your saved links' tabs were, so they return after the browser restarts. It keeps no history of the pages you visit.
 
+Sync is off until you turn it on in betterlink's settings and pick a folder. Then the settings you choose to sync are written to that folder, and your own Dropbox, Google Drive or iCloud Drive copies them to your other Macs. That can be your Link Rules, each with its browser profile's name and signed-in account so another Mac can find the matching profile, the fallback, config.ts, and the name, favorites, folders and saved links of the Sidebar Profiles you pick. Open tabs are never synced.
+
 ## What it does to your tabs
 
 Only what you ask for in betterlink: open, close, switch to, move, mute, duplicate or reload a tab, or move one to a new window.
 
 ## Sharing and selling
 
-None. The data never leaves your Mac, so there is nothing to share or sell.
+None. betterlink has no servers, so nothing reaches us or anyone else. Your open tabs never leave your Mac. Saved links and settings leave it only through a sync folder you set up yourself.
 
 ## Questions
 
