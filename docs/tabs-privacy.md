@@ -20,7 +20,7 @@ Without the betterlink app the extension sends nothing to anyone: it has nowhere
 
 betterlink shows your tabs in its sidebar and keeps the links you choose to save, in its settings folder on your Mac. It keeps where your saved links' tabs were, so they return after the browser restarts. It keeps no history of the pages you visit.
 
-Sync is off until you turn it on in betterlink's settings and pick a folder. If you do, the favorites, folders and saved links you chose to sync are written to that folder, and your own Dropbox, Google Drive or iCloud Drive copies them to your other Macs. Open tabs are never synced.
+Sync is off until you turn it on in betterlink's settings and pick a folder. Then the settings you choose to sync are written to that folder, and your own Dropbox, Google Drive or iCloud Drive copies them to your other Macs. That can be your Link Rules, each with its browser profile's name and signed-in account so another Mac can find the matching profile, the fallback, config.ts, and the name, favorites, folders and saved links of the Sidebar Profiles you pick. Open tabs are never synced.
 
 ## What it does to your tabs
 
@@ -28,7 +28,7 @@ Only what you ask for in betterlink: open, close, switch to, move, mute, duplica
 
 ## Sharing and selling
 
-None. betterlink has no servers, so nothing reaches us or anyone else. Your open tabs never leave your Mac. Saved links leave it only through a sync folder you set up yourself.
+None. betterlink has no servers, so nothing reaches us or anyone else. Your open tabs never leave your Mac. Saved links and settings leave it only through a sync folder you set up yourself.
 
 ## Questions
 
