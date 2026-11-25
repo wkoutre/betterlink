@@ -65,6 +65,7 @@ struct SidebarView: View {
                 .onChange(of: profile?.id) { renamingProfile = nil }
             if let m = match, let profile {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
+                let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
                 let rows = SidebarRows.visible(profile, open: Set(m.links.tabs.keys), tabs: loose.map(\.id))
                 ScrollViewReader { scroller in
                     ScrollView {
@@ -87,19 +88,22 @@ struct SidebarView: View {
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
-                                    SidebarTabRow(tab: tab, canMute: m.session.can(.mute), focused: isCursor(.tab(tab.id))) {
-                                        tabs.activate(tab, in: m.session)
-                                        sidebar.returnFocusToBrowser()
-                                    } close: {
-                                        tabs.close(tab, in: m.session)
-                                    } mute: {
-                                        tabs.setMuted(!tab.muted, tab, in: m.session)
+                                    SkipUnchanged(key: rowKey(tab, profile, m, order)) {
+                                        SidebarTabRow(tab: tab, canMute: m.session.can(.mute), focused: isCursor(.tab(tab.id))) {
+                                            tabs.activate(tab, in: m.session)
+                                            sidebar.returnFocusToBrowser()
+                                        } close: {
+                                            tabs.close(tab, in: m.session)
+                                        } mute: {
+                                            tabs.setMuted(!tab.muted, tab, in: m.session)
+                                        }
+                                        .onDrag { drag(Self.dragKey(tab)) }
+                                        // Drop a tab before or after another to reorder the window's tabs.
+                                        .modifier(tabDropRow(tab, m, windowTabs))
+                                        .contextMenu { tabMenu(tab, profile, m, windowTabs) }
                                     }
+                                    .equatable()
                                     .id(SidebarRowID.tab(tab.id))
-                                    .onDrag { drag(Self.dragKey(tab)) }
-                                    // Drop a tab before or after another to reorder the window's tabs.
-                                    .modifier(tabDropRow(tab, m, windowTabs))
-                                    .contextMenu { tabMenu(tab, profile, m, windowTabs) }
                                     .transition(Motion.reveal(reduceMotion))
                                 }
                             }
@@ -447,6 +451,16 @@ struct SidebarView: View {
 
     /// How far each level of folders is set in.
     private static let indent: CGFloat = DS.Space.space4
+
+    // MARK: - Unchanged rows
+
+    private func rowKey(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ order: [RowKey.Place]) -> RowKey {
+        let id = Self.rowID(tab)
+        return RowKey(tab: tab, order: order, claimed: m.links.claimed, session: m.session.socketPath, ops: m.session.ops,
+                      window: m.window?.id, profile: p, focused: isCursor(.tab(tab.id)),
+                      drop: dropTarget?.id == id ? dropTarget?.zone : nil, size: rowSizes[id], palette: sidebar.palette,
+                      reduceMotion: reduceMotion)
+    }
 
     // MARK: - Keyboard
 
@@ -974,6 +988,34 @@ private struct SidebarTabRow: View {
         .onHover { hovering = $0 }
         .accessibilityAction(named: Text("Close")) { close() }
     }
+}
+
+/// Everything a tab's row shows or its actions use. Another tab's title is not
+/// in it: with many busy tabs, only the rows that changed are drawn again.
+/// Whatever the row's closures come to read must be added here, or they would
+/// act on what it was when the row was last drawn.
+private struct RowKey: Equatable {
+    struct Place: Equatable { var id: Int; var pinned: Bool }
+    var tab: BrowserTab
+    var order: [Place]
+    var claimed: Set<Int>
+    var session: String
+    var ops: Set<String>
+    var window: Int?
+    var profile: SidebarProfile
+    var focused: Bool
+    var drop: DropZone?
+    var size: CGSize?
+    var palette: SidebarPalette?
+    var reduceMotion: Bool
+}
+
+/// Draws its content again only when `key` changes.
+private struct SkipUnchanged<Key: Equatable, Content: View>: View, Equatable {
+    let key: Key
+    @ViewBuilder let content: () -> Content
+    nonisolated static func == (a: Self, b: Self) -> Bool { a.key == b.key }
+    var body: some View { content() }
 }
 
 /// A row's small button: a 20 pt target.
