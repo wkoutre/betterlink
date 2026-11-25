@@ -37,6 +37,8 @@ struct SidebarView: View {
     @State private var cursor: SidebarRowID?
     @FocusState private var listFocused: Bool
     @FocusState private var newTabFocused: Bool
+    /// Gives the New Tab field the keyboard back after a drag swapped it out.
+    @State private var dragFocus = DragFocus()
     @State private var downKeyMonitor: Any?
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
@@ -144,6 +146,11 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: sidebar.placedSide == .right ? .leading : .trailing) { ResizeHandle(sidebar: sidebar) }
+        // The drag is over, dropped or not: the New Tab field has the keyboard
+        // again if it had it when the drag began.
+        .onChange(of: dragging) { _, now in
+            if now == nil, dragFocus.ended() { newTabFocused = true }
+        }
         // Undo for the last delete, at the bottom for a few seconds.
         .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
         // A folder with things in it asks first (review F6), then offers Undo too.
@@ -533,6 +540,7 @@ struct SidebarView: View {
 
     /// Starts a drag of `key`, remembering it for the drop targets.
     private func drag(_ key: String) -> NSItemProvider {
+        dragFocus.began(focused: newTabFocused)
         animate { dragging = key }
         dragCount += 1
         let mine = dragCount
@@ -661,6 +669,9 @@ struct SidebarView: View {
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($newTabFocused)
+                // Back from being a drop zone (DropSwap), whichever is seen
+                // first: this, or the drag ending.
+                .onAppear { if dragFocus.fieldAppeared() { newTabFocused = true } }
                 // Down from the field is the way into the rows. The field
                 // editor takes the arrows before onKeyPress, so watch for it.
                 .onChange(of: newTabFocused) { _, on in watchDownKey(on) }
