@@ -228,10 +228,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         let sidebar = SidebarController.shared
         if sidebar.enabled {
-            let item = menu.addItem(withTitle: sidebar.collapsed ? "Show Sidebar" : "Hide Sidebar",
-                                    action: #selector(toggleSidebar), keyEquivalent: "")
+            // The window in front's; with no browser in front, every window's.
+            let item = menu.addItem(withTitle: sidebar.toggleTitle, action: #selector(toggleSidebar), keyEquivalent: "")
             item.target = self
-            item.toolTip = "Or press \(sidebar.shortcut.display) while the browser is in front."
+            item.toolTip = "For the browser window in front: \(sidebar.shortcut.display) does the same. With no browser in front, for every window."
         }
         menu.addItem(.separator())
         let recent = model.log.recentLinks(10)
@@ -252,7 +252,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openWindow() { showWindow() }
     @objc private func editConfig() { model.editConfig() }
-    @objc private func toggleSidebar() { SidebarController.shared.toggleCollapsed() }
+    @objc private func toggleSidebar() { SidebarController.shared.toggle() }
     @objc private func checkForUpdates() { Updater.shared.checkNow() }
     @objc private func copyLink(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }

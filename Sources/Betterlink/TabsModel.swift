@@ -15,7 +15,9 @@ final class TabsModel: ObservableObject {
     static let shared = TabsModel()
 
     @Published private(set) var sessions: [BrowserSession] = []
-    /// Browser profiles, by the extension's instance id (see ProfileLocator).
+    /// Browser profiles, by the extension's instance id (see ProfileLocator):
+    /// which one, its name ("Claude", "Work"), and the color the browser
+    /// paints its window frame, when it has one.
     @Published private(set) var profiles: [String: (ref: ProfileRef, name: String, color: UInt32?)] = [:]
     private var profileLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
@@ -60,8 +62,8 @@ final class TabsModel: ObservableObject {
         hub.start()
     }
 
-    /// Whether the sidebar is on screen: its tab list is worth keeping to the
-    /// moment. Hidden, or with no browser in front, what tabs show can wait.
+    /// Whether a sidebar is on screen: the tab lists are worth keeping to the
+    /// moment. With none to be seen, what tabs show can wait.
     var isWatched = false {
         didSet { if isWatched, !oldValue, latest != nil { publish() } }
     }
@@ -130,13 +132,6 @@ final class TabsModel: ObservableObject {
             hub?.send(.reloadSelf(), to: s.socketPath)
         }
     }
-
-    /// The browser profile a session runs in, once known ("Claude", "Work").
-    func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profiles[$0]?.name } }
-    /// Which browser profile a session runs in, once known.
-    func profileRef(_ s: BrowserSession) -> ProfileRef? { s.instance.flatMap { profiles[$0]?.ref } }
-    /// The color the browser paints this profile's window frame, when it has one.
-    func profileColor(_ s: BrowserSession) -> UInt32? { s.instance.flatMap { profiles[$0]?.color } }
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the
