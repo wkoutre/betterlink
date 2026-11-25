@@ -73,14 +73,20 @@ let streamType = Int32(SOCK_STREAM.rawValue)
 
 let listenFd = socket(AF_UNIX, streamType, 0)
 guard listenFd >= 0 else { log("socket() failed: \(errno)"); exit(1) }
-unlink(socketPath)
-var addr = makeAddr(socketPath)
+// The socket gets its ".sock" name only once it is listening. An app that is
+// watching the folder connects the moment the name appears; one that found it
+// bound but not listening yet was refused, took it for a crashed host's
+// leftover and deleted it, and that browser's tabs never showed.
+let pendingPath = String(socketPath.dropLast(".sock".count)) + ".new"
+unlink(pendingPath)
+var addr = makeAddr(pendingPath)
 let bound = withUnsafePointer(to: &addr) {
     $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listenFd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
 }
-guard bound == 0 else { log("bind(\(socketPath)) failed: \(errno)"); exit(1) }
-chmod(socketPath, 0o600)
-guard listen(listenFd, 8) == 0 else { log("listen failed: \(errno)"); exit(1) }
+guard bound == 0 else { log("bind(\(pendingPath)) failed: \(errno)"); exit(1) }
+chmod(pendingPath, 0o600)
+guard listen(listenFd, 8) == 0 else { log("listen failed: \(errno)"); unlink(pendingPath); exit(1) }
+guard rename(pendingPath, socketPath) == 0 else { log("rename to \(socketPath) failed: \(errno)"); unlink(pendingPath); exit(1) }
 
 @Sendable func cleanupAndExit(_ code: Int32) -> Never {
     unlink(socketPath)
