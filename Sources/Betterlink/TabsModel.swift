@@ -237,7 +237,7 @@ struct Favicon: View {
         .accessibilityHidden(true)
     }
 
-    /// Decoded icons by their data: URL. Every row redraws on every tab event,
+    /// Decoded icons by their data: URL. A row redraws whenever its tab changes,
     /// and decoding the same icon each time was the sidebar's largest cost with
     /// many tabs open. A miss is remembered too.
     private static var decoded: [String: NSImage?] = [:]

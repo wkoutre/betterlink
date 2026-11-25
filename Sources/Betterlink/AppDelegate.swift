@@ -121,7 +121,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.contentViewController = host
             w.setContentSize(NSSize(width: 880, height: 640))
             w.center()
-            w.setFrameAutosaveName("betterlink.main.v4")
+            // AppKit keeps the frame in the app's own preferences: not from a
+            // development or test run (MenuBarIcon.defaults).
+            if (ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty { w.setFrameAutosaveName("betterlink.main.v4") }
             window = w
         }
         model.refreshPermissions()
