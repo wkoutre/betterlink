@@ -405,22 +405,48 @@ final class SidebarController: ObservableObject {
 
     /// Windows already taken over, by window hash.
     private var takenOver: Set<Int> = []
+    /// Browsers (bundle ids) where a press did not do what it was for: their
+    /// tab strips are left alone for the rest of this launch.
+    private var takeoverGaveUp: Set<String> = []
 
-    /// Collapses the bound window's tab strip (Chromium browsers). The sidebar
-    /// sits beside the collapsed column and never covers it (Nick, 2026-11-24).
+    /// Switches the bound window's tab strip to vertical tabs and collapses it
+    /// (Chromium browsers). The sidebar sits beside the collapsed column and
+    /// never covers it (Nick, 2026-11-24).
+    ///
+    /// One step at a time, each from what the window is seen to be
+    /// (`TabStripReading`): an item is pressed only when the window shows the
+    /// other state, and the next look checks the press did what it was for. If
+    /// not, it is pressed back and that browser is left alone. A window whose
+    /// state can't be seen is left as it is (Nick, 2026-11-25: Brave with
+    /// vertical tabs on was switched back and forth on every return).
     ///
     /// The browser's menu acts on whichever of its windows is focused and only
-    /// catches up a moment after a window comes forward, so nothing is pressed
-    /// until the bound window is the browser's focused main window, and each
-    /// step waits for the browser to lay the strip out. Turning vertical tabs on
-    /// enables "Collapse" only after that, hence a second pass.
-    private func takeOver(_ t: WindowTracker.Target, pass: Int = 0) {
-        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, pass < 3 else { return }
+    /// catches up a moment after a window comes forward, so nothing is read or
+    /// pressed until the bound window is the browser's focused main window,
+    /// and each look waits for the browser to lay the strip out.
+    private func takeOver(_ t: WindowTracker.Target, look: Int = 0, pressed: TabStripReading.Press? = nil, lookedTwice: Bool = false) {
+        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, !takeoverGaveUp.contains(t.bundleId), look < 8 else { return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self, self.takeOverTabs, self.current?.windowHash == t.windowHash else { return }
-            guard self.tracker.boundWindowIsFocusedMain() else { return self.takeOver(t, pass: pass + 1) }
-            if TabStripTakeover.apply(pid: t.pid) != nil { return self.takeOver(t, pass: pass + 1) }
-            self.takenOver.insert(t.windowHash)
+            guard self.tracker.boundWindowIsFocusedMain(), let window = self.tracker.boundWindow else {
+                return self.takeOver(t, look: look + 1, pressed: pressed, lookedTwice: lookedTwice)
+            }
+            let reading = TabStripTakeover.read(pid: t.pid, window: window)
+            if let pressed, !reading.shows(pressed) {
+                // A browser still laying out gets one more look.
+                guard lookedTwice else { return self.takeOver(t, look: look + 1, pressed: pressed, lookedTwice: true) }
+                let undone = TabStripTakeover.press(pressed, pid: t.pid)
+                DragTrace.log("takeover: \(pressed) did not show in \(t.bundleId); pressed back \(undone), left alone from now")
+                self.takeoverGaveUp.insert(t.bundleId)
+                self.takenOver.insert(t.windowHash)
+                return
+            }
+            guard let next = reading.next, TabStripTakeover.press(next, pid: t.pid) else {
+                self.takenOver.insert(t.windowHash) // as wanted, or can't be told: nothing more for this window
+                return
+            }
+            DragTrace.log("takeover: pressed \(next) in \(t.bundleId)")
+            self.takeOver(t, look: look + 1, pressed: next)
         }
     }
 
