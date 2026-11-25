@@ -94,13 +94,21 @@ import Testing
     @Test func aWindowAlreadyAsWantedIsLookedAtOnceAndLeft() {
         #expect(run([braveVertical]) == [.done])
         #expect(run([chromeCollapsed]) == [.done])
+    }
+
+    /// A window still opening has no tabs to see yet: it gets two more looks
+    /// before it is left alone, and is taken over once it can be seen. A
+    /// browser with no such menu item (Arc, Dia) is done at the first look.
+    @Test func aWindowNotYetReadableIsLookedAtAgain() {
         var unseen = chromeTop; unseen.tabs = nil
-        #expect(run([unseen]) == [.done])
+        #expect(run([unseen, unseen, unseen, unseen]) == [.lookAgain, .lookAgain, .done])
+        #expect(run([unseen, chromeTop, chromeCollapsed]) == [.lookAgain, .press(.showVertically), .done])
+        #expect(run([R(tabs: nil, toolbar: nil, tabHeight: nil, show: nil, collapse: nil)]) == [.done])
     }
 
     /// Brave has no Collapse item: one press, seen to have worked, then done.
     @Test func braveAcrossTheTopIsSwitchedOnce() {
-        #expect(run([braveTop, braveVertical, braveVertical, braveVertical]) == [.press(.showVertically), .lookAgain, .lookAgain, .done])
+        #expect(run([braveTop] + Array(repeating: braveVertical, count: Flow.patience + 1)) == [.press(.showVertically)] + Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
     }
 
     /// Chrome offers Collapse a moment after it goes vertical, and the column
@@ -112,13 +120,26 @@ import Testing
                 == [.press(.showVertically), .lookAgain, .press(.collapse), .lookAgain, .done])
     }
 
-    /// A press that does not show in the window after a second look is pressed
-    /// back, and that is the end for this browser.
-    @Test func aPressThatDoesNotShowIsPressedBack() {
-        #expect(run([braveTop, braveTop, braveTop]) == [.press(.showVertically), .lookAgain, .pressBack(.showVertically)])
-        #expect(run([chromeVertical, chromeVertical, chromeVertical]) == [.press(.collapse), .lookAgain, .pressBack(.collapse)])
+    /// A press is pressed back only when the window is seen, look after look,
+    /// still in the state it was in: then that is the end for this browser.
+    @Test func aPressSeenNotToHaveWorkedIsPressedBack() {
+        let wait = Array(repeating: Flow.Step.lookAgain, count: Flow.patience - 1)
+        #expect(run([braveTop] + Array(repeating: braveTop, count: Flow.patience)) == [.press(.showVertically)] + wait + [.pressBack(.showVertically)])
+        #expect(run([chromeVertical] + Array(repeating: chromeVertical, count: Flow.patience)) == [.press(.collapse)] + wait + [.pressBack(.collapse)])
+        // A slow browser: it shows on the last look, nothing is pressed back.
+        #expect(run([braveTop] + Array(repeating: braveTop, count: Flow.patience - 1) + [braveVertical]).contains(.pressBack(.showVertically)) == false)
+    }
+
+    /// After a press the window can't be seen (or the column's width can't be
+    /// told): nothing more is pressed, not even back.
+    @Test func aPressWhoseResultCannotBeSeenIsLeftAsItIs() {
         var unseen = braveTop; unseen.toolbar = nil
-        #expect(run([braveTop, unseen, unseen]) == [.press(.showVertically), .lookAgain, .pressBack(.showVertically)])
+        let steps = run([braveTop] + Array(repeating: unseen, count: Flow.patience + 2))
+        #expect(steps.first == .press(.showVertically) && steps.last == .done)
+        #expect(steps.filter { $0 != .lookAgain }.count == 2)
+        var between = chromeVertical; between.tabs = Self.rect(0, 0, 100, 800); between.collapse = marked
+        let collapse = run([chromeVertical] + Array(repeating: between, count: Flow.patience + 2))
+        #expect(collapse.first == .press(.collapse) && collapse.last == .done && collapse.filter { $0 != .lookAgain }.count == 2)
     }
 
     @Test func neverMoreThanTheTwoPressesAndItEnds() {

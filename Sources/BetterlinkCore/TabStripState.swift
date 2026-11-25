@@ -60,13 +60,18 @@ public struct TabStripReading: Equatable, Sendable {
         }
     }
 
-    /// Whether the window now shows what `press` was for.
-    public func shows(_ press: Press) -> Bool {
+    public enum Result: Equatable, Sendable { case shown, notShown, unseen }
+
+    /// What the window says a press of `press` came to: it shows what the
+    /// press was for, it is seen still as it was, or it can't be told.
+    public func result(of press: Press) -> Result {
         switch press {
-        case .showVertically: return layout == .vertical
-        case .collapse: return column == .collapsed
+        case .showVertically: return layout == .vertical ? .shown : layout == .horizontal ? .notShown : .unseen
+        case .collapse: return column == .collapsed ? .shown : column == .expanded ? .notShown : .unseen
         }
     }
+
+    public func shows(_ press: Press) -> Bool { result(of: press) == .shown }
 }
 
 /// One window's takeover, one look at a time: what to do after each reading.
@@ -75,11 +80,15 @@ public struct TabStripReading: Equatable, Sendable {
 public struct TabStripTakeoverFlow: Equatable, Sendable {
     public enum Step: Equatable, Sendable {
         case press(TabStripReading.Press)
-        /// It did not show: undo it, and leave this browser's tabs alone.
+        /// The window is seen not to have changed: undo it, and leave this
+        /// browser's tabs alone.
         case pressBack(TabStripReading.Press)
         case lookAgain
         case done
     }
+    /// How many looks a press gets to show in the window, and Collapse to be
+    /// offered after going vertical, before that is how things are.
+    public static let patience = 4
     private var pressed: TabStripReading.Press?
     private var presses = 0, looks = 0
 
@@ -87,16 +96,25 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
 
     public mutating func step(_ r: TabStripReading) -> Step {
         looks += 1
-        if let p = pressed, !r.shows(p) {
-            // A browser still laying out gets a second look, no more.
-            guard looks >= 2 else { return .lookAgain }
-            pressed = nil
-            return .pressBack(p)
+        if let p = pressed {
+            switch r.result(of: p) {
+            case .shown: break
+            case .notShown:
+                // Seen as it was, look after look: the press did nothing here.
+                guard looks >= Self.patience else { return .lookAgain }
+                pressed = nil
+                return .pressBack(p)
+            case .unseen:
+                // What can't be seen is not pressed again, not even back.
+                return looks >= Self.patience ? .done : .lookAgain
+            }
         }
         guard let next = r.next, presses < 2 else {
-            // Just gone vertical: a browser that can collapse offers it a
-            // moment later. Two more looks, then this is how it stays.
-            if pressed == .showVertically, r.column != .collapsed, looks <= 2 { return .lookAgain }
+            // A window still opening shows no tabs yet: two more looks, where
+            // the browser has the item at all.
+            if presses == 0, r.layout == .unknown, r.show != nil, looks < 3 { return .lookAgain }
+            // Just gone vertical: a browser that can collapse offers it a moment later.
+            if pressed == .showVertically, r.column != .collapsed, looks < Self.patience { return .lookAgain }
             return .done
         }
         pressed = next; presses += 1; looks = 0

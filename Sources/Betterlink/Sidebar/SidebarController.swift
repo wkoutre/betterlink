@@ -465,8 +465,8 @@ final class SidebarController: ObservableObject {
     /// One look at a time (`TabStripTakeoverFlow`), each from what the window
     /// is seen to be (`TabStripReading`): an item is pressed only when the
     /// window shows the other state, and the next looks check the press did
-    /// what it was for. If not, it is pressed back and that browser is left
-    /// alone. A window whose state can't be seen is left as it is (Nick,
+    /// what it was for. Seen not to have, it is pressed back and that browser
+    /// is left alone. A window whose state can't be seen is left as it is (Nick,
     /// 2026-11-25: Brave with vertical tabs on was switched back and forth on
     /// every return).
     ///
@@ -474,31 +474,54 @@ final class SidebarController: ObservableObject {
     /// catches up a moment after a window comes forward, so nothing is read or
     /// pressed until the bound window is the browser's focused main window,
     /// and each look waits for the browser to lay the strip out.
-    private func takeOver(_ t: WindowTracker.Target, look: Int = 0, flow: TabStripTakeoverFlow = .init()) {
-        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, !takeoverGaveUp.contains(t.bundleId), look < 12 else { return }
+    private func takeOver(_ t: WindowTracker.Target) {
+        // One run per window at a time: a second, started on coming back to the
+        // window within a look, would press what the first just pressed.
+        guard Browser.known(bundleId: t.bundleId)?.family == .chromium, !takeoverGaveUp.contains(t.bundleId),
+              takingOver.insert(t.windowHash).inserted else { return }
+        takeOverLook(t, look: 0, flow: .init())
+    }
+
+    /// Windows with a takeover run in progress, by window hash.
+    private var takingOver: Set<Int> = []
+
+    private func takeOverLook(_ t: WindowTracker.Target, look: Int, flow: TabStripTakeoverFlow) {
+        guard look < 16 else { takingOver.remove(t.windowHash); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            guard let self, self.takeOverTabs, self.current?.windowHash == t.windowHash else { return }
+            guard let self else { return }
+            // Left the window, or the setting went off: the run ends here, and
+            // the next time starts from what the window then shows.
+            guard self.takeOverTabs, self.current?.windowHash == t.windowHash else { self.takingOver.remove(t.windowHash); return }
             guard self.tracker.boundWindowIsFocusedMain(), let window = self.tracker.boundWindow else {
-                return self.takeOver(t, look: look + 1, flow: flow)
+                return self.takeOverLook(t, look: look + 1, flow: flow)
             }
             var flow = flow
-            switch flow.step(TabStripTakeover.read(pid: t.pid, window: window)) {
+            let began = CACurrentMediaTime()
+            let reading = TabStripTakeover.read(pid: t.pid, window: window)
+            DragTrace.log(String(format: "takeover: look %d read in %.1f ms: %@ %@", look, (CACurrentMediaTime() - began) * 1000,
+                                 "\(reading.layout)", "\(reading.column)"))
+            switch flow.step(reading) {
             case .press(let item):
                 // An item that can't be pressed after all: nothing more for this window.
-                guard TabStripTakeover.press(item, pid: t.pid) else { self.takenOver.insert(t.windowHash); return }
+                guard TabStripTakeover.press(item, pid: t.pid) else { return self.finishTakeover(t) }
                 DragTrace.log("takeover: pressed \(item) in \(t.bundleId)")
-                self.takeOver(t, look: look + 1, flow: flow)
+                self.takeOverLook(t, look: look + 1, flow: flow)
             case .pressBack(let item):
                 let undone = TabStripTakeover.press(item, pid: t.pid)
                 DragTrace.log("takeover: \(item) did not show in \(t.bundleId); pressed back \(undone), left alone from now")
                 self.takeoverGaveUp.insert(t.bundleId)
-                self.takenOver.insert(t.windowHash)
+                self.finishTakeover(t)
             case .lookAgain:
-                self.takeOver(t, look: look + 1, flow: flow)
+                self.takeOverLook(t, look: look + 1, flow: flow)
             case .done:
-                self.takenOver.insert(t.windowHash) // as wanted, or can't be told
+                self.finishTakeover(t) // as wanted, or can't be told
             }
         }
+    }
+
+    private func finishTakeover(_ t: WindowTracker.Target) {
+        takenOver.insert(t.windowHash)
+        takingOver.remove(t.windowHash)
     }
 
     /// Frames within a point count as the same: the browser rounds.

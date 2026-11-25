@@ -16,6 +16,12 @@ import Foundation
 enum TabStripTakeover {
     /// The window's tab strip and toolbar, and the two View menu items.
     static func read(pid: pid_t, window: AXUIElement) -> TabStripReading {
+        let items = menuItems(pid: pid)
+        func item(_ e: AXUIElement?) -> TabStripReading.Item? {
+            e.map { .init(enabled: copy($0, kAXEnabledAttribute as String), mark: copy($0, kAXMenuItemMarkCharAttribute as String)) }
+        }
+        // A browser without the item (Arc, Dia) can't be taken over: its window is not walked.
+        guard items.show != nil else { return TabStripReading(tabs: nil, toolbar: nil, tabHeight: nil, show: nil, collapse: nil) }
         var groups: [(frame: CGRect, tabHeight: CGFloat)] = [], toolbars: [CGRect] = []
         var seen = 0
         // The browser's own chrome is a few hundred elements; pages are skipped.
@@ -35,10 +41,6 @@ enum TabStripTakeover {
             for c in children(e) { walk(c, depth + 1) }
         }
         walk(window, 0)
-        let items = menuItems(pid: pid)
-        func item(_ e: AXUIElement?) -> TabStripReading.Item? {
-            e.map { .init(enabled: copy($0, kAXEnabledAttribute as String), mark: copy($0, kAXMenuItemMarkCharAttribute as String)) }
-        }
         // Exactly one of each, or it isn't known which is the window's own.
         return TabStripReading(tabs: groups.count == 1 ? groups[0].frame : nil, toolbar: toolbars.count == 1 ? toolbars[0] : nil,
                                tabHeight: groups.count == 1 ? groups[0].tabHeight : nil,
@@ -52,17 +54,15 @@ enum TabStripTakeover {
         return AXUIElementPerformAction(item, kAXPressAction as CFString) == .success
     }
 
-    /// Only the View menu's exact titles (TabStripMenu), never a page-titled item.
+    /// Only the View menu's exact titles (TabStripMenu), never a page-titled
+    /// item; only that menu's items are read.
     private static func menuItems(pid: pid_t) -> (show: AXUIElement?, collapse: AXUIElement?) {
         let app = AXUIElementCreateApplication(pid)
-        guard let bar: AXUIElement = copy(app, kAXMenuBarAttribute as String) else { return (nil, nil) }
-        let menus: [(title: String, items: [AXUIElement])] = children(bar).map { top in
-            (copy(top, kAXTitleAttribute as String) ?? "", children(top).flatMap(children))
-        }
-        let titled = menus.map { (title: $0.title, items: $0.items.map { copy($0, kAXTitleAttribute as String) ?? "" }) }
-        func item(_ title: String) -> AXUIElement? {
-            TabStripMenu.locate(title, in: titled).map { menus[$0.menu].items[$0.item] }
-        }
+        guard let bar: AXUIElement = copy(app, kAXMenuBarAttribute as String),
+              let view = children(bar).first(where: { (copy($0, kAXTitleAttribute as String) as String?) == TabStripMenu.menu }) else { return (nil, nil) }
+        let items = children(view).flatMap(children)
+        let titled = [(title: TabStripMenu.menu, items: items.map { copy($0, kAXTitleAttribute as String) ?? "" })]
+        func item(_ title: String) -> AXUIElement? { TabStripMenu.locate(title, in: titled).map { items[$0.item] } }
         return (item(TabStripMenu.showVertically), item(TabStripMenu.collapse))
     }
 
