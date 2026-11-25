@@ -1,7 +1,7 @@
 import BetterlinkCore
 import SwiftUI
 
-/// The window: a sidebar of pages, like System Settings.
+/// The window: a column of pages, like System Settings.
 struct RootView: View {
     @EnvironmentObject var model: AppModel
     /// The open page, remembered between launches. BETTERLINK_PAGE picks the
@@ -10,7 +10,10 @@ struct RootView: View {
         ?? UserDefaults.standard.string(forKey: "page") ?? Page.rules.rawValue
 
     enum Page: String, CaseIterable, Identifiable {
-        case rules, profiles, permissions, agents, tabs, config, general, log, about
+        case rules, profiles, permissions, agents
+        /// The sidebar beside the browser. Saved as "tabs", its page's first name.
+        case sidebar = "tabs"
+        case config, general, log, about
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -18,7 +21,7 @@ struct RootView: View {
             case .profiles: "Profiles"
             case .permissions: "Permissions"
             case .agents: "Agents"
-            case .tabs: "Tabs"
+            case .sidebar: "Sidebar"
             case .config: "config.ts"
             case .general: "General"
             case .log: "Log"
@@ -32,7 +35,7 @@ struct RootView: View {
             case .profiles: DS.Palette.coral
             case .permissions: DS.Palette.success
             case .agents: DS.Palette.tileViolet
-            case .tabs: DS.Palette.accent
+            case .sidebar: DS.Palette.tileTeal
             case .config: DS.Palette.tileInk
             case .general, .log: DS.Palette.tileNeutral
             case .about: DS.Palette.accentText
@@ -44,7 +47,7 @@ struct RootView: View {
             case .profiles: "person.2.fill"
             case .permissions: "lock.fill"
             case .agents: "terminal.fill"
-            case .tabs: "square.on.square"
+            case .sidebar: "sidebar.left"
             case .config: "chevron.left.forwardslash.chevron.right"
             case .general: "gearshape.fill"
             case .log: "list.bullet"
@@ -62,7 +65,7 @@ struct RootView: View {
 
     var body: some View {
         HStack(spacing: 0) {
-            Sidebar(selection: page)
+            NavColumn(selection: page)
                 .frame(width: DS.Size.sizeSidebar)
                 .background(DS.Palette.sidebar)
             Rectangle().fill(DS.Palette.borderSubtle).frame(width: 1)
@@ -93,7 +96,7 @@ struct RootView: View {
         case .profiles: ProfilesPage()
         case .permissions: PermissionsPage()
         case .agents: AgentsPage()
-        case .tabs: TabsPage()
+        case .sidebar: SidebarPage()
         case .config: ConfigPage()
         case .general: GeneralPage()
         case .log: LogPage()
@@ -104,7 +107,7 @@ struct RootView: View {
 
 /// A white SF Symbol on a small coloured rounded square, like System
 /// Settings' sidebar: every icon the same size, so the labels line up.
-private struct SidebarTile: View {
+private struct NavTile: View {
     let symbol: String
     let color: Color
     var body: some View {
@@ -117,18 +120,18 @@ private struct SidebarTile: View {
     }
 }
 
-/// The sidebar, drawn from tokens: groups of size-row rows, space-1 apart,
+/// The navigation column, drawn from tokens: groups of size-row rows, space-1 apart,
 /// space-6 between groups, a caption title space-1 above its rows.
-private struct Sidebar: View {
+private struct NavColumn: View {
     @EnvironmentObject var model: AppModel
     @Binding var selection: RootView.Page?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: DS.Space.space6) {
-                SidebarHeader()
+                NavHeader()
                 group(nil, [.rules, .profiles, .permissions, .agents])
-                group("Preview", [.tabs])
+                group("Preview", [.sidebar])
                 group("Advanced", [.config, .general] + (model.showLog ? [.log] : []))
                 group(nil, [.about])
             }
@@ -150,14 +153,14 @@ private struct Sidebar: View {
                     .accessibilityAddTraits(.isHeader)
             }
             ForEach(pages) { p in
-                SidebarRow(page: p, selected: selection == p,
+                NavRow(page: p, selected: selection == p,
                            attention: p == .permissions && model.permissionsNeedAttention) { selection = p }
             }
         }
     }
 }
 
-private struct SidebarRow: View {
+private struct NavRow: View {
     let page: RootView.Page
     let selected: Bool
     let attention: Bool
@@ -167,7 +170,7 @@ private struct SidebarRow: View {
     var body: some View {
         Button(action: select) {
             HStack(spacing: DS.Space.space2) {
-                SidebarTile(symbol: page.symbol, color: page.tile)
+                NavTile(symbol: page.symbol, color: page.tile)
                 Text(page.title)
                     .font(selected ? DS.TextStyle.bodyStrong : DS.TextStyle.body)
                     .foregroundStyle(DS.Palette.text)
@@ -190,7 +193,7 @@ private struct SidebarRow: View {
 }
 
 /// App icon, name and whether betterlink is the default browser.
-private struct SidebarHeader: View {
+private struct NavHeader: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         HStack(spacing: DS.Space.space3) {

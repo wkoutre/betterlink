@@ -95,7 +95,7 @@ struct DropMarker: View {
                     .frame(width: horizontal ? 2 : g.size.width, height: horizontal ? g.size.height : 2)
                     .position(x: horizontal ? g.size.width : g.size.width / 2, y: horizontal ? g.size.height / 2 : g.size.height)
             case .into?:
-                RoundedRectangle(cornerRadius: 7, style: .continuous).stroke(color, lineWidth: 1.5)
+                RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous).stroke(color, lineWidth: 1.5)
             case nil:
                 EmptyView()
             }

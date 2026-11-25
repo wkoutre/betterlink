@@ -20,7 +20,7 @@ The zip holds the manifest without its `key`, `background.js`, `bridge.js` and `
 
 ## When to submit
 
-The extension does nothing without a betterlink that has the Tabs page, and a reviewer has to be able to run it. Save the item as a draft until a betterlink release with the sidebar is out (or about to be), then submit.
+The extension does nothing without a betterlink that has the Sidebar page, and a reviewer has to be able to run it. Save the item as a draft until a betterlink release with the sidebar is out (or about to be), then submit.
 
 ## Uploads
 
@@ -47,7 +47,7 @@ The extension does nothing without a betterlink that has the Tabs page, and a re
   > • Changes show the moment they happen. Nothing polls.
   >
   > THIS EXTENSION NEEDS THE BETTERLINK APP
-  > It does nothing by itself. Install betterlink for macOS from github.com/wkoutre/betterlink, open its Tabs page and press Set Up next to this browser. Install the extension in each browser profile you want in the sidebar.
+  > It does nothing by itself. Install betterlink for macOS from github.com/wkoutre/betterlink, open its Sidebar page and press Set Up next to this browser. Install the extension in each browser profile you want in the sidebar.
   >
   > PRIVATE
   > The extension sends tab titles, addresses and icons only to the betterlink app on the same Mac, through the browser's native messaging. No servers, no account, no analytics, no network requests. It never reads what is on a page.

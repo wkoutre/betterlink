@@ -326,7 +326,7 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
-    static func find(_ id: UUID, in items: [SidebarItem]) -> SidebarItem? {
+    public static func find(_ id: UUID, in items: [SidebarItem]) -> SidebarItem? {
         for item in items {
             if item.id == id { return item }
             if case .folder(let f) = item, let hit = find(id, in: f.items) { return hit }
@@ -360,6 +360,11 @@ public enum SidebarItem: Codable, Equatable, Identifiable, Sendable {
         case .folder(let f): return f.id
         case .link(let l): return l.id
         }
+    }
+
+    public var isFolder: Bool {
+        if case .folder = self { return true }
+        return false
     }
 
     private enum CodingKeys: String, CodingKey { case folder, link }

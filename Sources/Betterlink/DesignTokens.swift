@@ -67,6 +67,8 @@ enum DS {
         static let tileNeutral = dynamic(light: 0x6B7590, dark: 0x6B7590)
         /// Sidebar icon tile behind a white symbol, for the Agents page. The same in both themes.
         static let tileViolet = dynamic(light: 0x6F4FD8, dark: 0x6F4FD8)
+        /// Sidebar icon tile behind a white symbol, for the Sidebar page. The same in both themes.
+        static let tileTeal = dynamic(light: 0x0F7C8A, dark: 0x0F7C8A)
     }
     enum Space {
         /// Between a dot and its label; icon to text.

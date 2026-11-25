@@ -307,7 +307,7 @@ const sidebarSettings = Cli.create('settings', { description: 'The sidebar on th
     options: z.object({
       enabled: onOff('the sidebar').optional(),
       shown: onOff('show it, or hide it and give the window its space back (like the shortcut)').optional(),
-      side: z.enum(['left', 'right', 'auto']).optional().describe('auto: whichever side has room'),
+      side: z.enum(['left', 'right']).optional(),
       width: z.number().min(200).max(440).optional().describe('Points, 200 to 440'),
       takeOverTabs: onOff("switch the browser's own tab strip to its collapsed vertical tabs").optional(),
       browsers: z.string().optional().describe('Browsers it attaches to, comma separated names or bundle ids'),

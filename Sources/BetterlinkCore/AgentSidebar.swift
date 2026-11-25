@@ -203,7 +203,7 @@ extension Agent {
     static func browserProfile(_ input: [String: Any], _ env: AgentEnvironment) throws -> ProfileRef {
         guard let b = try nonEmpty(input, "browser") else { throw fail("Give browser: its name or bundle id (browsers list).") }
         guard let dir = try nonEmpty(input, "browserProfile") else {
-            throw fail("Give browserProfile: the browser profile's folder, such as \"Default\" or \"Profile 1\" (profiles list).")
+            throw fail("Give browserProfile: the Browser Profile's folder, such as \"Default\" or \"Profile 1\" (profiles list).")
         }
         let known = Browser.known.first { $0.bundleId.lowercased() == b.lowercased() || $0.name.lowercased() == b.lowercased() }
         guard let browser = known else { throw fail("No browser \"\(b)\" betterlink knows (browsers list).") }
@@ -221,7 +221,7 @@ extension Agent {
             for i in lib.profiles.indices { lib.profiles[i].browserProfiles.removeAll { $0 == ref } }
         }
         return .success(["browser": ref.browser, "browserProfile": ref.directory,
-                         "note": "This browser profile now shows the default Sidebar Profile (the first one linked to nothing)."])
+                         "note": "This Browser Profile now shows the default Sidebar Profile (the first one linked to nothing)."])
     }
 
     // MARK: Favorites, folders and saved links

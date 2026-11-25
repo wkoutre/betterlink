@@ -127,7 +127,7 @@ final class SyncController: ObservableObject {
             }
             let unresolved = Set(r.notes.unresolvedRules)
             if unresolved != lastUnresolved, !unresolved.isEmpty {
-                note("\(unresolved.count) synced rule(s) point at a browser profile this Mac doesn't have; they open in the fallback.")
+                note("\(unresolved.count) synced rule(s) point at a Browser Profile this Mac doesn't have; they open in the fallback.")
             }
             lastUnresolved = unresolved
             if r.unsafe != lastUnsafe {
@@ -135,7 +135,7 @@ final class SyncController: ObservableObject {
             }
             lastUnsafe = r.unsafe
             if !r.notes.orphansMovedToTop.isEmpty {
-                note("\(r.notes.orphansMovedToTop.count) saved item(s) were in a folder another Mac deleted; they are at the top of the sidebar now.")
+                note("\(r.notes.orphansMovedToTop.count) saved link(s) or folder(s) were in a folder another Mac deleted; they are at the top of the sidebar now.")
             }
             if !r.notes.cyclesBroken.isEmpty { note("Two Macs moved folders into each other; one is at the top of the sidebar now.") }
             if !r.newer.isEmpty { note("Another Mac uses a newer betterlink; update this one to sync with it.") }
