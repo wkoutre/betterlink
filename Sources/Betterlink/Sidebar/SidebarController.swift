@@ -35,6 +35,9 @@ final class SidebarController: ObservableObject {
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
+    /// False when this macOS no longer says which window is which
+    /// (`AXWindow.number`): then no window gets a sidebar.
+    let canTellWindowsApart = AXWindow.numbersWindows
     /// Why the shortcut couldn't be registered, for the setting.
     @Published private(set) var hotKeyProblem: String?
 

@@ -93,7 +93,8 @@ enum AXWindow {
     /// The window's window-server number. Accessibility has no public way to
     /// tell it, and the frame can't: two windows of one browser often share
     /// one, and then the wrong window's sidebar would be moved and ordered.
-    /// Nil should macOS ever drop the function: that window gets no sidebar.
+    /// Nil should macOS ever drop the function: then no window gets a sidebar
+    /// (`numbersWindows`; the Sidebar page and `sidebar settings get` say so).
     static func number(of win: AXUIElement) -> CGWindowID? {
         var n = CGWindowID(0)
         guard let get = getWindow, get(win, &n) == .success, n != 0 else { return nil }
@@ -101,8 +102,11 @@ enum AXWindow {
     }
 
     private typealias GetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
-    private static let getWindow: GetWindow? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow")
+    nonisolated private static let getWindow: GetWindow? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow")
         .map { unsafeBitCast($0, to: GetWindow.self) }
+
+    /// Whether this macOS still has the function `number(of:)` needs.
+    nonisolated static var numbersWindows: Bool { getWindow != nil }
 }
 
 /// What the window server knows about every app's windows: numbers, frames and

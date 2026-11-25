@@ -55,6 +55,11 @@ struct SidebarPage: View {
                         .fixedSize(horizontal: false, vertical: true)
                 }
             }
+            if !sidebar.canTellWindowsApart {
+                Text("This version of macOS no longer tells betterlink one browser window from another, so no window gets a sidebar. Look for a newer betterlink.")
+                    .foregroundStyle(DS.Palette.danger)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if sidebar.enabled && !sidebar.trusted {
                 HStack {
                     Text("betterlink needs Accessibility access to follow your browser windows.")
