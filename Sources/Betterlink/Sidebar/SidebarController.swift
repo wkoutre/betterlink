@@ -278,8 +278,7 @@ final class SidebarController: ObservableObject {
         guard let i = instances[t.id] else { return }
         let was = i.reported
         i.reported = t
-        // A window paired for certain stays so whatever its title becomes.
-        if was.title != t.title, !pairing.isCertain(t.id) { pair() }
+        if was.title != t.title { pair() }
         // Minimized, full screen or hidden, or back: its sidebar goes or comes.
         // Else it only moved, and the panel with it.
         if was.fullScreen != t.fullScreen || was.minimized != t.minimized || was.appHidden != t.appHidden {
@@ -292,7 +291,7 @@ final class SidebarController: ObservableObject {
     private func settled(_ t: WindowTracker.Target) {
         guard let i = instances[t.id] else { return }
         i.settle(t)
-        if !pairing.isCertain(t.id) { pair() } // by where it rests now
+        pair() // by where it rests now
     }
 
     private func focusChanged() {

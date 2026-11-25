@@ -42,6 +42,76 @@ struct WindowPairingTests {
         #expect(found == [100: hit("/a", 1), 101: hit("/a", 2)])
     }
 
+    // MARK: - A certain pairing that was a coincidence
+    //
+    // The windows known here are never all there are: Accessibility lists only
+    // those on a Space that is showing, and a profile without the extension or
+    // an Incognito window is in no session. So "each matches no other" can be
+    // true of a window and a browser window that are not the same one.
+
+    /// Profile B has no extension; its window sits where profile A's window
+    /// 1, on a Space not shown yet, also is, with the same title.
+    @Test func aCoincidenceGivesWayWhenTheRealWindowIsListed() {
+        var p = WindowPairing()
+        #expect(p.update([ours(100, "New Tab")], in: [session("/a", [theirs(1, "New Tab")])]) == [100: hit("/a", 1)])
+        // Window 1 itself is listed now, and has the focus in both accounts.
+        let both = p.update([ours(100, "New Tab"), ours(101, "New Tab", focused: true)], in: [session("/a", [theirs(1, "New Tab", focused: true)])])
+        #expect(both == [100: .unseen, 101: hit("/a", 1)])
+        let later = p.update([ours(100, "New Tab"), ours(101, "Docs", focused: true)], in: [session("/a", [theirs(1, "Docs", focused: true)])])
+        #expect(later == [100: .unseen, 101: hit("/a", 1)])
+        #expect(p.isCertain(101))
+    }
+
+    @Test func withoutTheFocusNeitherIsShownUntilSomethingTellsThemApart() {
+        var p = WindowPairing()
+        let s = session("/a", [theirs(1, "New Tab")])
+        _ = p.update([ours(100, "New Tab")], in: [s])
+        #expect(p.update([ours(100, "New Tab"), ours(101, "New Tab")], in: [s]) == [100: .unseen, 101: .unseen])
+        #expect(p.update([ours(100, "New Tab"), ours(101, "Docs")], in: [session("/a", [theirs(1, "Docs")])]) == [100: .unseen, 101: hit("/a", 1)])
+    }
+
+    /// A new window is announced before the browser reports it, at the frame
+    /// and title of a window on a Space not shown since launch.
+    @Test func aWindowPairedBeforeItsOwnEntryArrivesEndsWithItsOwn() {
+        for focusKnown in [true, false] {
+            var p = WindowPairing()
+            #expect(p.update([ours(100, "New Tab", focused: true)], in: [session("/a", [theirs(1, "New Tab")])]) == [100: hit("/a", 1)])
+            // Its own entry is in: two it could be now, and only the focus says which.
+            let arrived = p.update([ours(100, "New Tab", focused: true)],
+                                   in: [session("/a", [theirs(1, "New Tab"), theirs(2, "New Tab", focused: focusKnown)])])
+            #expect(arrived == [100: focusKnown ? hit("/a", 2) : .unseen])
+            // Only its title changes (it stays where it is), or its frame too.
+            for left in [0.0, 900] {
+                var q = p
+                let moved = q.update([ours(100, "Docs", at: left, focused: true)],
+                                     in: [session("/a", [theirs(1, "New Tab"), theirs(2, "Docs", at: left, focused: focusKnown)])])
+                #expect(moved == [100: hit("/a", 2)])
+                #expect(q.isCertain(100))
+            }
+        }
+    }
+
+    /// With no word of the new entry in between: the old one stops matching
+    /// while another does.
+    @Test func aCertainPairingMovesToTheEntryThatMatchesWhenItsOwnNoLongerDoes() {
+        var p = WindowPairing()
+        _ = p.update([ours(100, "New Tab")], in: [session("/a", [theirs(1, "New Tab")])])
+        let found = p.update([ours(100, "Docs")], in: [session("/a", [theirs(1, "New Tab"), theirs(2, "Docs")])])
+        #expect(found == [100: hit("/a", 2)])
+    }
+
+    @Test func aNewcomerLikeACertainWindowPutsItInDoubtUntilTheFocusOrATitleSays() {
+        var p = WindowPairing()
+        _ = p.update([ours(100, "Inbox")], in: [session("/a", [theirs(1, "Inbox")])])
+        // An Incognito window the extension can't see, on top of it, at the same page.
+        #expect(p.update([ours(100, "Inbox"), ours(102, "Inbox")], in: [session("/a", [theirs(1, "Inbox")])]) == [100: .unseen, 102: .unseen])
+        let focused = p.update([ours(100, "Inbox", focused: true), ours(102, "Inbox")], in: [session("/a", [theirs(1, "Inbox", focused: true)])])
+        #expect(focused == [100: hit("/a", 1), 102: .unseen])
+        let apart = p.update([ours(100, "Inbox"), ours(102, "Secret")], in: [session("/a", [theirs(1, "Inbox")])])
+        #expect(apart == [100: hit("/a", 1), 102: .unseen])
+        #expect(p.isCertain(100))
+    }
+
     @Test func sameFrameIsToldApartByTitle() {
         var p = WindowPairing()
         let found = p.update([ours(100, "Docs - Chrome"), ours(101, "Inbox - Chrome")], in: [session("/a", [theirs(1, "Inbox"), theirs(2, "Docs")])])

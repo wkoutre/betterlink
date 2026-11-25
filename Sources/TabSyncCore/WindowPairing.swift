@@ -8,8 +8,16 @@ import Foundation
 /// nothing. And never two windows on one browser window.
 ///
 /// A pairing the frame and title settle between them (this window matches that
-/// browser window and neither matches another) is certain, and kept while both
-/// exist. What only the focus or a lone frame says is kept too, but gives way to
+/// browser window and neither matches another) is certain, and kept through
+/// moves, new titles and a stale word on the focus. But the windows known here
+/// are never all there are (Accessibility lists only those on a Space that is
+/// showing, and a profile without the extension or an Incognito window is in
+/// no session), so such a pairing can be a coincidence. It stays certain only
+/// while nothing else could be meant: once another window matches its browser
+/// window, or another browser window matches it, it is in doubt and let go,
+/// and the focus or the next title decides. In doubt, a window shows nothing.
+///
+/// What only the focus or a lone frame says is kept too, but gives way to
 /// a certain pairing and to what the focus says next: the browser's word and
 /// macOS's word for which window is focused arrive a moment apart. A window
 /// paired by its frame alone, for want of a title, is let go when its title
@@ -62,7 +70,7 @@ public struct WindowPairing: Sendable {
 
     public init() {}
 
-    /// Whether more evidence (a new title, the focus) can't change this window's pairing.
+    /// Whether the window is paired by frame and title, with nothing else it could be.
     public func isCertain(_ id: Int) -> Bool { pairs[id]?.certain ?? false }
 
     /// The sessions a window of process `pid` can belong to: each browser
@@ -102,6 +110,8 @@ public struct WindowPairing: Sendable {
             guard let f = w.frame, let b = window.bounds else { return nil }
             return b.distance(to: f) <= tolerance
         }
+        /// Both the title and the frame say it is this window.
+        func matches(_ w: Window) -> Bool { isAt(w) == true && titles(w) == true }
         /// Both the title and the frame say it is another window.
         func isNot(_ w: Window) -> Bool { titles(w) == false && isAt(w) == false }
     }
@@ -114,9 +124,20 @@ public struct WindowPairing: Sendable {
             let denied = entries.contains { $0.hit == p.hit && ($0.isNot(w) || (p.byFrameAlone && $0.titles(w) == false)) }
             if gone || (!p.certain && denied) { pairs[w.id] = nil }
         }
+        // A certain pairing holds while nothing else could be meant. A window
+        // not certainly paired that matches its browser window, or a browser
+        // window not certainly paired that matches it, puts it in doubt: one
+        // of the two is the real one, and which can't be told from here.
+        let certain = pairs.filter(\.value.certain)
+        for w in windows {
+            guard let p = certain[w.id], let own = entries.first(where: { $0.hit == p.hit }) else { continue }
+            let rivalWindow = windows.contains { $0.id != w.id && certain[$0.id] == nil && own.matches($0) }
+            let rivalEntry = entries.contains { e in e.hit != p.hit && e.matches(w) && !certain.values.contains { $0.hit == e.hit } }
+            if rivalWindow || rivalEntry { pairs[w.id] = nil }
+        }
         // Settled by frame and title. Each one settled can settle another.
         while let (w, e) = only(windows.filter { !isCertain($0.id) }, entries.filter { !claimed($0.hit, certainly: true) },
-                                where: { $1.isAt($0) == true && $1.titles($0) == true }) {
+                                where: { $1.matches($0) }) {
             claim(e.hit, for: w.id, certain: true)
         }
         // The browser says which of its windows has focus, and the other
@@ -134,7 +155,7 @@ public struct WindowPairing: Sendable {
         let noFrames = entries.allSatisfy { $0.window.bounds == nil }
         let any: (Window, Entry) -> Bool = { _, _ in true }
         let rules: [(matches: (Window, Entry) -> Bool, and: (Window, Entry) -> Bool, byFrameAlone: Bool)] = [
-            ({ $1.isAt($0) == true && $1.titles($0) == true }, any, false),
+            ({ $1.matches($0) }, any, false),
             ({ $1.isAt($0) == true }, { $1.titles($0) == nil }, true),
             ({ ($0.frame == nil || noFrames) && $1.titles($0) == true }, any, false),
         ]
