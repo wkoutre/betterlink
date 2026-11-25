@@ -135,7 +135,7 @@ public enum SidebarGeometry {
     public static func settled(window: CGRect, screen: CGRect, width: CGFloat, side: SidebarSide,
                                minWindowWidth: CGFloat = 500) -> CGRect? {
         let w = window.integral
-        let room = side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+        let room = room(beside: w, screen: screen, side: side)
         let need: CGFloat
         if isSnapped(w, screen: screen) {
             need = width
@@ -181,14 +181,9 @@ public struct FitMemory: Codable, Equatable, Sendable {
     public private(set) var entries: [Entry] = []
     public init(entries: [Entry] = []) { self.entries = entries }
 
-    /// Frames within a point count as the same: browsers round.
-    static func same(_ a: CGRect, _ b: CGRect) -> Bool {
-        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
-    }
-
     /// The record for this window when it is still exactly as narrowed.
     public func fitted(_ frame: CGRect, window: UInt32) -> Entry? {
-        entries.last { $0.window == window && Self.same($0.inner, frame) }
+        entries.last { $0.window == window && WidthLoan.same($0.inner, frame) }
     }
 
     public mutating func record(_ e: Entry) {

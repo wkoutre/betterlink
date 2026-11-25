@@ -117,6 +117,17 @@ struct SidebarGeometryTests {
         }
     }
 
+    /// A window that lent less than the sidebar's width goes no further than it
+    /// gets back, while the sidebar's own edge runs out to the end.
+    @Test func aPartlyLentWindowDoesNotOvershootWhenHiding() {
+        let hidden = CGRect(x: 960, y: 0, width: 960, height: 1049), shown = CGRect(x: 960, y: 0, width: 816, height: 1049)
+        for i in 0...20 {
+            let f = SidebarSlide.frames(hiddenWindow: hidden, shownWindow: shown, outerEdge: 2056, width: 280, side: .right, progress: Double(i) / 20)
+            #expect(f.window.maxX <= hidden.maxX && f.window.maxX >= shown.maxX && f.window.minX == 960)
+        }
+        #expect(SidebarSlide.frames(hiddenWindow: hidden, shownWindow: shown, outerEdge: 2056, width: 280, side: .right, progress: 0).innerEdge == 2056)
+    }
+
     @Test func leavingTheScreenIsOnlyForAnEdgeThatWasOnIt() {
         let s = CGRect(x: 0, y: 0, width: 1000, height: 700)
         #expect(SidebarGeometry.leaves(s, from: s, to: s.offsetBy(dx: 280, dy: 0)))

@@ -6,7 +6,7 @@ import CoreGraphics
 /// The width a browser window lends the sidebar. The two are one window: the
 /// sidebar shows by taking width from the browser, and hiding gives back what
 /// was taken, wherever the window has been since.
-public struct WidthLoan: Codable, Equatable, Sendable {
+public struct WidthLoan: Equatable, Sendable {
     /// What hiding gives the window.
     public var outer: CGRect
     /// The window while the sidebar is beside it.
@@ -32,7 +32,7 @@ public struct WidthLoan: Codable, Equatable, Sendable {
     public func settled(at frame: CGRect, screen: CGRect, justAsked: Bool) -> WidthLoan? {
         if Self.same(inner, frame) { return self }
         if justAsked, Self.near(inner, frame) { return WidthLoan(outer: outer, inner: frame, side: side) }
-        if SidebarGeometry.isSnapped(frame, screen: screen) { return nil }
+        if Self.same(outer, frame) || SidebarGeometry.isSnapped(frame, screen: screen) { return nil }
         return following(frame)
     }
 
@@ -54,14 +54,12 @@ public struct WidthLoan: Codable, Equatable, Sendable {
     /// wider by what it lent, on the sidebar's side, no further than its screen
     /// goes there. Its far edge stays where it is.
     public func givenBack(from frame: CGRect, screen: CGRect) -> CGRect {
-        guard let now = settled(at: frame, screen: screen, justAsked: false) else { return frame }
-        var o = now.outer
-        if side == .left, o.minX < screen.minX, frame.minX >= screen.minX {
-            o = CGRect(x: screen.minX, y: o.minY, width: o.maxX - screen.minX, height: o.height)
-        }
-        if side == .right, o.maxX > screen.maxX, frame.maxX <= screen.maxX {
-            o.size.width = screen.maxX - o.minX
-        }
-        return o
+        // Still at its full width: it lent nothing yet.
+        guard !Self.same(outer, frame), let now = settled(at: frame, screen: screen, justAsked: false) else { return frame }
+        let o = now.outer
+        // Past the edge already: no further.
+        let minX = side == .left ? max(o.minX, min(screen.minX, frame.minX)) : o.minX
+        let maxX = side == .right ? min(o.maxX, max(screen.maxX, frame.maxX)) : o.maxX
+        return CGRect(x: minX, y: o.minY, width: maxX - minX, height: o.height)
     }
 }

@@ -67,9 +67,11 @@ public struct SidebarSlide: Equatable, Sendable {
         let q = CGFloat(min(max(p, 0), 1))
         let inner = side == .left ? outerEdge + width * q : outerEdge - width * q
         guard hiddenWindow != shownWindow else { return (hiddenWindow, inner) }
+        // No further out than the window gets back: one that lent less than the
+        // sidebar's width stops there while the sidebar's edge goes on.
         var w = hiddenWindow
-        if side == .left { w.origin.x = inner; w.size.width = hiddenWindow.maxX - inner }
-        else { w.size.width = inner - hiddenWindow.minX }
+        if side == .left { w.origin.x = max(inner, hiddenWindow.minX); w.size.width = hiddenWindow.maxX - w.origin.x }
+        else { w.size.width = min(inner, hiddenWindow.maxX) - hiddenWindow.minX }
         return (w, inner)
     }
 }

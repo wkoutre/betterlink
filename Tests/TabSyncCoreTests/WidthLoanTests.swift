@@ -32,6 +32,7 @@ import Testing
             for side in SidebarSide.allCases {
                 for error in [CGFloat(0), 1, 3, 8] {
                     let (loan, window) = show(tile, side, error: error)
+                    if loan.taken < 10 { continue } // room beside it: nothing was lent
                     #expect(loan.givenBack(from: window, screen: screen) == tile, "\(tile) \(side) off by \(error)")
                 }
             }
@@ -92,6 +93,29 @@ import Testing
         let edge = CGRect(x: 100, y: 0, width: window.width, height: 1049)
         let back = loan.givenBack(from: edge, screen: screen)
         #expect(back.minX >= screen.minX && back.maxX == edge.maxX)
+    }
+
+    /// Past the screen's edge already: hiding takes it no further.
+    @Test func hidingNeverPushesAWindowFurtherOffTheScreen() {
+        for side in SidebarSide.allCases {
+            for past in [CGFloat(0.5), 10, 200, 600] {
+                let w = CGRect(x: 0, y: 0, width: 680, height: 900)
+                let frame = side == .left ? w.offsetBy(dx: -past, dy: 0) : w.offsetBy(dx: 1920 - 680 + past, dy: 0)
+                let loan = WidthLoan(outer: CGRect(x: 0, y: 0, width: 960, height: 900), inner: CGRect(x: 280, y: 0, width: 680, height: 900), side: side)
+                let back = loan.givenBack(from: frame, screen: screen)
+                #expect(side == .left ? back.minX >= frame.minX : back.maxX <= frame.maxX, "\(side) \(past) \(back)")
+                #expect(side == .left ? abs(back.maxX - frame.maxX) < 1 : abs(back.minX - frame.minX) < 1)
+            }
+        }
+    }
+
+    /// A browser that hasn't narrowed yet has lent nothing.
+    @Test func aWindowStillAtItsFullWidthGetsNothingMore() {
+        let tile = CGRect(x: 100, y: 50, width: 1500, height: 800) // no tile of the screen
+        let loan = WidthLoan(outer: tile, inner: CGRect(x: 380, y: 50, width: 1220, height: 800), side: .left)
+        #expect(loan.givenBack(from: tile, screen: screen) == tile)
+        // And when it does narrow, late, the loan still stands.
+        #expect(loan.settled(at: loan.inner, screen: screen, justAsked: false) == loan)
     }
 
     @Test func showHideShowHideNeverDrifts() {
