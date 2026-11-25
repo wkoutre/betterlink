@@ -5,6 +5,9 @@
 #
 # cooldown: a new upstream release waits a week before its PR, so a bad or
 # hijacked release has time to be caught. Security updates don't wait.
+#
+# Which of these PRs merge themselves: the `dependabot` job in
+# .github/workflows/test.yml.
 version: 2
 updates:
   - package-ecosystem: github-actions

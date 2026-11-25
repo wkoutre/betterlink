@@ -14,7 +14,7 @@ let package = Package(
         // Auto-update. Pinned exactly, and to a commit by Package.resolved
         // (committed; `make build` refuses any other). The release script
         // re-signs it with betterlink's Developer ID.
-        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.9.6"),
+        .package(url: "https://github.com/sparkle-project/Sparkle", exact: "2.10.1"),
     ],
     targets: [
         // Everything that decides where a link goes. No AppKit, so it is unit-testable.

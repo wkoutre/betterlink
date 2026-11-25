@@ -189,11 +189,8 @@ final class SidebarInstance: ObservableObject {
             if let real = WindowServer.frame(window.number) {
                 let edge = run.side == .left ? real.minX : real.maxX
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
-                // The sidebar follows the window's real edge, however late. Once
-                // a hiding window is as wide as it gets, the sidebar goes on alone.
-                let full = run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX
-                let goesOnAlone = run.slide.phase == .hiding && abs(edge - full) <= 1
-                seam = !goesOnAlone ? edge : run.side == .left ? min(edge, f.innerEdge) : max(edge, f.innerEdge)
+                seam = SidebarSlide.seam(windowEdge: edge, innerEdge: f.innerEdge,
+                                         hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
             }
         }
         panel.reveal = seam
@@ -241,7 +238,7 @@ final class SidebarInstance: ObservableObject {
         if l.phase == .asked { refused = at; return }
         // A browser at its minimum width: the pair shifts to fit the screen.
         if let asked, SidebarGeometry.room(beside: at, screen: screen(for: at), side: run.side) < width - 2 {
-            _ = learnMinWidth(asked: asked, got: window.target)
+            _ = learnMinWidth(asked: asked, got: window.target, wasWidth: run.hiddenWindow.width)
             fit(window.target, into: l.outer)
         }
     }
@@ -300,9 +297,9 @@ final class SidebarInstance: ObservableObject {
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         let screen = screen(for: t.frame)
         if let l = loan {
-            if Self.same(l.inner, t.frame) { return layout() }
+            if l.rests(at: t.frame) { return layout() }
             if refused != nil { return layout() } // still the answer it gave
-            if l.phase == .asked, learnMinWidth(asked: l.inner, got: t) {
+            if l.phase == .asked, learnMinWidth(asked: l.inner, got: t, wasWidth: l.outer.width) {
                 loan = nil
                 fit(t, into: l.outer) // it stops there: place the pair knowing that
                 return layout()
@@ -333,9 +330,18 @@ final class SidebarInstance: ObservableObject {
     /// the pair stays on the screen.
     private func fit(_ t: WindowTracker.Target, into outer: CGRect) {
         let screen = screen(for: outer)
-        for _ in 0..<2 {
+        // Back where it was, its edge covered. What was asked stands, for a
+        // browser that answers late.
+        func putBack(from now: CGRect) {
+            if !Self.same(now, t.frame) { tracker.setFrame(t.frame, of: window) }
+            observe(at: t.frame)
+            refused = t.frame
+        }
+        for pass in 0..<2 {
             guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: sidebar.side,
                                                       minWindowWidth: minWidth ?? 500) else {
+                // At its minimum width the pair has no place on this screen.
+                if pass > 0 { return putBack(from: window.target.frame) }
                 return coverIfNoRoom(t, on: screen)
             }
             loan = .asking(outer: outer, inner: inner, side: sidebar.side)
@@ -343,31 +349,27 @@ final class SidebarInstance: ObservableObject {
             tracker.setFrame(inner, of: window)
             let now = window.target
             if Self.same(now.frame, inner) { observe(at: now.frame); return }
-            if Self.same(now.frame, t.frame) || SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) {
-                // It would not narrow, only move: put it back and cover its edge.
-                // What was asked stands, for a browser that answers late.
-                if !Self.same(now.frame, t.frame) { tracker.setFrame(t.frame, of: window) }
-                observe(at: t.frame)
-                refused = t.frame
-                return
-            }
-            if learnMinWidth(asked: inner, got: now) { continue }
+            // Where it was: it has not answered, or won't narrow.
+            if Self.same(now.frame, t.frame) { return putBack(from: now.frame) }
+            // It narrowed, as far as it goes: asked again knowing that, as after a slide.
+            if learnMinWidth(asked: inner, got: now, wasWidth: t.frame.width) { continue }
+            // It would not narrow, only move.
+            if SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
             observe(at: now.frame)
             return
         }
         observe(at: window.target.frame)
     }
 
-    /// True when the window kept the place it was asked to take but is wider
-    /// than asked, by a width not known yet: the browser's minimum. Only right
-    /// after asking; later, it is the user widening the window.
-    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target) -> Bool {
-        guard Date().timeIntervalSince(askedAt) < 0.5, abs(t.frame.minX - asked.minX) < 2, abs(t.frame.height - asked.height) < 2,
-              t.frame.width > asked.width + 2, t.frame.width > (minWidth ?? 0) + 2,
-              // It did narrow. One still at its full width hasn't answered yet (or
-              // won't): that width is no minimum.
-              t.frame.width < (loan?.outer.width ?? .infinity) - 2 else { return false }
-        minWidth = t.frame.width
+    /// True when the window shows the browser's minimum width, not known yet
+    /// (`SidebarGeometry.minimumWidth`): `wasWidth` is how wide it was before
+    /// it was asked. Only right after asking; later, it is the user widening
+    /// the window.
+    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target, wasWidth: CGFloat) -> Bool {
+        guard Date().timeIntervalSince(askedAt) < 0.5,
+              let w = SidebarGeometry.minimumWidth(asked: asked, got: t.frame, wasWidth: wasWidth),
+              w > (minWidth ?? 0) + 2 else { return false }
+        minWidth = w
         return true
     }
 
@@ -451,7 +453,7 @@ final class SidebarInstance: ObservableObject {
             askedAt = Date()
             tracker.setFrame(new.window, of: window)
             // A browser at its minimum keeps its width: later steps stop there.
-            if learnMinWidth(asked: new.window, got: window.target) { return resize(by: delta) }
+            if learnMinWidth(asked: new.window, got: window.target, wasWidth: loan?.outer.width ?? .infinity) { return resize(by: delta) }
         }
         follow()
     }

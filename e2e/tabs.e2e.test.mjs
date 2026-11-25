@@ -278,6 +278,34 @@ test("the app's reload request restarts the extension only when its files on dis
   assert.equal(browser.self.restarts, 1);
 });
 
+test("a host's socket is listening from the moment it has its name", async (t) => {
+  // An app watching the folder connects the moment "<name>.sock" appears. A
+  // socket that was bound but not listening yet got refused, and the app
+  // deleted it as a crashed host's leftover.
+  const { createConnection } = await import("node:net");
+  for (let i = 0; i < 20; i++) {
+    const dir = mkdtempSync(join(tmpdir(), "bl-tabs-"));
+    const host = spawn(join(BIN, "betterlink-tabhost"), ["chrome-extension://gjjllnebeeegbipppiclhlomdppbnljh/"], {
+      env: { ...process.env, BETTERLINK_TABS_SOCKET_DIR: dir }, stdio: ["pipe", "ignore", "ignore"],
+    });
+    try {
+      // Spin, don't sleep: the point is to connect at the first sight of it.
+      const deadline = Date.now() + 5000;
+      let name;
+      while (!(name = readdirSync(dir).find((n) => n.endsWith(".sock"))) && Date.now() < deadline);
+      assert.ok(name, "the host made its socket");
+      await new Promise((resolve, reject) => {
+        const c = createConnection(join(dir, name));
+        c.on("connect", () => { c.destroy(); resolve(); });
+        c.on("error", (e) => reject(new Error(`run ${i}: the socket had its name before it was listening: ${e.code}`)));
+      });
+      assert.deepEqual(readdirSync(dir), [name], "nothing else is left in the folder");
+    } finally {
+      host.kill();
+    }
+  }
+});
+
 test("a stale socket from a crashed host is cleaned up, and a late app still gets a snapshot", async (t) => {
   const dir = mkdtempSync(join(tmpdir(), "bl-tabs-"));
   const browser = fakeBrowser();

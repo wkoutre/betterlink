@@ -52,7 +52,15 @@ enum AXWindow {
             guard AXValueGetValue(sv, .cgSize, &real) else { return }
             origin.x = ax.maxX - real.width
         }
-        if growing { move(); resize(); keepFarEdge(); move() } else { resize(); keepFarEdge(); move() }
+        if growing {
+            move(); resize()
+            // Moved again only if the browser has not widened as far as asked.
+            let asked = origin.x
+            keepFarEdge()
+            if abs(origin.x - asked) >= 1 { move() }
+        } else {
+            resize(); keepFarEdge(); move()
+        }
     }
 
     /// Brings the window in front of its app's other windows.

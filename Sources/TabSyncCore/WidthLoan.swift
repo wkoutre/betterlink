@@ -39,6 +39,10 @@ public struct WidthLoan: Equatable, Sendable {
         abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
     }
 
+    /// The window is where its loan left it: nothing to do. Never while only
+    /// asked: a window found narrowed has still to be seen to have lent.
+    public func rests(at frame: CGRect) -> Bool { phase == .lent && Self.same(frame, inner) }
+
     public struct Seen: Equatable, Sendable {
         /// Nil: the loan ended; place the window afresh.
         public var loan: WidthLoan?
@@ -64,7 +68,12 @@ public struct WidthLoan: Equatable, Sendable {
         case .lent:
             if Self.same(frame, inner) { return Seen(loan: self) }
             // Back at full width, or snapped to a new tile: that is the pair's now.
-            if Self.same(frame, outer) || SidebarGeometry.isSnapped(frame, screen: screen) { return Seen(loan: nil) }
+            // A nudge within the tile it is on already is no new tile, though
+            // what it lent may have left it on a snap line of its own.
+            let t = SidebarGeometry.snapTolerance
+            let nudged = abs(frame.minX - inner.minX) <= t && abs(frame.maxX - inner.maxX) <= t
+                && abs(frame.minY - inner.minY) <= t && abs(frame.maxY - inner.maxY) <= t
+            if Self.same(frame, outer) || (!nudged && SidebarGeometry.isSnapped(frame, screen: screen)) { return Seen(loan: nil) }
             // Moved or resized: the space goes with it.
             var o = frame
             o.size.width += taken
