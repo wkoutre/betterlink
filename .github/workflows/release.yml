@@ -13,9 +13,10 @@ name: release
 #   tap      copies the filled-in cask to wkoutre/homebrew-tap.
 #
 # Why one workflow: a tag or commit pushed with GITHUB_TOKEN never starts
-# another workflow run. That is also what stops the bump commit from looping
-# back into this workflow (the actor check below is a second guard, for the
-# day someone swaps in a PAT or app token).
+# another workflow run. The bump commit is pushed by the release bot (a GitHub
+# App the main rulesets let through), whose pushes would start workflows, so
+# it says [skip ci]; that is what stops it looping back into this workflow
+# (the actor check below is a second guard).
 #
 # Merges that touch only docs, tests, CI or the setup scripts don't release
 # (paths-ignore).
@@ -116,16 +117,33 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    environment: release-bot # holds the release bot's key; main only
+    env:
+      BOT_CLIENT_ID: ${{ secrets.RELEASE_BOT_CLIENT_ID }}
     permissions:
       contents: write # push the bump commit and the tag
     outputs:
       version: ${{ steps.version.outputs.version }}
       sha: ${{ steps.version.outputs.sha }}
     steps:
+      # The release bot is a GitHub App that the "main: review" and "main:
+      # checks" rulesets let push to main; GITHUB_TOKEN can't be a bypass actor
+      # on a personal account's repo. Until its secrets exist (in the
+      # release-bot environment, main only) this falls back to GITHUB_TOKEN.
+      - name: Release bot token
+        id: bot
+        if: env.BOT_CLIENT_ID != ''
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3.4.0
+        with:
+          client-id: ${{ env.BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ needs.test.outputs.sha }} # exactly what the tests passed on
           fetch-depth: 0 # tags, and main's history for the retry below
+          token: ${{ steps.bot.outputs.token || github.token }}
           persist-credentials: true # zizmor: ignore[artipacked] this job pushes the bump commit and tag
 
       - name: Pick the version, commit, tag, push
@@ -148,7 +166,7 @@ jobs:
           if git rev-parse -q --verify "refs/tags/v$current" >/dev/null; then
             version=$(./scripts/set-version.sh patch)
             git add Info.plist
-            git commit -m "betterlink $version"
+            git commit -m "betterlink $version [skip ci]"
             git tag "v$version"
             # Someone may have merged docs while this ran; replay on top, retry once.
             if ! git push --atomic origin HEAD:main "v$version"; then

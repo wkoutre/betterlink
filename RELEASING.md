@@ -118,7 +118,7 @@ Merge a pull request. That's it. On every push to `main` that changes more than 
 1. **test**: runs `make test` and `make test-cli` on `main`.
 2. **version**: reads `CFBundleShortVersionString` from `Info.plist`.
    - If that version has no tag yet, it is released as is. This is how to ship a minor or major version: set it in your pull request with `scripts/set-version.sh minor` (or `major`, or `0.4.0`).
-   - Otherwise it bumps the patch (`scripts/set-version.sh patch`), commits `betterlink X.Y.Z` to `main` as `github-actions[bot]`, and tags it `vX.Y.Z`. Pushes made with the workflow token never start another workflow run, so the bump commit doesn't loop.
+   - Otherwise it bumps the patch (`scripts/set-version.sh patch`), commits `betterlink X.Y.Z [skip ci]` to `main` with the release bot's token (a GitHub App kept in the `release-bot` environment, the only non-person the `main` rulesets let push), and tags it `vX.Y.Z`. `[skip ci]` keeps the bump commit from looping back into the workflow.
 
    Don't bump the patch by hand in a pull request; CI does it.
 3. **release**: builds, signs, notarizes and staples the app, uploads `betterlink-<version>.zip`, `betterlink-macos.zip` (the same file under a fixed name, which simplyautomated.io/betterlink/download points at), `SHA256SUMS`, `betterlink.rb` (the Homebrew cask) and `appcast.xml` (the Sparkle feed) to a draft, then publishes it in one step. Installed copies see the update within a day: their feed URL follows GitHub's latest published release. A run without the signing secrets, or with an update key that doesn't match `SUPublicEDKey`, fails instead of shipping.
