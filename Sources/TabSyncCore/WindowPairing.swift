@@ -11,7 +11,10 @@ import Foundation
 /// browser window and neither matches another) is certain, and kept while both
 /// exist. What only the focus or a lone frame says is kept too, but gives way to
 /// a certain pairing and to what the focus says next: the browser's word and
-/// macOS's word for which window is focused arrive a moment apart.
+/// macOS's word for which window is focused arrive a moment apart. A window
+/// paired by its frame alone, for want of a title, is let go when its title
+/// arrives and says otherwise: a window the extension can't see often sits
+/// exactly on one it can.
 public struct WindowPairing: Sendable {
     /// A browser window on this Mac, as Accessibility has it.
     public struct Window: Equatable, Sendable {
@@ -48,7 +51,12 @@ public struct WindowPairing: Sendable {
         case unseen
     }
 
-    private struct Pair { var hit: Hit; var certain: Bool }
+    private struct Pair {
+        var hit: Hit
+        var certain: Bool
+        /// Made with no title to compare.
+        var byFrameAlone = false
+    }
     private var pairs: [Int: Pair] = [:]
     private static let tolerance = 40.0
 
@@ -103,7 +111,8 @@ public struct WindowPairing: Sendable {
         for w in windows {
             guard let p = pairs[w.id] else { continue }
             let gone = !existing.contains(p.hit)
-            if gone || (!p.certain && entries.contains { $0.hit == p.hit && $0.isNot(w) }) { pairs[w.id] = nil }
+            let denied = entries.contains { $0.hit == p.hit && ($0.isNot(w) || (p.byFrameAlone && $0.titles(w) == false)) }
+            if gone || (!p.certain && denied) { pairs[w.id] = nil }
         }
         // Settled by frame and title. Each one settled can settle another.
         while let (w, e) = only(windows.filter { !isCertain($0.id) }, entries.filter { !claimed($0.hit, certainly: true) },
@@ -124,15 +133,15 @@ public struct WindowPairing: Sendable {
         // then, with no frames to go by, the only window with this title.
         let noFrames = entries.allSatisfy { $0.window.bounds == nil }
         let any: (Window, Entry) -> Bool = { _, _ in true }
-        let rules: [(matches: (Window, Entry) -> Bool, and: (Window, Entry) -> Bool)] = [
-            ({ $1.isAt($0) == true && $1.titles($0) == true }, any),
-            ({ $1.isAt($0) == true }, { $1.titles($0) == nil }),
-            ({ ($0.frame == nil || noFrames) && $1.titles($0) == true }, any),
+        let rules: [(matches: (Window, Entry) -> Bool, and: (Window, Entry) -> Bool, byFrameAlone: Bool)] = [
+            ({ $1.isAt($0) == true && $1.titles($0) == true }, any, false),
+            ({ $1.isAt($0) == true }, { $1.titles($0) == nil }, true),
+            ({ ($0.frame == nil || noFrames) && $1.titles($0) == true }, any, false),
         ]
         for rule in rules {
             while let (w, e) = only(windows.filter { pairs[$0.id] == nil }, entries.filter { !claimed($0.hit) },
                                     where: rule.matches, and: rule.and) {
-                claim(e.hit, for: w.id, certain: false)
+                claim(e.hit, for: w.id, certain: false, byFrameAlone: rule.byFrameAlone)
             }
         }
     }
@@ -152,8 +161,8 @@ public struct WindowPairing: Sendable {
         pairs.values.contains { $0.hit == hit && ($0.certain || !certainly) }
     }
 
-    private mutating func claim(_ hit: Hit, for id: Int, certain: Bool) {
+    private mutating func claim(_ hit: Hit, for id: Int, certain: Bool, byFrameAlone: Bool = false) {
         for (k, p) in pairs where p.hit == hit { pairs[k] = nil }
-        pairs[id] = Pair(hit: hit, certain: certain)
+        pairs[id] = Pair(hit: hit, certain: certain, byFrameAlone: byFrameAlone)
     }
 }

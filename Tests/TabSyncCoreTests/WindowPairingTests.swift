@@ -112,6 +112,19 @@ struct WindowPairingTests {
         }
     }
 
+    @Test func aWindowPairedByItsFrameAloneIsLetGoWhenItsTitleSaysOtherwise() {
+        // An Incognito window the extension can't see, exactly on a regular
+        // window that isn't followed yet (another Space), untitled so far.
+        var p = WindowPairing()
+        let s = session("/a", [theirs(1, "Inbox")])
+        #expect(p.update([ours(100, "")], in: [s]) == [100: hit("/a", 1)])
+        #expect(p.update([ours(100, "Secret - Google Chrome (Incognito)")], in: [s]) == [100: .unseen])
+        // One whose title then agrees is kept.
+        _ = p.update([ours(101, "")], in: [s])
+        #expect(p.update([ours(101, "Inbox - Google Chrome")], in: [s]) == [101: hit("/a", 1)])
+        #expect(p.isCertain(101))
+    }
+
     @Test func withoutFramesTheTitleAloneDecidesWhenOneWindowHasIt() {
         func frameless(_ id: Int, _ title: String) -> SnapshotWindow {
             SnapshotWindow(id: id, focused: false, tabs: [Tab(id: id * 10, windowId: id, title: title, active: true)])
