@@ -9,7 +9,8 @@ final class TrackedWindow {
     let element: AXUIElement
     /// Its window-server number.
     let number: CGWindowID
-    unowned let watcher: BrowserWatcher
+    /// Nil once its browser is no longer followed.
+    private(set) weak var watcher: BrowserWatcher?
     var target: WindowTracker.Target
     var settleWork: DispatchWorkItem?
 
@@ -33,9 +34,12 @@ final class TrackedWindow {
         target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
         target.fullScreen = AXWindow.copy(element, "AXFullScreen") ?? false
         target.minimized = AXWindow.copy(element, kAXMinimizedAttribute) ?? false
-        target.appHidden = watcher.isHidden
+        target.appHidden = watcher?.isHidden ?? false
         return true
     }
+
+    /// Whether it is its browser's focused main window.
+    var isFocused: Bool { watcher?.focused === self }
 }
 
 /// Watches one running browser's main windows through one AXObserver: windows
@@ -201,6 +205,8 @@ final class BrowserWatcher {
             if let w = tracked(el) { remove(w) }
         case kAXApplicationHiddenNotification, kAXApplicationShownNotification:
             refresh()
+            // A window first seen while its browser was hidden settles now.
+            if name == kAXApplicationShownNotification { windows.forEach(tracker.scheduleSettle) }
             tracker.orderMayHaveChanged()
         case kAXTitleChangedNotification:
             guard let w = tracked(el) else { return }

@@ -5,8 +5,8 @@ import ApplicationServices
 /// not: which there are, and each one's frame, title and state, the moment they
 /// change. Event-driven throughout:
 ///
-/// - NSWorkspace tells us when apps launch, quit, hide or come to the front, and
-///   when another Space shows.
+/// - NSWorkspace tells us when apps launch, quit or come to the front, and when
+///   another Space shows.
 /// - An AXObserver on each browser (BrowserWatcher) tells us about its windows.
 /// - During a live drag the frame comes from the window server, not from the
 ///   browser (an Accessibility read waits for the browser's busy main thread):
@@ -52,6 +52,8 @@ final class WindowTracker: NSObject {
     }
 
     private var watchers: [pid_t: BrowserWatcher] = [:]
+    /// Every window followed now.
+    var windows: [TrackedWindow] { watchers.values.flatMap(\.windows) }
     private var tokens: [(center: NotificationCenter, token: NSObjectProtocol)] = []
     private var isRunning: Bool { !tokens.isEmpty }
     private var mouseMonitor: Any?
@@ -76,16 +78,16 @@ final class WindowTracker: NSObject {
     func start() {
         guard !isRunning else { return }
         let workspace = NSWorkspace.shared.notificationCenter
-        listen(workspace, NSWorkspace.didActivateApplicationNotification) { $0.frontAppChanged() }
-        listen(workspace, NSWorkspace.didLaunchApplicationNotification) { $0.watchRunning() }
-        listen(workspace, NSWorkspace.didTerminateApplicationNotification) { $0.watchRunning() }
-        for name in [NSWorkspace.didHideApplicationNotification, NSWorkspace.didUnhideApplicationNotification] {
-            listen(workspace, name) { t in
-                t.watchers.values.forEach { $0.refresh() }
-                t.orderMayHaveChanged()
-            }
+        listen(workspace, NSWorkspace.didActivateApplicationNotification) { t, _ in t.frontAppChanged() }
+        // Only a browser's coming or going: other apps launch and quit all day.
+        listen(workspace, NSWorkspace.didLaunchApplicationNotification) { t, app in
+            if let id = app?.bundleIdentifier, t.browserBundleIds.contains(id) { t.watchRunning() }
         }
-        listen(workspace, NSWorkspace.activeSpaceDidChangeNotification) { t in
+        listen(workspace, NSWorkspace.didTerminateApplicationNotification) { t, app in
+            if let pid = app?.processIdentifier, t.watchers[pid] != nil { t.watchRunning() }
+        }
+        listen(workspace, NSWorkspace.activeSpaceDidChangeNotification) { t, _ in
+            guard !t.watchers.isEmpty else { return }
             let all = WindowServer.all()
             for w in t.watchers.values {
                 w.drop(missingFrom: all)
@@ -93,7 +95,7 @@ final class WindowTracker: NSObject {
             }
             t.orderMayHaveChanged()
         }
-        listen(.default, NSApplication.didChangeScreenParametersNotification) { t in
+        listen(.default, NSApplication.didChangeScreenParametersNotification) { t, _ in
             t.watchers.values.forEach { $0.refresh() }
             t.orderMayHaveChanged()
         }
@@ -101,9 +103,11 @@ final class WindowTracker: NSObject {
         frontAppChanged()
     }
 
-    private func listen(_ center: NotificationCenter, _ name: Notification.Name, _ body: @escaping @MainActor (WindowTracker) -> Void) {
-        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { if let self { body(self) } }
+    private func listen(_ center: NotificationCenter, _ name: Notification.Name,
+                        _ body: @escaping @MainActor (WindowTracker, NSRunningApplication?) -> Void) {
+        let token = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] note in
+            let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+            MainActor.assumeIsolated { if let self { body(self, app) } }
         }
         tokens.append((center, token))
     }
@@ -113,6 +117,7 @@ final class WindowTracker: NSObject {
         tokens = []
         settledWork?.cancel()
         for pid in Array(watchers.keys) { unwatch(pid, closed: false) }
+        waitingForMouseUp = []
         updateMouseMonitor()
     }
 
@@ -142,6 +147,7 @@ final class WindowTracker: NSObject {
         waitingForMouseUp.removeAll { $0.watcher === w }
         w.stop()
         for window in windows { onRemoved?(window, closed) }
+        updateMouseMonitor()
     }
 
     private var frontWatcher: BrowserWatcher? {
@@ -182,22 +188,21 @@ final class WindowTracker: NSObject {
     /// Moves or resizes a window, and reports where it really went.
     func setFrame(_ frame: CGRect, of w: TrackedWindow) {
         AXWindow.setFrame(frame, of: w.element)
-        w.watcher.refresh(w)
+        w.watcher?.refresh(w)
     }
 
     func scheduleSettle(_ w: TrackedWindow) {
         w.settleWork?.cancel()
         let work = DispatchWorkItem { [weak self, weak w] in
             MainActor.assumeIsolated {
-                guard let self, let w else { return }
+                guard let self, let w, let watcher = w.watcher else { return }
                 if NSEvent.pressedMouseButtons & 1 != 0 {
-                    // Mouse up settles it. With no browser in front the mouse
-                    // isn't watched, so look again.
-                    if self.mouseMonitor == nil { self.scheduleSettle(w) }
-                    else if !self.waitingForMouseUp.contains(where: { $0 === w }) { self.waitingForMouseUp.append(w) }
+                    // Mouse up settles it: the mouse is watched until then.
+                    if !self.waitingForMouseUp.contains(where: { $0 === w }) { self.waitingForMouseUp.append(w) }
+                    self.updateMouseMonitor()
                     return
                 }
-                w.watcher.refresh(w)
+                watcher.refresh(w)
                 self.onSettle?(w.target)
             }
         }
@@ -208,17 +213,17 @@ final class WindowTracker: NSObject {
 
     // MARK: - Live drag
 
-    /// Only while a browser is in front: a drag in any other app isn't ours.
+    /// Only while a browser is in front (a drag in any other app isn't ours),
+    /// or a window that moved waits for the mouse to come up.
     private func updateMouseMonitor() {
-        if frontWatcher != nil, isRunning {
-            guard mouseMonitor == nil else { return }
+        let wanted = isRunning && (frontWatcher != nil || !waitingForMouseUp.isEmpty)
+        if wanted, mouseMonitor == nil {
             mouseMonitor = NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDragged, .leftMouseUp]) { [weak self] e in
                 MainActor.assumeIsolated { self?.mouseEvent(e.type) }
             }
-        } else if let m = mouseMonitor {
+        } else if !wanted, let m = mouseMonitor {
             NSEvent.removeMonitor(m)
             mouseMonitor = nil
-            settleWaiting()
         }
     }
 
@@ -240,6 +245,7 @@ final class WindowTracker: NSObject {
         default:
             if let d = drag { endDrag(d.window) } else if let w = frontWindow { scheduleSettle(w) }
             settleWaiting()
+            updateMouseMonitor()
         }
     }
 
@@ -267,7 +273,7 @@ final class WindowTracker: NSObject {
     private func endDrag(_ w: TrackedWindow) {
         DragTrace.end()
         stopDrag()
-        w.watcher.refresh(w)
+        w.watcher?.refresh(w)
         scheduleSettle(w)
     }
 

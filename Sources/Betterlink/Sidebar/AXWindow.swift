@@ -88,6 +88,7 @@ enum AXWindow {
 
 /// What the window server knows about every app's windows: numbers, frames and
 /// layers only, which need no Screen Recording permission (names would).
+@MainActor
 enum WindowServer {
     /// The windows on screen at the normal level, front to back: on a Space
     /// that is showing, not minimized, their app not hidden.
