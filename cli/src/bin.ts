@@ -384,6 +384,10 @@ const tabId = z.object({
 })
 const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the betterlink Tabs extension: list, open, close, move and more' })
   .command('list', { description: 'Every connected browser window and its tabs', run: () => core('tabs.list') })
+  .command('extension', {
+    description: 'Where the Tabs extension is on this Mac, for Load unpacked in a browser (it updates with betterlink)',
+    run: () => core('tabs.extension'),
+  })
   .command('open', {
     description: 'Open a page in a new tab',
     args: z.object({ url: z.string() }),

@@ -43,9 +43,9 @@ The terminal view (`betterlink-tabs`) prints the event latency (browser fired it
 browser-extension/           MV3 extension (bridge.js is pure and unit tested)
 Sources/TabSyncCore/         protocol, TabStore reducer, framings, SyncHub, HostRegistration (Foundation only)
 Sources/betterlink-tabhost/  native messaging host, shipped in Contents/Helpers
-Sources/betterlink-tabs/     terminal view: prints events with latency; open, close, activate, move, mute, duplicate, reload, navigate, list
+Sources/betterlink-tabs/     terminal view: prints events with latency; open, close, activate, move, mute, duplicate, reload, navigate, list, reload-extension
 Sources/Betterlink/TabsPage.swift  the Tabs page
-Tests/TabSyncCoreTests/      reducer, framings, host registration, pinned extension id
+Tests/TabSyncCoreTests/      reducer, framings, host registration, pinned extension id, the extension's folder
 e2e/                         full pipe test
 ```
 
@@ -53,7 +53,31 @@ e2e/                         full pipe test
 
 1. Build and run betterlink (CONTRIBUTING.md: use a `BETTERLINK_HOME` temp folder).
 2. Tabs page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Remove** deletes it.
-3. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/`.
+3. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/` (the repository's folder while you are changing the extension; see below for an installed betterlink).
+
+## The extension on a Mac without the repository
+
+The extension is not in the Chrome Web Store yet (docs/tabs-store.md), so it is loaded unpacked. It ships inside betterlink.app (`Contents/Resources/browser-extension`, put there by `make build`), and betterlink keeps a copy in one folder that is the same on every Mac:
+
+```
+~/Library/Application Support/betterlink-tabs/extension
+```
+
+Once per browser profile:
+
+1. Tabs page › Browsers › **Show in Finder** (or `betterlink tabs extension`, which prints the folder).
+2. In the browser, open chrome://extensions and turn on Developer mode.
+3. Drag the `extension` folder from Finder onto that page. (Load unpacked works too: press ⌘⇧G in its file picker and paste the path, because `~/Library` is hidden.)
+
+Leave Developer mode on: the browser turns an unpacked extension off without it. No browser lets an app do these steps for you on a Mac it doesn't manage.
+
+After that the extension follows the app (`ExtensionCopy`, unit tested):
+
+- When betterlink starts the Tabs page or the sidebar, it replaces the folder's files if its own copy is newer. It never downgrades the folder (two betterlinks on one Mac keep the newer extension), and it only writes into an empty folder or an earlier copy of this extension.
+- The browser reads the folder again each time it starts. A browser that is already running is told to reload the extension (`reloadSelf`, extension 0.3.0), once per connection. The extension reloads only if the manifest on disk has another version than the one running, so a copy loaded from another folder, or the store's copy, stays as it is and nothing can loop.
+- Bump `version` in `browser-extension/manifest.json` with every change to the extension: that is what both sides compare.
+
+Under `BETTERLINK_HOME` the folder is `tabs-extension` inside it, so a test or development run never replaces the extension a browser is really using. `BETTERLINK_TABS_EXTENSION_DIR` puts it anywhere.
 
 The extension's id is its Chrome Web Store item id, `gjjllnebeeegbipppiclhlomdppbnljh`. The `key` in its manifest is that item's public key (checked by a test), so an unpacked copy has the same id and `allowed_origins` matches both. A registration written for another id shows as "Set up for an older betterlink": press Set Up Again. Nothing starts until the Tabs page is opened or the sidebar is turned on.
 

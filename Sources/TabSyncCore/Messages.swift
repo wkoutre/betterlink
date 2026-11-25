@@ -152,9 +152,11 @@ public struct Command: Codable, Equatable, Sendable {
 
     /// Every command. The first four are the ones every extension runs; the
     /// rest arrived with extension 0.2, which lists what it runs in its hello.
+    /// `reloadSelf` arrived with 0.3.
     public enum Op: String, CaseIterable, Sendable {
         case snapshot, open, close, activate
         case move, mute, duplicate, reload, navigate, closeMany, newWindow
+        case reloadSelf
 
         /// What an extension that sends no list (0.1) runs.
         public static let original: Set<String> = [Op.snapshot, .open, .close, .activate].reduce(into: []) { $0.insert($1.rawValue) }
@@ -186,6 +188,9 @@ public struct Command: Codable, Equatable, Sendable {
     public static func close(_ tabIds: [Int]) -> Command { Command(.closeMany, tabIds: tabIds) }
     /// Moves a tab out of its window into a new one of its own.
     public static func newWindow(with tabId: Int) -> Command { Command(.newWindow, tabId: tabId) }
+    /// Asks the extension to restart from its files on disk. It does only when
+    /// they are another version than the one running (see `ExtensionCopy`).
+    public static func reloadSelf() -> Command { Command(.reloadSelf) }
 }
 
 public func nowMs() -> Double { Date().timeIntervalSince1970 * 1000 }

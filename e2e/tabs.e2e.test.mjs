@@ -83,6 +83,18 @@ function fakeBrowser() {
   return { chrome, wins, reloads };
 }
 
+// The same browser with the extension's own runtime: the version it runs, the
+// version of its files on disk, and a count of the times it restarted itself.
+function fakeBrowserWithRuntime(running) {
+  const browser = fakeBrowser();
+  const self = { running, onDisk: running, restarts: 0 };
+  browser.chrome.runtime = {
+    getManifest: () => ({ version: self.running }),
+    reload: () => { self.restarts += 1; self.running = self.onDisk; },
+  };
+  return { ...browser, self };
+}
+
 function frame(obj) {
   const body = Buffer.from(JSON.stringify(obj));
   const head = Buffer.alloc(4); head.writeUInt32LE(body.length);
@@ -94,7 +106,7 @@ function startHost(dir, browser) {
     env: { ...process.env, BETTERLINK_TABS_SOCKET_DIR: dir, BETTERLINK_TABS_BROWSER_NAME: "Fake Chrome" },
     stdio: ["pipe", "pipe", "inherit"],
   });
-  const bridge = createBridge(browser.chrome, (m) => host.stdin.write(frame(m)));
+  const bridge = createBridge(browser.chrome, (m) => host.stdin.write(frame(m)), undefined, undefined, async () => browser.self?.onDisk ?? "");
   bridge.attach();
   let buf = Buffer.alloc(0);
   host.stdout.on("data", (chunk) => {
@@ -234,6 +246,36 @@ test("what the sidebar's menus send reaches the browser: move, mute, duplicate, 
   cmd(`close ${saved.id} ${copy.id}`);
   s = await until((s) => urls(s).length === 1 && urls(s)[0] === "https://start.test/", "both closed");
   assert.equal(browser.wins[0].tabs.length, 1, "the browser really closed them");
+});
+
+test("the app's reload request restarts the extension only when its files on disk are another version", async (t) => {
+  const dir = mkdtempSync(join(tmpdir(), "bl-tabs-"));
+  const browser = fakeBrowserWithRuntime("0.3.0");
+  const { host } = startHost(dir, browser);
+  t.after(() => host.kill());
+  const { app, until, cmd } = startApp(dir);
+  t.after(() => app.kill());
+  await until((s) => urls(s).includes("https://start.test/"), "initial snapshot");
+
+  // Same version on disk (a copy the app doesn't manage, or nothing new): no restart.
+  cmd("reload-extension");
+  // A later command's effect arriving shows the request before it was handled.
+  cmd("open https://after-first.test/");
+  await until((s) => urls(s).includes("https://after-first.test/"), "the command after the first request");
+  assert.equal(browser.self.restarts, 0);
+
+  // betterlink replaced the files: the next request restarts it, once.
+  browser.self.onDisk = "0.3.1";
+  cmd("reload-extension");
+  for (let i = 0; i < 150 && !browser.self.restarts; i++) await new Promise((r) => setTimeout(r, 20));
+  assert.equal(browser.self.restarts, 1);
+  assert.equal(browser.self.running, "0.3.1");
+
+  // Now it runs what is on disk, so asking again does nothing.
+  cmd("reload-extension");
+  cmd("open https://after-third.test/");
+  await until((s) => urls(s).includes("https://after-third.test/"), "the command after the third request");
+  assert.equal(browser.self.restarts, 1);
 });
 
 test("a stale socket from a crashed host is cleaned up, and a late app still gets a snapshot", async (t) => {

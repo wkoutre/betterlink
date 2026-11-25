@@ -31,6 +31,10 @@ function fakeChrome() {
       update: async (id, o) => { calls.push(["windows.update", id, o]); },
       create: async (o) => { calls.push(["windows.create", o]); return { id: 5, tabs: [{ id: 55, windowId: 5, index: 0 }] }; },
     },
+    runtime: {
+      getManifest: () => ({ version: "0.3.0" }),
+      reload: () => { calls.push(["runtime.reload"]); },
+    },
   };
   return c;
 }
@@ -229,5 +233,40 @@ test("the hello's op list is exactly what run() handles", async () => {
   for (const op of OPS) {
     await b.handle({ type: "cmd", id: op, op, tabId: 10, index: 0, url: "https://a.test/", tabIds: [10] });
     assert.ok(!/unknown op/.test(out.at(-1).error || ""), op + " is handled");
+  }
+});
+
+// reloadSelf: the app has put newer files where this copy was loaded from.
+function reloadSetup(diskVersion) {
+  const chrome = fakeChrome();
+  const out = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1234, async () => "", diskVersion);
+  return { chrome, out, b };
+}
+
+test("reloadSelf reloads into the files on disk when they are another version, after acking", async () => {
+  const { chrome, out, b } = reloadSetup(async () => "0.3.1");
+  let ackedFirst = false;
+  chrome.runtime.reload = () => { ackedFirst = out.some((m) => m.type === "ack" && m.id === "r1" && m.ok); chrome.calls.push(["runtime.reload"]); };
+  await b.handle({ type: "cmd", id: "r1", op: "reloadSelf" });
+  assert.deepEqual(chrome.calls, [["runtime.reload"]]);
+  assert.ok(ackedFirst, "the ack goes out before the extension restarts");
+});
+
+test("reloadSelf does nothing when the files on disk are the version already running", async () => {
+  // A copy loaded from somewhere the app doesn't manage, or the store's copy.
+  const { chrome, out, b } = reloadSetup(async () => "0.3.0");
+  await b.handle({ type: "cmd", id: "r2", op: "reloadSelf" });
+  assert.deepEqual(chrome.calls, []);
+  assert.equal(out.at(-1).ok, false);
+  assert.match(out.at(-1).error, /nothing newer on disk/);
+});
+
+test("reloadSelf does nothing when the files on disk can't be read", async () => {
+  for (const diskVersion of [async () => { throw new Error("gone"); }, async () => "", async () => null, undefined]) {
+    const { chrome, out, b } = reloadSetup(diskVersion);
+    await b.handle({ type: "cmd", id: "r3", op: "reloadSelf" });
+    assert.deepEqual(chrome.calls, []);
+    assert.equal(out.at(-1).ok, false);
   }
 });
