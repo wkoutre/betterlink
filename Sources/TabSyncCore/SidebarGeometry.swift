@@ -62,6 +62,16 @@ public enum SidebarGeometry {
         (a.maxX <= screen.maxX + 2 && b.maxX > screen.maxX + 2) || (a.minX >= screen.minX - 2 && b.minX < screen.minX - 2)
     }
 
+    /// The browser's minimum width, when its answer to being asked to narrow
+    /// to `asked` shows one: it took the place asked and narrowed from
+    /// `wasWidth`, but not as far as asked. A window as wide as before has not
+    /// answered yet, or won't narrow: that width is no minimum.
+    public static func minimumWidth(asked: CGRect, got: CGRect, wasWidth: CGFloat) -> CGFloat? {
+        guard abs(got.minX - asked.minX) < 2, abs(got.height - asked.height) < 2,
+              got.width > asked.width + 2, got.width < wasWidth - 2 else { return nil }
+        return got.width
+    }
+
     /// The narrowest and widest the sidebar gets.
     public static let widths: ClosedRange<CGFloat> = 200...440
 

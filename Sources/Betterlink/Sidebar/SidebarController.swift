@@ -331,7 +331,7 @@ final class SidebarController: ObservableObject {
         // A browser at its minimum width: the pair shifts to fit the screen.
         if let t = current, t.windowHash == run.windowHash, let asked,
            SidebarGeometry.room(beside: at, screen: screen(for: at), side: run.side) < width - 2 {
-            _ = learnMinWidth(asked: asked, got: t)
+            _ = learnMinWidth(asked: asked, got: t, wasWidth: run.hiddenWindow.width)
             fit(t, into: f.outer)
         }
     }
@@ -493,7 +493,7 @@ final class SidebarController: ObservableObject {
         if let f = fits[t.windowHash] {
             if f.loan.rests(at: t.frame) { return layout() }
             if refused != nil { return layout() } // still the answer it gave
-            if f.loan.phase == .asked, learnMinWidth(asked: f.inner, got: t) {
+            if f.loan.phase == .asked, learnMinWidth(asked: f.inner, got: t, wasWidth: f.outer.width) {
                 fits[t.windowHash] = nil
                 fit(t, into: f.outer) // it stops there: place the pair knowing that
                 return layout()
@@ -543,26 +543,27 @@ final class SidebarController: ObservableObject {
             tracker.setWindowFrame(inner)
             guard let now = current, now.windowHash == t.windowHash else { return }
             if Self.same(now.frame, inner) { observe(t.windowHash, at: now.frame, window: tracker.boundWindow); return }
+            // Where it was: it has not answered, or won't narrow.
+            if Self.same(now.frame, t.frame) { return putBack(from: now.frame) }
             // It narrowed, as far as it goes: asked again knowing that, as after a slide.
-            if learnMinWidth(asked: inner, got: now) { continue }
+            if learnMinWidth(asked: inner, got: now, wasWidth: t.frame.width) { continue }
             // It would not narrow, only move.
-            if Self.same(now.frame, t.frame) || SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
+            if SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
             observe(t.windowHash, at: now.frame, window: tracker.boundWindow)
             return
         }
         if let now = current, now.windowHash == t.windowHash { observe(t.windowHash, at: now.frame, window: tracker.boundWindow) }
     }
 
-    /// True when the window kept the place it was asked to take but is wider
-    /// than asked, by a width not known yet: the browser's minimum. Only right
-    /// after asking; later, it is the user widening the window.
-    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target) -> Bool {
-        guard Date().timeIntervalSince(askedAt) < 0.5, abs(t.frame.minX - asked.minX) < 2, abs(t.frame.height - asked.height) < 2,
-              t.frame.width > asked.width + 2, t.frame.width > (minWidths[t.windowHash] ?? 0) + 2,
-              // It did narrow. One still at its full width hasn't answered yet (or
-              // won't): that width is no minimum.
-              t.frame.width < (fits[t.windowHash]?.outer.width ?? .infinity) - 2 else { return false }
-        minWidths[t.windowHash] = t.frame.width
+    /// True when the window shows the browser's minimum width, not known yet
+    /// (`SidebarGeometry.minimumWidth`): `wasWidth` is how wide it was before
+    /// it was asked. Only right after asking; later, it is the user widening
+    /// the window.
+    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target, wasWidth: CGFloat) -> Bool {
+        guard Date().timeIntervalSince(askedAt) < 0.5,
+              let w = SidebarGeometry.minimumWidth(asked: asked, got: t.frame, wasWidth: wasWidth),
+              w > (minWidths[t.windowHash] ?? 0) + 2 else { return false }
+        minWidths[t.windowHash] = w
         return true
     }
 
@@ -638,7 +639,7 @@ final class SidebarController: ObservableObject {
             askedAt = Date()
             tracker.setWindowFrame(new.window)
             // A browser at its minimum keeps its width: later steps stop there.
-            if let now = current, now.windowHash == r.windowHash, learnMinWidth(asked: new.window, got: now) {
+            if let now = current, now.windowHash == r.windowHash, learnMinWidth(asked: new.window, got: now, wasWidth: fits[now.windowHash]?.outer.width ?? .infinity) {
                 return resize(by: delta)
             }
         }

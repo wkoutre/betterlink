@@ -275,4 +275,19 @@ struct SidebarGeometryTests {
         #expect(c2.maxY == 875)
         #expect(SidebarGeometry.ax(fromCocoa: c2, mainScreenHeight: 900) == ax2)
     }
+
+    /// A browser shows its minimum width by narrowing to it where it was asked
+    /// to go. One no narrower than before it was asked has not answered yet, or
+    /// won't narrow: that width is no minimum, whatever space it was lent before.
+    @Test func aWindowThatHasNotAnsweredTeachesNoMinimumWidth() {
+        // Narrowed once already (700 of a 920 pt space), asked for 600, not answered.
+        let asked = CGRect(x: 1000, y: 0, width: 600, height: 900), still = CGRect(x: 1000, y: 0, width: 700, height: 900)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: still, wasWidth: 700) == nil)
+        // It narrowed, to 650 and no further: that is its minimum.
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 1000, y: 0, width: 650, height: 900), wasWidth: 700) == 650)
+        // As asked, or somewhere else, or another height: nothing learned.
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: asked, wasWidth: 700) == nil)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 950, y: 0, width: 650, height: 900), wasWidth: 700) == nil)
+        #expect(SidebarGeometry.minimumWidth(asked: asked, got: CGRect(x: 1000, y: 0, width: 650, height: 800), wasWidth: 700) == nil)
+    }
 }
