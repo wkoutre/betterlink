@@ -222,8 +222,15 @@ final class SidebarController: ObservableObject {
     }
 
     /// Gives every window the sidebar narrowed its space back, if it is still
-    /// as narrowed. Called when the app quits.
-    func giveSpaceBack() { instances.values.forEach { $0.giveSpaceBack() } }
+    /// as narrowed. Called when the app quits. A browser that doesn't answer
+    /// for one window isn't asked about its others (they keep their records):
+    /// each would wait out its time while the app is quitting.
+    func giveSpaceBack() {
+        var hung: Set<pid_t> = []
+        for i in instances.values where !hung.contains(i.window.target.pid) {
+            if !i.giveSpaceBack(), AXWindow.timedOut { hung.insert(i.window.target.pid) }
+        }
+    }
 
     private func trustMayHaveChanged() {
         let now = WindowTracker.isTrusted

@@ -91,12 +91,12 @@ final class WindowTracker: NSObject {
             let all = WindowServer.all()
             for w in t.watchers.values {
                 w.drop(missingFrom: all)
-                w.scan() // the windows of the Space that shows now
+                if !w.isStalled { w.scan() } // the windows of the Space that shows now
             }
             t.orderMayHaveChanged()
         }
         listen(.default, NSApplication.didChangeScreenParametersNotification) { t, _ in
-            t.watchers.values.forEach { $0.refresh() }
+            t.watchers.values.forEach { $0.refresh() } // not a browser that isn't answering
             t.orderMayHaveChanged()
         }
         watchRunning()

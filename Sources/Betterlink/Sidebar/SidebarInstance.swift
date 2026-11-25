@@ -262,7 +262,9 @@ final class SidebarInstance: ObservableObject {
 
     /// Gives the window its space back, if it is still as narrowed: the
     /// sidebar is turned off, its browser no longer attached, or the app quits.
-    func giveSpaceBack() {
+    /// False when the window couldn't be read.
+    @discardableResult
+    func giveSpaceBack() -> Bool {
         // Mid-slide the window goes back to its full frame first, since it is
         // at neither the narrowed nor the full width.
         if let run = slideRun {
@@ -274,10 +276,12 @@ final class SidebarInstance: ObservableObject {
         }
         // A window that can't be read now (a hung browser) keeps its record,
         // so it is recognised later instead of narrowed again.
-        guard let l = loan, let now = AXWindow.frame(of: window.element) else { return }
+        guard let l = loan else { return true }
+        guard let now = AXWindow.frame(of: window.element) else { return false }
         let back = l.givenBack(from: now, screen: screen(for: now))
         if !Self.same(back, now) { tracker.setFrame(back, of: window) }
         loan = nil
+        return true
     }
 
     // MARK: - Fitting the window

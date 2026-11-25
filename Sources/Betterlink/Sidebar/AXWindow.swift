@@ -8,9 +8,20 @@ import TabSyncCore
 enum AXWindow {
     static func copy<T>(_ el: AXUIElement, _ attr: String) -> T? {
         var v: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let v else { return nil }
+        let answer = AXUIElementCopyAttributeValue(el, attr as CFString, &v)
+        timedOut = answer == .cannotComplete
+        guard answer == .success, let v else { return nil }
         return v as? T
     }
+
+    /// Whether the last `copy` got no answer in time: its app is hung or busy.
+    private(set) static var timedOut = false
+
+    /// How long one call to a browser may wait. The default is several
+    /// seconds, on the main thread, for each call a hung browser doesn't
+    /// answer. Set on every element kept or asked more than once: per the
+    /// header it holds for that object only, not for others equal to it.
+    static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, 1) }
 
     static func frame(of win: AXUIElement) -> CGRect? {
         guard let pv: AXValue = copy(win, kAXPositionAttribute), let sv: AXValue = copy(win, kAXSizeAttribute),
