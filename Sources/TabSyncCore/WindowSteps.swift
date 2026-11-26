@@ -89,6 +89,8 @@ public struct WindowSteps: Sendable {
     public let deadline: Double?
     /// The final target sent whole once more (see above).
     public let resends: Bool
+    /// A width this window's browser was seen to stop at, asked narrower.
+    public let stops: CGFloat?
     /// A change the call in flight can't make ends the steps (`interrupted`).
     /// With a `deadline`, always; the final target sent once more, only when
     /// nothing of betterlink's can still be on its way (not after a cap).
@@ -159,7 +161,7 @@ public struct WindowSteps: Sendable {
     /// `after`: the steps these replace, mid-way: their call in flight is
     /// waited for first.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, settles: Bool = false, after earlier: WindowSteps? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil) {
         self.target = target
         self.keep = keep
         self.widest = widest
@@ -168,6 +170,7 @@ public struct WindowSteps: Sendable {
         self.resends = resends
         self.watches = resends ? watches : deadline != nil
         self.settles = resends && settles
+        self.stops = stops
         // Its call in flight is waited for first, as one of these.
         if let earlier, !earlier.done {
             sent = earlier.sent

@@ -529,6 +529,8 @@ final class SidebarRig {
         var browser: CGRect
         var shown: CGFloat
         var hidden: Bool
+        /// How far the panel's body, as shown, lies over the browser (`panelOver`).
+        var over: CGFloat = 0
     }
     /// Every tick since the last press of the shortcut began.
     private(set) var samples: [Sample] = []
@@ -559,7 +561,22 @@ final class SidebarRig {
         return max(0, side == .left ? seam - outer : outer - seam)
     }
 
-    private func sample() { samples.append(Sample(t: time, browser: fake.frame, shown: gone ? 0 : shownWidth, hidden: !open)) }
+    /// How far the panel's body, as shown, lies over the browser's content:
+    /// the strip from its outer edge to the seam (`reveal`, or the whole
+    /// sidebar), against the browser's frame on screen. Its corner fills
+    /// over the window's rounded corners (`reach`) are not its body.
+    var panelOver: CGFloat {
+        guard !gone, let p = instance.panel, p.isVisible else { return 0 }
+        let b = fake.frame
+        let left = p.attachedSide == .left
+        let lo = left ? p.frame.minX : max(p.reveal ?? p.frame.minX, p.frame.minX + p.reach)
+        let hi = left ? min(p.reveal ?? p.frame.maxX, p.frame.maxX - p.reach) : p.frame.maxX
+        return max(0, min(hi, b.maxX) - max(lo, b.minX))
+    }
+
+    private func sample() {
+        samples.append(Sample(t: time, browser: fake.frame, shown: gone ? 0 : shownWidth, hidden: !open, over: panelOver))
+    }
 
     private func press() {
         pressedAt.append((time, fake.sent.count, true))
@@ -1090,6 +1107,28 @@ struct RuleCheck {
         }
     }
 
+    /// The panel never covers the browser's content (its body over the
+    /// browser's frame, past the seam) for longer than 0.5 s plus the
+    /// modelled animation, at any moment after a press: it is revealed only
+    /// up to where the browser really is, so a slow or unmoving browser shows
+    /// no panel over its content (the mini at ce5bf39: Brave at its minimum
+    /// had the sidebar's list over its left 280 pt for the whole 3 s cap).
+    mutating func panelNeverOver(_ step: String) {
+        let b = rig.fake.behaviour
+        let allowed = 0.5 + b.animation + b.animationDelay + b.animationHold
+        var since: Double?
+        for x in rig.samples {
+            guard x.over > 1 else { since = nil; continue }
+            let from = since ?? x.t
+            since = from
+            if x.t - from > allowed {
+                problems.append(String(format: "%@: the panel over the browser's content by %.0f pt for more than %.0f ms (browser %@)", step,
+                                       Double(x.over), allowed * 1000, "\(x.browser)"))
+                return
+            }
+        }
+    }
+
     /// A change of the person's to a closed window stands: the window is
     /// where they put it, the sidebar still closed, and no note more than
     /// `notes` (review N1).
@@ -1354,6 +1393,7 @@ struct GuardCase: CustomStringConvertible {
             let show = "show \(round + 1)\(round == 0 && bySettle ? " (by following the window)" : "")"
             check.timely(show)
             check.noCallSentAgain(show)
+            check.panelNeverOver(show)
             if rig.gone {
                 // Quit or turned off while it was carried out: the window has the frame it started in
                 // (unless its browser wasn't answering then: see `goneUnanswered`).
@@ -1412,6 +1452,7 @@ struct GuardCase: CustomStringConvertible {
                         rig.carry(.width(w), during: p.map { [($0, .press)] } ?? [])
                         check.timely(step)
                         check.noCallSentAgain(step)
+                        check.panelNeverOver(step)
                         if rig.askedOpen {
                             check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: before, step)
                             if p == nil { check.refusedPromptly(from: pair, step) }
@@ -1448,6 +1489,7 @@ struct GuardCase: CustomStringConvertible {
                 if hideDuring.isEmpty { rig.toggle() } else { rig.toggle(during: hideDuring) }
                 check.timely(hide)
                 check.noCallSentAgain(hide)
+                check.panelNeverOver(hide)
                 if rig.gone {
                     check.quitBound(hide)
                     if !rig.goneUnanswered {
@@ -1719,6 +1761,54 @@ struct GuardCase: CustomStringConvertible {
                     let after = rig.fake.sent.dropFirst(quit.calls).compactMap(\.size)
                     #expect(!after.contains { open.contains(Int($0.width)) && $0.width < brave.width - 1 }, "\(step): the open's size sent again: \(after)")
                     #expect(rig.gone && GuardFrames.same(rig.fake.frame, brave), "\(step): the window at \(rig.fake.frame)")
+                }
+            }
+        }
+    }
+
+    /// Live on the mini at ce5bf39: Brave at its own minimum (615 pt),
+    /// against the screen's right edge or free on screen, the sidebar on the
+    /// left at 280, the shortcut pressed. The browser can't go narrower, so
+    /// it never moves: the sidebar's list was drawn over the browser's left
+    /// 280 pt for the whole 3 s cap, then the sidebar closed. The panel is
+    /// never over the browser's content. Once this window's browser has been
+    /// seen to stop at 615 (an open from 800 pt, refused when it stopped),
+    /// a press asks the browser again and, the window not moving, is refused
+    /// for want of room within 0.5 s plus its calls, not at the cap.
+    @Test func aWindowAtItsBrowsersMinimum() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for x in [CGFloat(2056 - 615), 800] {
+            for b in [BrowserBehaviour(minWidth: 615), BrowserBehaviour(minWidth: 615, animation: 0.25)] {
+                for seen in [false, true] {
+                    let at = CGRect(x: x, y: 0, width: 615, height: 1259)
+                    let step = "\(x == 2056 - 615 ? "against the right edge" : "free"), \(b), \(seen ? "its minimum seen" : "nothing seen")"
+                    let rig: SidebarRig
+                    if seen {
+                        let wide = CGRect(x: at.maxX - 800, y: 0, width: 800, height: 1259)
+                        rig = SidebarRig(displays: [screen], frame: wide, side: .left, width: 280, behaviour: b)
+                        rig.toggle()
+                        #expect(!rig.open && GuardFrames.same(rig.fake.frame, wide), "\(step): from 800, open \(rig.open), at \(rig.fake.frame)")
+                        rig.personSets(at)
+                    } else {
+                        rig = SidebarRig(displays: [screen], frame: at, side: .left, width: 280, behaviour: b)
+                    }
+                    let notes = SidebarRig.notices.count
+                    rig.toggle()
+                    #expect(!rig.open && GuardFrames.same(rig.fake.frame, at), "\(step): open \(rig.open), at \(rig.fake.frame)")
+                    let over = rig.samples.map(\.over).max() ?? 0
+                    #expect(over <= 1, "\(step): the panel over the browser's content by \(Int(over)) pt")
+                    let pressed = rig.pressedAt.first?.t ?? 0
+                    let note = SidebarRig.noticeTimes.dropFirst(notes).first
+                    #expect(SidebarRig.notices.dropFirst(notes).map(\.0).first == (seen ? .noRoom : .noSize), "\(step): notes \(SidebarRig.notices.dropFirst(notes).map(\.0))")
+                    if seen {
+                        let allowed = 0.5 + 2 * (b.animation + b.animationDelay)
+                        #expect(note.map { $0 - pressed <= allowed } == true,
+                                "\(step): refused \(note.map { Int(($0 - pressed) * 1000) } ?? -1) ms after the press, more than \(Int(allowed * 1000))")
+                    }
+                    var check = RuleCheck(rig, displays: [screen])
+                    check.panelNeverOver(step)
+                    #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
                 }
             }
         }

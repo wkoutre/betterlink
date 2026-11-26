@@ -281,6 +281,32 @@ import Testing
         #expect(calls.isEmpty, "\(calls)")
     }
 
+    /// The mini at ce5bf39: Brave at its own minimum (615 pt), asked for 335,
+    /// never moves. With nothing seen of its minimum the size is waited for
+    /// up to the deadline (it may be late). This window's browser seen
+    /// before to stop at 615 (`stops`), the size is sent once more after
+    /// `still` unmoved and, still unmoved another `still`, it has stopped
+    /// there: the steps end `stoppedShort`, not at the deadline. Wider than
+    /// that (800 pt), what was seen says nothing, and it is waited for.
+    @Test func aWindowSeenToStopThereIsTakenAsStoppedWhenItDoesntMove() {
+        let target = CGRect(x: 1721, y: 0, width: 335, height: 1259)
+        for (stops, width) in [(nil, 615), (615, 615), (615, 800)] as [(CGFloat?, CGFloat)] {
+            let start = CGRect(x: target.maxX - width, y: 0, width: width, height: 1259)
+            var s = WindowSteps(target: target, keep: .left, widest: width - 200, deadline: 3, stops: stops)
+            var t = 0.0, sizes = 0
+            while !s.done, t < 3.5 {
+                if let c = s.step(seen: start, now: t), case .size = c { sizes += 1 }
+                t += 1.0 / 120
+            }
+            let text = "stops \(stops.map { "\(Int($0))" } ?? "nil"), \(Int(width)) wide: \(sizes) sizes, done at \(t), capped \(s.capped), short \(s.stoppedShort)"
+            if stops != nil, width == 615 {
+                #expect(s.stoppedShort && !s.capped && sizes == 2 && t < 2 * WindowSteps.still + 0.05, "\(text)")
+            } else {
+                #expect(s.capped && !s.stoppedShort, "\(text)")
+            }
+        }
+    }
+
     @Test func nothingToDoSendsNothing() {
         var s = WindowSteps(target: full, keep: nil)
         #expect(s.step(seen: full, now: 0) == nil && s.done)
