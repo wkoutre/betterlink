@@ -108,11 +108,13 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
         case undecided
     }
     /// How many looks a press gets to show in the window before it is pressed
-    /// back (measured: it shows within 0.15 s; looks are 0.35 s apart).
+    /// back (measured on a Mac mini: it shows 16 to 146 ms after the press;
+    /// looks are 0.35 s apart).
     public static let patience = 4
     /// How many looks a window not yet as wanted gets to become pressable.
-    /// Chrome's menu was measured to follow the focused window by 0.5 to
-    /// 0.75 s; this is about three times that.
+    /// Chrome's menu was measured to follow the focused window by 78 to
+    /// 947 ms (24 switches); six looks are 2.1 s, a little over twice the
+    /// slowest.
     public static let settling = 6
     private var pressed: TabStripReading.Press?
     private var presses = 0, looks = 0

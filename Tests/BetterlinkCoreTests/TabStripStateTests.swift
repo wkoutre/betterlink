@@ -114,8 +114,8 @@ import Testing
         // written off: its next time in front gets a new run.
         #expect(run(Array(repeating: stale, count: Flow.settling + 2)) == Array(repeating: .lookAgain, count: Flow.settling - 1) + [.undecided])
         #expect(run(Array(repeating: staleTop, count: Flow.settling + 2)).last == .undecided)
-        // The menu was measured to catch up 0.5 to 0.75 s after a window comes
-        // forward: the wait is about three times that, and its own number.
+        // The menu was measured to catch up 78 to 947 ms after a window comes
+        // forward: the wait is six looks, 2.1 s, and its own number.
         #expect(Flow.settling >= 6 && Flow.settling != Flow.patience)
         #expect(stale.summary == "vertical expanded, show ✓ collapse ✓")
         #expect(chromeTop.summary == "horizontal unknown, show off collapse none")
