@@ -234,6 +234,53 @@ import Testing
         #expect(s.stoppedShort && sizes == 2 && t < 2 * WindowSteps.still + 0.05, "\(sizes) sizes, done at \(t)")
     }
 
+    /// Review of ce5bf39, F5, the reviewer's probe: a show's size held still
+    /// short (1950 of the 1776 asked), and a hide pressed before the show
+    /// checked it (`after:`, with a deadline, or the final target sent whole
+    /// on quitting). The steps after take over the call in flight but never
+    /// send it again: it is the show's, and the last press wins. The hide's
+    /// first call is its own widening, and no size of the show's follows the press.
+    @Test func stepsAfterOthersNeverSendTheirCallAgain() {
+        let held = CGRect(x: 0, y: 0, width: 1950, height: 1290)
+        for resends in [false, true] {
+            var show = WindowSteps(target: narrowed, keep: .left, widest: full.width - 200, deadline: 3)
+            #expect(show.step(seen: full, now: 0) == .size(narrowed))
+            #expect(show.step(seen: held, now: 0.05) == nil)
+            var hide = resends ? WindowSteps(target: full, keep: nil, resends: true, after: show)
+                               : WindowSteps(target: full, keep: .left, retreats: false, deadline: 3.1, after: show)
+            var w = held, t = 0.1, calls: [(t: Double, call: WindowSteps.Call)] = []
+            while !hide.done, t < 4 {
+                if let c = hide.step(seen: w, now: t) {
+                    calls.append((t, c))
+                    switch c {
+                    case .size(let f): w = CGRect(x: w.minX, y: w.maxY - f.height, width: f.width, height: f.height)
+                    case .position(let f): w.origin = CGPoint(x: f.minX, y: f.maxY - w.height)
+                    }
+                }
+                t += 1.0 / 120
+            }
+            let text = calls.map { String(format: "%.3f: %@", $0.t, "\($0.call)") }.joined(separator: ", ")
+            #expect(!calls.contains { $0.call == .size(narrowed) }, "resends \(resends): \(text)")
+            #expect(resends || calls.first?.call == .size(full), "resends \(resends): \(text)")
+            #expect(w == full && !hide.interrupted, "resends \(resends): at \(w), \(text)")
+        }
+    }
+
+    /// The same with a show's call the window hasn't started on: the hide
+    /// waits for it up to its deadline, and never sends it again (it may yet
+    /// land, and the hide's calls are worked out from where the window is).
+    @Test func aCallTakenOverThatHasNotStartedIsNeverSentAgain() {
+        var show = WindowSteps(target: narrowed, keep: .left, deadline: 3)
+        #expect(show.step(seen: full, now: 0) == .size(narrowed))
+        var hide = WindowSteps(target: full, keep: .left, retreats: false, deadline: 3.1, after: show)
+        var calls: [WindowSteps.Call] = [], t = 0.1
+        while !hide.done, t < 4 {
+            if let c = hide.step(seen: full, now: t) { calls.append(c) }
+            t += 1.0 / 120
+        }
+        #expect(calls.isEmpty, "\(calls)")
+    }
+
     @Test func nothingToDoSendsNothing() {
         var s = WindowSteps(target: full, keep: nil)
         #expect(s.step(seen: full, now: 0) == nil && s.done)

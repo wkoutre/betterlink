@@ -294,9 +294,12 @@ final class FakeBrowser: WindowHandle {
 
     /// Every size and position it has been sent, for the time bound.
     private(set) var setCalls = 0
+    /// Each of them, when, in Accessibility's coordinates: a call sent again is seen.
+    private(set) var sent: [(t: Double, size: CGSize?, position: CGPoint?)] = []
 
     func setPosition(_ p: CGPoint) {
         setCalls += 1
+        sent.append((now(), nil, p))
         if hung() { return }
         pendingSize = nil
         due()
@@ -306,6 +309,7 @@ final class FakeBrowser: WindowHandle {
 
     func setSize(_ s: CGSize) {
         setCalls += 1
+        sent.append((now(), s, nil))
         if hung() { return }
         pendingSize = nil
         due()
@@ -467,6 +471,8 @@ final class SidebarRig {
     /// When it did, the browser wasn't answering (hung): its window is left
     /// as it is, the person's, since each call to it would hold up quitting.
     private(set) var goneUnanswered = false
+    /// When it quit or let the window go, and how many calls the browser had been sent by then.
+    private(set) var goneAt: (t: Double, calls: Int)?
     /// How long quitting held the app up (`During.quitHung`), if it quit.
     private(set) var quitTook: Double?
     var open: Bool { !gone && !instance.hidden }
@@ -534,6 +540,10 @@ final class SidebarRig {
     private(set) var callsBefore = 0
     /// The presses in this one (the first and those during it).
     private(set) var presses = 0
+    /// When each began, on the rig's clock, how many calls the browser had been sent by then, and whether it was
+    /// a show or a hide (not a new width, which closes to the frame a press meanwhile closes to too): the first (a
+    /// press, the window followed, a new width) and each press during it.
+    private(set) var pressedAt: [(t: Double, calls: Int, toggles: Bool)] = []
     /// The browser's width when the first press came.
     private(set) var widthAtPress: CGFloat = 0
     /// What the last press asked for: open (true) or closed.
@@ -552,6 +562,7 @@ final class SidebarRig {
     private func sample() { samples.append(Sample(t: time, browser: fake.frame, shown: gone ? 0 : shownWidth, hidden: !open)) }
 
     private func press() {
+        pressedAt.append((time, fake.sent.count, true))
         SidebarController.shared.toggle(instance)
         presses += 1
         askedOpen = !instance.hidden
@@ -563,6 +574,7 @@ final class SidebarRig {
         case .press:
             press()
         case .follow, .width:
+            pressedAt.append((time, fake.sent.count, { if case .follow = start { true } else { false } }()))
             if case .width(let w) = start { instance.setWidth(w) } else { instance.settle(window.target) }
             presses += 1
             askedOpen = !instance.hidden
@@ -579,6 +591,7 @@ final class SidebarRig {
         widthAtPress = fake.frame.width
         edgeWaits = 0
         presses = 0
+        pressedAt = []
         personPut = nil
         tilerPut = nil
         samples = []
@@ -641,6 +654,7 @@ final class SidebarRig {
         widthAtPress = fake.frame.width
         edgeWaits = 0
         presses = 0
+        pressedAt = []
         personPut = nil
         tilerPut = nil
         quitTook = nil
@@ -672,6 +686,7 @@ final class SidebarRig {
                 case .quit, .quitHung, .turnOff:
                     if case .quitHung = next.what { fake.behaviour.hangs = true }
                     let began = time
+                    goneAt = (time, fake.sent.count)
                     if case .turnOff = next.what { instance.close(closed: false) } else { instance.giveSpaceBack() }
                     if case .quitHung = next.what { quitTook = time - began }
                     goneUnanswered = fake.missed
@@ -710,6 +725,9 @@ final class SidebarRig {
         // dropped call before the cap.
         if !b.sizesStick || b.minWidth >= widthAtPress - 1 { waits += (GuardTiming.cap + 2 * WindowSteps.timeout) * Double(presses) }
         if b.dropsSizeCall != nil { waits += WindowSteps.timeout }
+        // A dropped call a later press took over is waited for up to that press's cap, never sent again (review
+        // of ce5bf39, F5): the press before's, it may yet land, late.
+        if b.dropsSizeCall != nil, presses > 1 { waits += GuardTiming.cap }
         return 0.5 + calls * each + waits + edgeWaits
     }
 
@@ -1039,6 +1057,39 @@ struct RuleCheck {
         problems.append(String(format: "%@: quitting with the browser hung took %.0f ms, more than %.0f ms", step, took * 1000, GuardTiming.quit * 1000))
     }
 
+    /// A press of the shortcut during a show or hide takes over the call in
+    /// flight, but never sends it again: that call is the press before's,
+    /// which the last press overrides (review of ce5bf39, F5: a hide sent a
+    /// show's narrowing again, and macOS 27 narrowed the window further
+    /// before the hide widened it). The first call a press during it sends
+    /// (before any press after it) is never the size the last call before it
+    /// asked, when the press before sent that one, and was a show or a hide.
+    /// (A call from two presses back asked what this press asks again, show,
+    /// hide, show, and a new width's close asks the frame a hide closes to:
+    /// sending it again is this press's own call. Positions are not weighed:
+    /// a show and a hide keep the window's origin on one side, so this
+    /// press's own may be the same. A press while a refused show's window
+    /// goes back is held until it is there: those calls go on, as asked.)
+    mutating func noCallSentAgain(_ step: String) {
+        let sent = rig.fake.sent
+        func same(_ a: (t: Double, size: CGSize?, position: CGPoint?), _ b: (t: Double, size: CGSize?, position: CGPoint?)) -> Bool {
+            if let x = a.size, let y = b.size { return abs(x.width - y.width) < 0.5 && abs(x.height - y.height) < 0.5 }
+            return false
+        }
+        let presses = rig.pressedAt
+        for i in presses.indices.dropFirst() {
+            let p = presses[i], end = i + 1 < presses.count ? presses[i + 1].calls : sent.count
+            guard presses[i - 1].toggles, p.calls > presses[i - 1].calls, p.calls < end,
+                  !SidebarRig.noticeTimes.contains(where: { $0 >= presses[i - 1].t && $0 <= p.t }) else { continue }
+            let last = sent[p.calls - 1], next = sent[p.calls]
+            if same(last, next) {
+                problems.append(String(format: "%@: the press at %.0f ms sent the size before it again (%@), %.0f ms later", step,
+                                       (p.t - (rig.pressedAt.first?.t ?? p.t)) * 1000, "\(next.size.map { "\($0)" } ?? "")",
+                                       (next.t - p.t) * 1000))
+            }
+        }
+    }
+
     /// A change of the person's to a closed window stands: the window is
     /// where they put it, the sidebar still closed, and no note more than
     /// `notes` (review N1).
@@ -1279,6 +1330,11 @@ struct GuardCase: CustomStringConvertible {
     /// The window resized by the person from its right and bottom edges, its
     /// top left kept: what a browser does with a size it was asked, so only
     /// betterlink's knowing that it asked nothing tells them apart (review N1).
+    /// Pressed more than once, a browser that drops a call: the call it dropped may be the press before's,
+    /// which a later press takes over and waits for up to its cap, never sending it again (review of ce5bf39,
+    /// F5): an open is then refused at the cap, as one the browser didn't answer.
+    func dropTakenOver(_ rig: SidebarRig) -> Bool { rig.presses > 1 && behaviour.dropsSizeCall != nil }
+
     func resizedByHand(_ f: CGRect, round: Int) -> CGRect {
         let dw: CGFloat = round == 0 ? -40 : 30, dh: CGFloat = round == 0 ? 0 : -20
         let w = max(200, behaviour.minWidth, f.width + dw)
@@ -1297,6 +1353,7 @@ struct GuardCase: CustomStringConvertible {
             if round == 0, bySettle { rig.follow(during: showDuring) } else if showDuring.isEmpty { rig.toggle() } else { rig.toggle(during: showDuring) }
             let show = "show \(round + 1)\(round == 0 && bySettle ? " (by following the window)" : "")"
             check.timely(show)
+            check.noCallSentAgain(show)
             if rig.gone {
                 // Quit or turned off while it was carried out: the window has the frame it started in
                 // (unless its browser wasn't answering then: see `goneUnanswered`).
@@ -1318,7 +1375,8 @@ struct GuardCase: CustomStringConvertible {
             } else if rig.askedOpen {
                 // Pressed more than once, it may have closed meanwhile, on screen (rule 4), and opened from there.
                 let onScreen = pairFrame(browser: start, sidebar: 0, side: side)
-                check.either([start, onScreen].map { from in { $0.shown(from: from, mustOpen: canOpen(from: from), offFrom: start, show) } })
+                let must = { (from: CGRect) in canOpen(from: from) && !dropTakenOver(rig) }
+                check.either([start, onScreen].map { from in { $0.shown(from: from, mustOpen: must(from), offFrom: start, show) } })
                 if rig.presses == 1 { check.refusedPromptly(from: start, show) }
             } else {
                 let step = "\(show), pressed again while it was carried out"
@@ -1353,6 +1411,7 @@ struct GuardCase: CustomStringConvertible {
                         let ow = rig.sidebarWidth
                         rig.carry(.width(w), during: p.map { [($0, .press)] } ?? [])
                         check.timely(step)
+                        check.noCallSentAgain(step)
                         if rig.askedOpen {
                             check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: before, step)
                             if p == nil { check.refusedPromptly(from: pair, step) }
@@ -1388,6 +1447,7 @@ struct GuardCase: CustomStringConvertible {
                 let hideDuring = round < during.count ? during[round].hide : []
                 if hideDuring.isEmpty { rig.toggle() } else { rig.toggle(during: hideDuring) }
                 check.timely(hide)
+                check.noCallSentAgain(hide)
                 if rig.gone {
                     check.quitBound(hide)
                     if !rig.goneUnanswered {
@@ -1402,7 +1462,7 @@ struct GuardCase: CustomStringConvertible {
                     check.either([{ $0.personDid(put, step) }, { $0.hidden(from: b, sidebar: w, wasOpen: true, step) }])
                 } else if rig.askedOpen {
                     let pair = pairFrame(browser: b, sidebar: w, side: side)
-                    check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: b, "\(hide), pressed again while it was carried out")
+                    check.shown(from: pair, mustOpen: canOpen(from: pair) && !dropTakenOver(rig), offFrom: b, "\(hide), pressed again while it was carried out")
                     if rig.open {
                         let b2 = rig.fake.frame, w2 = rig.sidebarWidth
                         rig.toggle()
@@ -1600,6 +1660,66 @@ struct GuardCase: CustomStringConvertible {
                 rig.toggle()
                 check.shown(from: brave, mustOpen: true, "\(step): shown again")
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
+        }
+    }
+
+    /// Review of ce5bf39, F5: macOS 27 holds a show's narrowing partway
+    /// (still, short of the width asked), and the shortcut is pressed again
+    /// before the show has sent its size once more to check the hold. The
+    /// hide takes over the show's call in flight, but never sends it again:
+    /// the last press wins. After the press the window is never narrower
+    /// than when it was pressed, no size of the show's is sent, and the
+    /// window ends where it began, closed.
+    @Test func aHideNeverSendsTheShowsCallAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        let brave = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        // The size animated over 0.2 s, still from 0.1 s to 0.4 s: the show would check it at 0.25 s.
+        let b = BrowserBehaviour(animation: 0.2, animationHold: 0.3, holdAt: 0.5)
+        for side in SidebarSide.allCases {
+            for at in [0.12, 0.15, 0.2] {
+                let rig = SidebarRig(displays: [screen], frame: brave, side: side, width: 280, behaviour: b)
+                rig.toggle(during: [(at, .press)])
+                let step = "\(side), pressed again \(Int(at * 1000)) ms into the show"
+                guard rig.pressedAt.count == 2 else { Issue.record("\(step): \(rig.pressedAt.count) presses"); continue }
+                let press = rig.pressedAt[1]
+                let shows = Set(rig.fake.sent.prefix(press.calls).compactMap { $0.size.map { Int($0.width) } })
+                let after = rig.fake.sent.dropFirst(press.calls).compactMap(\.size)
+                #expect(!after.contains { shows.contains(Int($0.width)) && $0.width < brave.width - 1 }, "\(step): the show's size sent again: \(after)")
+                let pressedWidth = rig.samples.last { $0.t < press.t }?.browser.width ?? 0
+                let least = rig.samples.filter { $0.t >= press.t }.map(\.browser.width).min() ?? 0
+                #expect(least >= pressedWidth - 1, "\(step): \(Int(pressedWidth)) wide when pressed, then \(Int(least))")
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, brave), "\(step): open \(rig.open), the window at \(rig.fake.frame)")
+                var check = RuleCheck(rig, displays: [screen])
+                check.timely(step)
+                check.noCallSentAgain(step)
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
+        }
+    }
+
+    /// Review of ce5bf39, F5, the same for quitting and turning the sidebar
+    /// off during an open (`AXWindow.placeNow`): the window is given its
+    /// frame back with no size of the open's sent again, so none of the
+    /// bound is spent on it.
+    @Test func quittingDuringAnOpenSendsNoStaleSize() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        let brave = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        let b = BrowserBehaviour(animation: 0.2, animationHold: 0.3, holdAt: 0.5)
+        for side in SidebarSide.allCases {
+            for what in [SidebarRig.During.quit, .turnOff] {
+                for at in [0.12, 0.15, 0.2] {
+                    let rig = SidebarRig(displays: [screen], frame: brave, side: side, width: 280, behaviour: b)
+                    rig.toggle(during: [(at, what)])
+                    let step = "\(side), \(what) \(Int(at * 1000)) ms into the open"
+                    guard let quit = rig.goneAt, let opened = rig.pressedAt.first else { Issue.record("\(step): not gone"); continue }
+                    let open = Set(rig.fake.sent[opened.calls..<quit.calls].compactMap { $0.size.map { Int($0.width) } })
+                    let after = rig.fake.sent.dropFirst(quit.calls).compactMap(\.size)
+                    #expect(!after.contains { open.contains(Int($0.width)) && $0.width < brave.width - 1 }, "\(step): the open's size sent again: \(after)")
+                    #expect(rig.gone && GuardFrames.same(rig.fake.frame, brave), "\(step): the window at \(rig.fake.frame)")
+                }
             }
         }
     }
