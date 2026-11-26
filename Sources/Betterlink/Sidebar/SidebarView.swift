@@ -149,7 +149,11 @@ struct SidebarView: View {
         // The drag is over, dropped or not: the New Tab field has the keyboard
         // again if it had it when the drag began.
         .onChange(of: dragging) { _, now in
-            if now == nil, dragFocus.ended() { newTabFocused = true }
+            guard now == nil else { return }
+            let owed = dragFocus.ended(hasKeyboard: newTabHasKeyboard)
+            DragTrace.log("drag: ended, New Tab owed the keyboard \(owed) (\(newTabTrace))")
+            // Not set here: the field may not be back yet (its onAppear sets it).
+            if owed { retryNewTabFocus("drag ended") }
         }
         // Undo for the last delete, at the bottom for a few seconds.
         .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
@@ -546,7 +550,8 @@ struct SidebarView: View {
 
     /// Starts a drag of `key`, remembering it for the drop targets.
     private func drag(_ key: String) -> NSItemProvider {
-        dragFocus.began(focused: newTabFocused)
+        DragTrace.log("drag: began \(key.prefix { $0 != ":" }), New Tab had the keyboard \(newTabHasKeyboard) (\(newTabTrace))")
+        dragFocus.began(focused: newTabHasKeyboard)
         animate { dragging = key }
         dragCount += 1
         let mine = dragCount
@@ -675,12 +680,19 @@ struct SidebarView: View {
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($newTabFocused)
-                // Back from being a drop zone (DropSwap), whichever is seen
-                // first: this, or the drag ending.
-                .onAppear { if dragFocus.fieldAppeared() { newTabFocused = true } }
+                // Back from being a drop zone (DropSwap): the keyboard it had
+                // before the drag, now that it is there to take it.
+                .onAppear {
+                    let owed = dragFocus.fieldAppeared()
+                    DragTrace.log("new tab: appeared, owed the keyboard \(owed) (\(newTabTrace))")
+                    if owed { giveNewTabTheKeyboard("field appeared"); retryNewTabFocus("field appeared") }
+                }
                 // Down from the field is the way into the rows. The field
                 // editor takes the arrows before onKeyPress, so watch for it.
-                .onChange(of: newTabFocused) { _, on in watchDownKey(on) }
+                .onChange(of: newTabFocused) { _, on in
+                    DragTrace.log("new tab: focused \(on)")
+                    watchDownKey(on)
+                }
                 .onDisappear { watchDownKey(false) }
                 .onSubmit {
                     guard !newURL.isEmpty else { return }
@@ -691,6 +703,55 @@ struct SidebarView: View {
         }
         .padding(.horizontal, DS.Space.space2)
         .frame(minHeight: DS.Size.sizeRow)
+    }
+
+    /// The New Tab field really has the keyboard: it is being edited in its
+    /// panel, and the panel is the key window. (The focus state alone also
+    /// holds a focus that was set and did not take.)
+    private var newTabHasKeyboard: Bool {
+        guard newTabFocused, let panel = sidebar.panel, panel.isKeyWindow else { return false }
+        return (panel.firstResponder as? NSTextView)?.isFieldEditor == true
+    }
+
+    /// For trace.log (BETTERLINK_TRACE=1).
+    private var newTabTrace: String {
+        let panel = sidebar.panel
+        return "focused \(newTabFocused), panel key \(panel?.isKeyWindow ?? false), first responder \(panel?.firstResponder.map { String(describing: type(of: $0)) } ?? "none")"
+    }
+
+    /// Gives the New Tab field the keyboard it had when a drag began
+    /// (DragFocus). `last`: the last try, whatever comes of it.
+    private func giveNewTabTheKeyboard(_ when: String, last: Bool = false) {
+        guard dragFocus.owes else { return }
+        let before = newTabTrace
+        var did = "has the keyboard"
+        if newTabHasKeyboard {
+            dragFocus.settle()
+        } else {
+            did = last ? "gave up" : "focus on its way"
+            // It had the keyboard, so its panel was the key window: again now
+            // (the panel never activates betterlink, so nothing else changes).
+            if let panel = sidebar.panel, !panel.isKeyWindow { panel.makeKey(); did = "panel made key" }
+            if !newTabFocused {
+                newTabFocused = true
+                did = "focus set"
+            } else if last, !newTabHasKeyboard {
+                // Set, and it did not take: SwiftUI moves the focus only on a change.
+                newTabFocused = false
+                DispatchQueue.main.async { newTabFocused = true }
+                did = "focus set again"
+            }
+            if last { dragFocus.settle() }
+        }
+        DragTrace.log("new tab: keyboard, \(when): \(did) (\(before))")
+    }
+
+    /// Looks again a turn of the run loop later, and once more when the swap
+    /// back has settled: SwiftUI takes a focus only once the field is in the
+    /// window, which can be after it is first seen.
+    private func retryNewTabFocus(_ when: String) {
+        DispatchQueue.main.async { giveNewTabTheKeyboard("\(when), next turn") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { giveNewTabTheKeyboard("\(when), settled", last: true) }
     }
 
     private func watchDownKey(_ on: Bool) {
