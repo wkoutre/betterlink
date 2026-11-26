@@ -57,7 +57,9 @@ public final class SyncHub: @unchecked Sendable {
     private let onChange: Listener
     private let onLine: (@Sendable (String, Inbound) -> Void)?
 
+    /// `holdingContent`: not yet used (the tab churn guard, TabChurnTests).
     public init(directory: String = SocketDirectory.path,
+                holdingContent: Bool = false,
                 onLine: (@Sendable (String, Inbound) -> Void)? = nil,
                 onChange: @escaping Listener) {
         self.dir = directory
@@ -78,6 +80,9 @@ public final class SyncHub: @unchecked Sendable {
     }
 
     public var current: [BrowserSession] { q.sync { orderedSessions() } }
+
+    /// The newest tab lists, for the app publishing them.
+    public func collect() -> [BrowserSession] { current }
 
     public func send(_ cmd: Command, to socketPath: String) {
         q.async {

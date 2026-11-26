@@ -1,0 +1,160 @@
+import Foundation
+import Testing
+@testable import TabSyncCore
+
+/// A window of 56 tabs, each changing its title twice a second, is 112
+/// messages a second. Each was handed to the app as it came (a hop to the main
+/// thread with every browser's lists, sorted and copied, and a pass over every
+/// tab for the saved links' held tabs), while what tabs show is drawn only
+/// every 2 s with another app in front (`PublishPacer`). A hub that holds what
+/// tabs show hands on the first such change and then nothing more of the kind
+/// until the app collects the lists, which it does when it publishes them.
+@Suite(.serialized) struct TabChurnTests {
+    static let tabs = 56
+
+    @Test func titlesChurningAcross56TabsAreHandedOnOncePerCollect() throws {
+        let host = try FakeHost()
+        defer { host.close() }
+        let handed = Counter()
+        let hub = SyncHub(directory: host.dir, holdingContent: true, onChange: { _ in handed.add() })
+        hub.start()
+        try host.accept()
+        host.send([#"{"type":"host","browser":"Chrome","pid":2,"browserPid":3}"#, Self.snapshot()])
+        try wait(hub) { $0.first?.store.tabCount == Self.tabs }
+        // The app publishes the snapshot at once (PublishPacer), and so collects it.
+        _ = hub.collect()
+        let settled = handed.value
+
+        // The first title change is handed on: the app schedules its publish.
+        var seq = 1
+        func title(_ i: Int, _ text: String) -> String {
+            seq += 1
+            return Self.updated(seq: seq, tab: 100 + i % Self.tabs, title: text)
+        }
+        host.send([title(0, "first")])
+        try wait(hub) { $0.first?.store.tabs[100]?.title == "first" }
+        #expect(handed.value == settled + 1)
+
+        // Ten seconds of churn: 1120 more titles, nothing more handed on.
+        host.send((1...1120).map { title($0, "change \($0)") })
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(handed.value == settled + 1, "\(handed.value - settled) handed on for 1121 title changes")
+
+        // The app publishes: it takes the newest lists, and the next title is
+        // handed on again.
+        let collected = hub.collect()
+        #expect(collected.first?.store.tabs[100 + 1120 % Self.tabs]?.title == "change 1120")
+        host.send([title(7, "after the publish")])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(handed.value == settled + 2)
+
+        // A tab's address is for the saved links' held tabs at once, held or
+        // not; and a switch goes on at once (PublishPacer).
+        seq += 1
+        host.send([Self.updated(seq: seq, tab: 103, title: "moved on", url: "https://elsewhere.example/")])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(handed.value == settled + 3)
+        seq += 1
+        host.send([#"{"type":"event","kind":"tabActivated","seq":\#(seq),"tabId":104,"windowId":1}"#])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(handed.value == settled + 4)
+    }
+
+    /// The terminal view and the e2e test see every change as it comes.
+    @Test func aHubThatHoldsNothingHandsOnEveryChange() throws {
+        let host = try FakeHost()
+        defer { host.close() }
+        let handed = Counter()
+        let hub = SyncHub(directory: host.dir, onChange: { _ in handed.add() })
+        hub.start()
+        try host.accept()
+        host.send([Self.snapshot()])
+        try wait(hub) { $0.first?.store.tabCount == Self.tabs }
+        for seq in 2...4 {
+            let before = handed.value
+            host.send([Self.updated(seq: seq, tab: 100, title: "t\(seq)")])
+            try wait(hub) { $0.first?.store.lastSeq == seq }
+            #expect(handed.value == before + 1)
+        }
+    }
+
+    // MARK: - Helpers
+
+    static func tab(_ id: Int, index: Int, title: String, url: String? = nil, active: Bool = false) -> String {
+        #"{"id":\#(id),"windowId":1,"index":\#(index),"title":"\#(title)","url":"\#(url ?? "https://t.example/\(id)")","favIconUrl":"","active":\#(active),"pinned":false,"audible":false,"muted":false,"status":"complete"}"#
+    }
+
+    static func snapshot() -> String {
+        let tabs = (0..<Self.tabs).map { tab(100 + $0, index: $0, title: "Tab \($0)", active: $0 == 0) }.joined(separator: ",")
+        return #"{"type":"snapshot","seq":1,"t":1,"windows":[{"id":1,"focused":false,"tabs":[\#(tabs)]}]}"#
+    }
+
+    static func updated(seq: Int, tab id: Int, title: String, url: String? = nil) -> String {
+        #"{"type":"event","kind":"tabUpdated","seq":\#(seq),"t":1,"tab":\#(tab(id, index: id - 100, title: title, url: url)),"changes":["\#(url == nil ? "title" : "url")"]}"#
+    }
+
+    /// Waits for the hub to have taken in what was sent. What it hands on is
+    /// handed on in the same turn of its queue, so it is counted by then.
+    func wait(_ hub: SyncHub, until done: ([BrowserSession]) -> Bool) throws {
+        let deadline = Date().addingTimeInterval(10)
+        while !done(hub.current) {
+            guard Date() < deadline else { throw CancellationError() }
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+    }
+}
+
+final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var n = 0
+    func add() { lock.lock(); n += 1; lock.unlock() }
+    var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+}
+
+/// Stands in for betterlink-tabhost: a socket in a folder of its own, which
+/// the hub finds and connects to, and lines written to it.
+final class FakeHost {
+    let dir: String
+    private let listener: Int32
+    private var client: Int32 = -1
+
+    init() throws {
+        // Short: a socket's path has room for about 100 bytes.
+        dir = "/tmp/bl-churn-\(UUID().uuidString.prefix(8))"
+        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        listener = socket(AF_UNIX, SOCK_STREAM, 0)
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let path = Array("\(dir)/chrome-1.sock".utf8)
+        withUnsafeMutableBytes(of: &addr.sun_path) { raw in raw.copyBytes(from: path); raw[path.count] = 0 }
+        addr.sun_len = UInt8(MemoryLayout<sockaddr_un>.size)
+        let bound = withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(listener, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) }
+        }
+        guard listener >= 0, bound == 0, listen(listener, 1) == 0 else { throw CancellationError() }
+    }
+
+    /// Blocks until the hub has connected.
+    func accept() throws {
+        client = Darwin.accept(listener, nil, nil)
+        guard client >= 0 else { throw CancellationError() }
+    }
+
+    func send(_ lines: [String]) {
+        let data = Data(lines.map { $0 + "\n" }.joined().utf8)
+        data.withUnsafeBytes { raw in
+            var off = 0
+            while off < raw.count {
+                let n = write(client, raw.baseAddress! + off, raw.count - off)
+                if n <= 0 { return }
+                off += n
+            }
+        }
+    }
+
+    func close() {
+        if client >= 0 { Darwin.close(client) }
+        Darwin.close(listener)
+        try? FileManager.default.removeItem(atPath: dir)
+    }
+}
