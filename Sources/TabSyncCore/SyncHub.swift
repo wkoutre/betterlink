@@ -57,11 +57,25 @@ public final class SyncHub: @unchecked Sendable {
     private let onChange: Listener
     private let onLine: (@Sendable (String, Inbound) -> Void)?
 
-    /// `holdingContent`: not yet used (the tab churn guard, TabChurnTests).
+    /// Whether a change to what tabs only show (a title, an icon) is handed on
+    /// once and the ones after it held until `collect()`.
+    private let holdingContent: Bool
+    /// One such change was handed on and the lists weren't collected since.
+    private var handedContent = false
+
+    /// `holdingContent`: for the app, which draws what tabs show at most once
+    /// per `PublishPacer.interval` and takes the newest lists then
+    /// (`collect()`). A window of 56 tabs changing their titles twice a second
+    /// is 112 messages a second; each is still applied here as it comes, and
+    /// a change the app needs at once (opens, closes, moves, switches, a tab's
+    /// address, anything but a title or icon) is handed on at once, but the
+    /// titles in between cost the app nothing. Off, every change is handed
+    /// on as it comes (the terminal view, the e2e test).
     public init(directory: String = SocketDirectory.path,
                 holdingContent: Bool = false,
                 onLine: (@Sendable (String, Inbound) -> Void)? = nil,
                 onChange: @escaping Listener) {
+        self.holdingContent = holdingContent
         self.dir = directory
         self.onChange = onChange
         self.onLine = onLine
@@ -81,8 +95,14 @@ public final class SyncHub: @unchecked Sendable {
 
     public var current: [BrowserSession] { q.sync { orderedSessions() } }
 
-    /// The newest tab lists, for the app publishing them.
-    public func collect() -> [BrowserSession] { current }
+    /// The newest tab lists, for the app publishing them: the next change to
+    /// what tabs show is handed on again.
+    public func collect() -> [BrowserSession] {
+        q.sync {
+            handedContent = false
+            return orderedSessions()
+        }
+    }
 
     public func send(_ cmd: Command, to socketPath: String) {
         q.async {
@@ -139,10 +159,15 @@ public final class SyncHub: @unchecked Sendable {
     }
 
     private func handle(_ lines: [Data], from path: String, receivedAt: Double) {
-        guard var s = sessions[path] else { return }
+        // Taken out while it changes, so its tabs are changed in place rather
+        // than copied for every message.
+        guard var s = sessions.removeValue(forKey: path) else { return }
+        var decoded = false, atOnce = false
         for line in lines {
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
+            decoded = true
             onLine?(path, m)
+            if !PublishPacer.isContent(m) || Self.movesAddress(m, in: s.store) { atOnce = true }
             switch m.type {
             case "host":
                 s.browser = m.browser ?? s.browser
@@ -167,7 +192,21 @@ public final class SyncHub: @unchecked Sendable {
             }
         }
         sessions[path] = s
+        guard decoded else { return }
+        if holdingContent {
+            if handedContent && !atOnce { return }
+            handedContent = true
+        }
         publish()
+    }
+
+    /// A tab update that changes a tab's address or window, or names a tab
+    /// not known yet: the saved links' held tabs follow addresses, and must
+    /// know a new one before the tab can close.
+    static func movesAddress(_ m: Inbound, in store: TabStore) -> Bool {
+        guard m.type == "event", m.kind == "tabUpdated", let t = m.tab else { return false }
+        guard let old = store.tabs[t.id] else { return true }
+        return old.url != t.url || old.windowId != t.windowId
     }
 }
 

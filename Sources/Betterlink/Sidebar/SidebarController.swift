@@ -463,6 +463,8 @@ final class SidebarController: ObservableObject {
                 tracker.forget(missingFrom: Set(read.map(\.number)), of: pids)
             }
         }
+        // Titles that changed behind another app are read now, for this look.
+        followed.forEach { $0.readTitleIfChanged() }
         let windows = followed.map { w -> WindowPairing.Window in
             let t = w.target
             let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: h)

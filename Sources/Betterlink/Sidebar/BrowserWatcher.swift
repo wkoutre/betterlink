@@ -34,16 +34,31 @@ final class TrackedWindow {
                        title: "", frame: .zero, fullScreen: false, minimized: false, appHidden: false)
     }
 
+    /// Its title changed behind another app and hasn't been read since: the
+    /// next pairing reads it (`readTitleIfChanged`).
+    var titleChanged = false
+
     /// Reads the window again. False when it can't be read now.
     @discardableResult
     func read() -> Bool {
         guard let frame = AXWindow.frame(of: handle) else { return false }
         target.frame = frame
         target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
+        titleChanged = false
         target.fullScreen = AXWindow.copy(element, "AXFullScreen") ?? false
         target.minimized = AXWindow.copy(element, kAXMinimizedAttribute) ?? false
         target.appHidden = watcher?.isHidden ?? false
         return true
+    }
+
+    /// Reads the title again when it changed while its browser was behind
+    /// another app: the pairing is the only one to use it, so it is read when
+    /// a pairing is about to, at most once per change however often the
+    /// browser renamed the window meanwhile.
+    func readTitleIfChanged() {
+        guard titleChanged, watcher?.isStalled == false else { return }
+        titleChanged = false
+        target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
     }
 
     /// Whether it has its browser's focus now, for the pairing.
@@ -478,6 +493,15 @@ final class BrowserWatcher {
             tracker.orderMayHaveChanged()
         case kAXTitleChangedNotification:
             guard let w = tracked(el) else { return }
+            // A window's title follows its tab's, which can change twice a
+            // second all day. Behind another app nothing shows it and the tab
+            // lists come every 2 s (PublishPacer): it is read at the next
+            // pairing, which those lists bring (`readTitleIfChanged`). In front
+            // it is read now, as the pairing then keeps to the moment.
+            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+                w.titleChanged = true
+                return
+            }
             let title: String = AXWindow.copy(el, kAXTitleAttribute) ?? ""
             guard title != w.target.title else { return }
             w.target.title = title

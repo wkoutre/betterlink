@@ -18,8 +18,12 @@ final class SidebarInstance: ObservableObject {
     private unowned let sidebar: SidebarController
     private var tracker: WindowTracker { sidebar.tracker }
 
-    /// What the panel shows. Set only when it differs (see SidebarLook).
-    @Published private(set) var look = SidebarLook.notConnected
+    /// What the panel shows. Set only when it differs (see SidebarLook). The
+    /// view is told when it changes (`show`), except for new titles alone.
+    private(set) var look = SidebarLook.notConnected
+    /// Each shown tab's title, by tab id: its row watches its own, so new
+    /// titles redraw those titles and nothing else.
+    private var titles: [Int: TabTitle] = [:]
     @Published private(set) var placedSide: SidebarSide = .right
     /// Readable colors for the profile color (WCAG AA), or nil for the standard look.
     @Published private(set) var palette: SidebarPalette?
@@ -130,11 +134,38 @@ final class SidebarInstance: ObservableObject {
         isShown = false
     }
 
+    /// A window of 56 tabs changing their titles brings a new look every 2 s
+    /// with another app in front, and every title in it new. Working the
+    /// whole sidebar out again for that (every row, folder and Favorite, and
+    /// each row's menu) was most of what the app spent: new titles alone go
+    /// to the titles' rows (`TabTitle`), and the view is told nothing.
     func show(_ new: SidebarLook) {
         guard new != look else { return }
         let color = new.match?.profile?.color
         if color != look.match?.profile?.color { setTint(color) }
+        if !look.differsOnlyInTitles(from: new) { objectWillChange.send() }
         look = new
+        var kept: [Int: TabTitle] = [:]
+        for t in new.match?.window?.tabs ?? [] {
+            guard let title = titles[t.id] else { continue }
+            title.set(t.title)
+            kept[t.id] = title
+        }
+        titles = kept
+    }
+
+    /// The title a row of this tab shows, kept up to date by `show`.
+    func title(of tab: BrowserTab) -> TabTitle {
+        if let title = titles[tab.id] { return title }
+        let title = TabTitle(tab.title)
+        titles[tab.id] = title
+        return title
+    }
+
+    /// The tab as the browser last said, its title included: a row's actions
+    /// were made when the row was last drawn, which new titles don't do.
+    func current(_ tab: BrowserTab) -> BrowserTab {
+        look.match?.window?.tabs.first { $0.id == tab.id } ?? tab
     }
 
     // MARK: - Show and hide as one slide
@@ -1068,4 +1099,12 @@ final class SidebarInstance: ObservableObject {
         // nothing from this non-activating panel: let the keyboard go by hand.
         if let panel, panel.isKeyWindow { panel.reenter(at: place(panel)) }
     }
+}
+
+/// One tab's title as its row shows it (`SidebarInstance.title(of:)`).
+@MainActor
+final class TabTitle: ObservableObject {
+    @Published private(set) var text: String
+    init(_ text: String) { self.text = text }
+    func set(_ new: String) { if new != text { text = new } }
 }

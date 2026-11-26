@@ -97,7 +97,8 @@ struct SidebarView: View {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
                                     SkipUnchanged(key: rowKey(tab, profile, m, order)) {
-                                        SidebarTabRow(tab: tab, canMute: m.session.can(.mute), focused: isCursor(.tab(tab.id))) {
+                                        SidebarTabRow(tab: tab, title: sidebar.title(of: tab), canMute: m.session.can(.mute),
+                                                      focused: isCursor(.tab(tab.id))) {
                                             tabs.activate(tab, in: m.session)
                                             sidebar.returnFocusToBrowser()
                                         } close: {
@@ -426,7 +427,7 @@ struct SidebarView: View {
                 nameOrField(l.id, l.title, p)
                     .foregroundStyle(tab == nil ? pal.textSecondary : pal.text)
                 if away, let tab, renaming != l.id {
-                    Text("/ \(tab.title.isEmpty ? tab.url : tab.title)")
+                    TabTitleText(title: sidebar.title(of: tab), url: tab.url, before: "/ ")
                         .font(DS.TextStyle.body).lineLimit(1)
                         .foregroundStyle(pal.textTertiary)
                         .layoutPriority(-1)
@@ -740,7 +741,7 @@ struct SidebarView: View {
         for k in keys {
             var changed = false
             if let t = tab(forDragKey: k, in: open) {
-                let at = next, link = Self.saved(t)
+                let at = next, link = Self.saved(sidebar.current(t))
                 edit(p.id) { let before = $0; $0.insert(link, at: at); changed = $0 != before }
                 if changed { holdIfSaved(t, link) }
             } else if let id = Self.savedID(k) {
@@ -993,7 +994,7 @@ struct SidebarView: View {
 
     /// Saves a tab as a new link and makes it that link's tab.
     private func save(_ tab: BrowserTab, _ p: SidebarProfile, _ add: (inout SidebarProfile, SavedLink) -> Void) {
-        let link = Self.saved(tab)
+        let link = Self.saved(sidebar.current(tab))
         edit(p.id) { add(&$0, link) }
         holdIfSaved(tab, link)
     }
@@ -1129,6 +1130,9 @@ extension SidebarView {
 
 private struct SidebarTabRow: View {
     let tab: BrowserTab
+    /// What it shows of the tab's title: new titles alone come through it
+    /// without the row being made again (`SidebarInstance.show`).
+    @ObservedObject var title: TabTitle
     /// Whether the installed extension can mute: the speaker is a button then.
     let canMute: Bool
     let focused: Bool
@@ -1141,10 +1145,11 @@ private struct SidebarTabRow: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
-        let title = tab.title.isEmpty ? tab.url : tab.title
-        SidebarRow(selected: tab.active, focused: focused, label: title, action: activate) {
-            SavedIcon(icons: [tab.favIconUrl], title: URL(string: tab.url)?.host() ?? title)
-            Text(title)
+        let name = title.text
+        let shown = name.isEmpty ? tab.url : name
+        SidebarRow(selected: tab.active, focused: focused, label: shown, action: activate) {
+            SavedIcon(icons: [tab.favIconUrl], title: URL(string: tab.url)?.host() ?? shown)
+            Text(shown)
                 .font(DS.TextStyle.body)
                 .lineLimit(1)
                 .foregroundStyle(pal.text)
@@ -1157,7 +1162,7 @@ private struct SidebarTabRow: View {
                         .buttonStyle(PressStyle())
                         .foregroundStyle(pal.textTertiary)
                         .help(tab.muted ? "Unmute tab" : "Mute tab")
-                        .accessibilityLabel(tab.muted ? "Unmute \(tab.title)" : "Mute \(tab.title)")
+                        .accessibilityLabel(tab.muted ? "Unmute \(name)" : "Mute \(name)")
                 } else {
                     speaker.foregroundStyle(pal.textTertiary)
                         .accessibilityLabel(tab.muted ? "Muted" : "Playing sound")
@@ -1168,7 +1173,7 @@ private struct SidebarTabRow: View {
                     .buttonStyle(PressStyle())
                     .foregroundStyle(pal.textSecondary)
                     .help("Close tab")
-                    .accessibilityLabel("Close \(tab.title)")
+                    .accessibilityLabel("Close \(name)")
                     .transition(.opacity)
             }
         }
@@ -1181,7 +1186,10 @@ private struct SidebarTabRow: View {
 /// Everything a tab's row shows or its actions use. Another tab's title is not
 /// in it: with many busy tabs, only the rows that changed are drawn again.
 /// Whatever the row's closures come to read must be added here, or they would
-/// act on what it was when the row was last drawn.
+/// act on what it was when the row was last drawn. Its own title is in it too,
+/// but new titles alone reach the row through `TabTitle` without a new look,
+/// and what a row's actions take of the title is read when they run
+/// (`SidebarInstance.current`).
 private struct RowKey: Equatable {
     struct Place: Equatable { var id: Int; var pinned: Bool }
     var tab: BrowserTab
@@ -1196,6 +1204,15 @@ private struct RowKey: Equatable {
     var size: CGSize?
     var palette: SidebarPalette?
     var reduceMotion: Bool
+}
+
+/// A tab's title, as `TabTitle` has it now, after `before`; its address
+/// while it has none.
+private struct TabTitleText: View {
+    @ObservedObject var title: TabTitle
+    let url: String
+    var before = ""
+    var body: some View { Text(before + (title.text.isEmpty ? url : title.text)) }
 }
 
 /// Draws its content again only when `key` changes.

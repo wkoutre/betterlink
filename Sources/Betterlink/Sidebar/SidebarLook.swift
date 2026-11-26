@@ -68,6 +68,21 @@ enum SidebarLook: Equatable {
         }
     }
 
+    /// `new` is this look with only some tabs' titles changed: the same tabs
+    /// in the same order, and everything else the same. A sidebar hands such
+    /// a change to the rows' titles alone (`SidebarInstance.show`).
+    func differsOnlyInTitles(from new: SidebarLook) -> Bool {
+        guard case .window(let old) = self, case .window(var titled) = new,
+              let before = old.window?.tabs, var entry = titled.window, entry.tabs.count == before.count else { return false }
+        entry.tabs = zip(entry.tabs, before).map { t, was in
+            var t = t
+            t.title = was.title
+            return t
+        }
+        titled.window = entry
+        return titled == old
+    }
+
     /// The look for a window of process `pid` (of the browser named `app`)
     /// that `found` says is this browser window.
     @MainActor
