@@ -28,6 +28,25 @@ struct SidebarSlideTests {
         }
     }
 
+    /// A window narrowed only to the least the sidebar asks of a browser
+    /// (500 pt) can't keep its far edge: the pair shifts to fit. The slide ends
+    /// exactly on that frame, never narrower than it, the seam tight all along.
+    @Test func aShiftedPairEndsOnTheShownFrame() {
+        let half = CGRect(x: 0, y: 0, width: 748, height: 859)
+        let shownLeft = CGRect(x: 280, y: 0, width: 500, height: 859)
+        let shownRight = CGRect(x: 716, y: 0, width: 500, height: 859)
+        let rightHalf = CGRect(x: 748, y: 0, width: 748, height: 859)
+        for p in stride(from: 0.0, through: 1.0, by: 0.125) {
+            let l = SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: p)
+            #expect(l.window.minX == l.innerEdge && l.window.width >= 500)
+            let r = SidebarSlide.frames(hiddenWindow: rightHalf, shownWindow: shownRight, outerEdge: 1496, width: 280, side: .right, progress: p)
+            #expect(r.window.maxX == r.innerEdge && r.window.width >= 500)
+        }
+        #expect(SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: 1).window == shownLeft)
+        #expect(SidebarSlide.frames(hiddenWindow: rightHalf, shownWindow: shownRight, outerEdge: 1496, width: 280, side: .right, progress: 1).window == shownRight)
+        #expect(SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: 0).window == half)
+    }
+
     @Test func aWindowWithoutRoomStaysWhileTheSidebarOpens() {
         let free = CGRect(x: 200, y: 100, width: 800, height: 700)
         let f = SidebarSlide.frames(hiddenWindow: free, shownWindow: free, outerEdge: 1280, width: 280, side: .right, progress: 0.5)

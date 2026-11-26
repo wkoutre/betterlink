@@ -184,8 +184,9 @@ final class SidebarInstance: ObservableObject {
         var seam = f.innerEdge
         if run.fitted {
             // Hiding widens the window; showing narrows it.
-            AXWindow.slide(window.handle, to: f.window, moveOrigin: run.side == .left,
-                           growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
+            AXWindow.slide(window.handle, to: f.window, side: run.side,
+                           moveOrigin: run.side == .left || run.hiddenWindow.minX != run.shownWindow.minX,
+                           growing: run.slide.phase == .hiding || run.slide.phase == .hidden, wasWidth: window.target.frame.width)
             if let real = AXWindow.shownFrame(of: window.handle) {
                 let edge = run.side == .left ? real.minX : real.maxX
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
@@ -223,6 +224,7 @@ final class SidebarInstance: ObservableObject {
             }
         } else {
             panel?.reveal = nil
+            if run.fitted { askedAt = Date() } // its last frame was the last ask
             if run.fitted, let now = AXWindow.frame(of: window.handle) { slidIn(run, at: now) }
         }
         layout()
@@ -238,8 +240,10 @@ final class SidebarInstance: ObservableObject {
         if l.phase == .asked { refused = at; return }
         // A browser at its minimum width: the pair shifts to fit the screen.
         if let asked, SidebarGeometry.room(beside: at, screen: screen(for: at), side: run.side) < width - 2 {
-            _ = learnMinWidth(asked: asked, got: window.target, wasWidth: run.hiddenWindow.width)
-            fit(window.target, into: l.outer)
+            _ = learnMinWidth(asked: asked, got: at, wasWidth: run.hiddenWindow.width)
+            var t = window.target
+            t.frame = at
+            fit(t, into: l.outer)
         }
     }
 
@@ -303,7 +307,10 @@ final class SidebarInstance: ObservableObject {
         if let l = loan {
             if l.rests(at: t.frame) { return layout() }
             if refused != nil { return layout() } // still the answer it gave
-            if l.phase == .asked, learnMinWidth(asked: l.inner, got: t, wasWidth: l.outer.width) {
+            // Stopped short of what was asked, or narrowed and then widened back
+            // (a browser that takes any size, then keeps to its minimum): that
+            // width is its minimum.
+            if learnMinWidth(asked: l.inner, got: t.frame, wasWidth: l.outer.width) {
                 loan = nil
                 fit(t, into: l.outer) // it stops there: place the pair knowing that
                 return layout()
@@ -346,17 +353,22 @@ final class SidebarInstance: ObservableObject {
                                                       minWindowWidth: minWidth ?? 500) else {
                 // At its minimum width the pair has no place on this screen.
                 if pass > 0 { return putBack(from: window.target.frame) }
-                return coverIfNoRoom(t, on: screen)
+                // Narrowed already, toward a place there is none of: what it
+                // gave goes back, and the sidebar covers its edge.
+                guard !Self.same(t.frame, outer) else { return coverIfNoRoom(t, on: screen) }
+                tracker.setFrame(outer, of: window)
+                return coverIfNoRoom(window.target, on: screen)
             }
             loan = .asking(outer: outer, inner: inner, side: sidebar.side)
             askedAt = Date()
-            tracker.setFrame(inner, of: window)
+            tracker.narrow(window, to: inner, side: sidebar.side)
             let now = window.target
             if Self.same(now.frame, inner) { observe(at: now.frame); return }
             // Where it was: it has not answered, or won't narrow.
             if Self.same(now.frame, t.frame) { return putBack(from: now.frame) }
-            // It narrowed, as far as it goes: asked again knowing that, as after a slide.
-            if learnMinWidth(asked: inner, got: now, wasWidth: t.frame.width) { continue }
+            // It narrowed, as far as it goes: asked again knowing that, as after
+            // a slide. Narrowed from the space it was given, wherever it is now.
+            if learnMinWidth(asked: inner, got: now.frame, wasWidth: max(t.frame.width, outer.width)) { continue }
             // It would not narrow, only move.
             if SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
             observe(at: now.frame)
@@ -367,12 +379,15 @@ final class SidebarInstance: ObservableObject {
 
     /// True when the window shows the browser's minimum width, not known yet
     /// (`SidebarGeometry.minimumWidth`): `wasWidth` is how wide it was before
-    /// it was asked. Only right after asking; later, it is the user widening
-    /// the window. Never from a drag of the edge (EdgeDrag): mid-drag a window
-    /// that has not answered yet looks the same.
-    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target, wasWidth: CGFloat) -> Bool {
+    /// it was asked. A window that kept its far edge where asked took the
+    /// place asked too: only its width differs. Only right after asking;
+    /// later, it is the user widening the window. Never from a drag of the
+    /// edge (EdgeDrag): mid-drag a window that has not answered yet looks the same.
+    private func learnMinWidth(asked: CGRect, got: CGRect, wasWidth: CGFloat) -> Bool {
+        var asked = asked
+        if abs(got.maxX - asked.maxX) < 2 { asked.origin.x = got.minX }
         guard Date().timeIntervalSince(askedAt) < 0.5,
-              let w = SidebarGeometry.minimumWidth(asked: asked, got: t.frame, wasWidth: wasWidth),
+              let w = SidebarGeometry.minimumWidth(asked: asked, got: got, wasWidth: wasWidth),
               w > (minWidth ?? 0) + 2 else { return false }
         minWidth = w
         return true
@@ -477,7 +492,7 @@ final class SidebarInstance: ObservableObject {
         if let ask {
             // One step that keeps the far edge whatever width the browser
             // takes: a window at its minimum is not moved off its tile.
-            AXWindow.slide(window.handle, to: ask, moveOrigin: r.drag.side == .left,
+            AXWindow.slide(window.handle, to: ask, side: r.drag.side, moveOrigin: r.drag.side == .left,
                            growing: ask.width > window.target.frame.width)
             window.watcher?.refresh(window)
         }

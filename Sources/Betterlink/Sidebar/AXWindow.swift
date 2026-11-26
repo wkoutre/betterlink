@@ -45,12 +45,16 @@ enum AXWindow {
         win.setSize(ax.size)
     }
 
-    /// One step of a slide: the size, and the position too when the window's
-    /// left edge moves (the sidebar on the left), so a frame costs one or two
-    /// Accessibility calls rather than three. macOS limits each step to what
+    /// One step of a slide, or a narrowing, that keeps the window's far edge
+    /// (the one away from the sidebar, on `side`) where `frame` has it: the
+    /// size, and the position too when it moves (`moveOrigin`), so a frame
+    /// costs one to three Accessibility calls. macOS limits each step to what
     /// fits on screen, so a growing window moves first and a shrinking one
     /// resizes first.
-    static func slide(_ win: WindowHandle, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
+    /// `wasWidth`: how wide the window was before this step, when known. A
+    /// window asked to narrow that hasn't yet isn't moved at all.
+    static func slide(_ win: WindowHandle, to frame: CGRect, side: SidebarSide, moveOrigin: Bool, growing: Bool,
+                      wasWidth: CGFloat? = nil) {
         guard let h = Displays.primaryHeight else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
         var origin = ax.origin
@@ -58,19 +62,27 @@ enum AXWindow {
         func resize() { win.setSize(ax.size) }
         // The far edge must not move: the origin goes where the width the window
         // really has leaves it. A browser that is slow to narrow (or won't) is
-        // then simply not moved yet, never pushed off the screen.
-        func keepFarEdge() {
-            guard moveOrigin, let real = win.size() else { return }
-            origin.x = ax.maxX - real.width
+        // then simply not moved yet, never pushed off the screen; one whose
+        // width can't be read now (busy, Accessibility timed out) isn't moved
+        // either. False then.
+        func keepFarEdge() -> Bool {
+            guard moveOrigin else { return false }
+            // The far edge is the origin, where asked: only a window that hasn't
+            // narrowed yet keeps its place.
+            if side == .right, growing || wasWidth == nil { return true }
+            guard let real = win.size() else { return false }
+            if !growing, let was = wasWidth, ax.width < was - 0.5, real.width > was - 0.5 { return false }
+            if side == .left { origin.x = ax.maxX - real.width }
+            return true
         }
         if growing {
             move(); resize()
             // Moved again only if the browser has not widened as far as asked.
             let asked = origin.x
-            keepFarEdge()
-            if abs(origin.x - asked) >= 1 { move() }
+            if keepFarEdge(), abs(origin.x - asked) >= 1 { move() }
         } else {
-            resize(); keepFarEdge(); move()
+            resize()
+            if keepFarEdge() { move() }
         }
     }
 

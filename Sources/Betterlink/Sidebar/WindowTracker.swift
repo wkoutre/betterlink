@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import TabSyncCore
 
 /// Follows every main window of every running attached browser, in front or
 /// not: which there are, and each one's frame, title and state, the moment they
@@ -198,6 +199,17 @@ final class WindowTracker: NSObject {
     /// Moves or resizes a window, and reports where it really went.
     func setFrame(_ frame: CGRect, of w: TrackedWindow) {
         AXWindow.setFrame(frame, of: w.handle)
+        w.watcher?.refresh(w)
+    }
+
+    /// Narrows (or widens) a window to `frame` keeping its far edge, the one
+    /// away from the sidebar on `side`: it is moved only as far as the width
+    /// it really takes leaves room for, so a browser that won't narrow, or
+    /// not yet, is never pushed past that edge. Reports where it really went.
+    func narrow(_ w: TrackedWindow, to frame: CGRect, side: SidebarSide) {
+        let from = w.target.frame
+        AXWindow.slide(w.handle, to: frame, side: side, moveOrigin: abs(frame.minX - from.minX) >= 1 || side == .left,
+                       growing: frame.width >= from.width - 1, wasWidth: from.width)
         w.watcher?.refresh(w)
     }
 

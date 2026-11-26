@@ -293,10 +293,14 @@ final class SidebarRig {
         want.size.width = max(start.width - width, min(floor, start.width))
         if side == .left { want.origin.x = start.maxX - want.width } // the far edge kept
         let v = d.visibleFrame
-        // Room for the sidebar on the display: else the pair shifts to the display's edge.
+        // Room for the sidebar on the display: else the pair shifts to the
+        // display's edge, or (a browser that couldn't be read when it
+        // stopped) the window keeps its far edge and the sidebar covers it.
+        let kept = want
         if side == .left, want.minX - width < v.minX { want.origin.x = v.minX + width }
         if side == .right, want.maxX + width > v.maxX { want.origin.x = v.maxX - width - want.width }
-        #expect(Self.same(now, want), "\(what): \(c): window at \(now), wanted \(want); its last frames: \(rig.fake.history.suffix(8).map { "\($0)" }.joined(separator: " -> "))",
+        let short = want.width > start.width - width + 0.5 // it can't give the sidebar's whole width
+        #expect(Self.same(now, want) || (short && Self.same(now, kept)), "\(what): \(c): window at \(now), wanted \(want); its last frames: \(rig.fake.history.suffix(8).map { "\($0)" }.joined(separator: " -> "))",
                 sourceLocation: sourceLocation)
     }
 
@@ -305,6 +309,13 @@ final class SidebarRig {
                                  sourceLocation: SourceLocation = #_sourceLocation) {
         let off = rig.fake.history.filter { $0.minX < d.frame.minX - 2 || $0.maxX > d.frame.maxX + 2 }
         #expect(off.isEmpty, "\(what): \(c): pushed off its display \(d.frame) to \(off.first.map { "\($0)" } ?? "")",
+                sourceLocation: sourceLocation)
+    }
+
+    private func expectAtRestOnDisplay(_ rig: SidebarRig, _ d: Display, _ c: Case, _ what: String,
+                                       sourceLocation: SourceLocation = #_sourceLocation) {
+        let f = rig.fake.frame
+        #expect(f.minX >= d.frame.minX - 2 && f.maxX <= d.frame.maxX + 2, "\(what): \(c): at rest off its display \(d.frame) at \(f)",
                 sourceLocation: sourceLocation)
     }
 
@@ -377,11 +388,19 @@ final class SidebarRig {
             let what = "\(resize), minimum 615\(widensLater ? " it widens back to later" : "")"
             for round in 1...2 {
                 rig.toggle()
-                expectNarrowed(rig, from: start, side: c.side, width: 280, on: d, minWidth: min(615, start.width), c, "\(what), show \(round)")
+                // A busy one that can't give the whole width ends wherever its
+                // late answers leave the pair: on its display (below), not placed.
+                if resize != .busy || start.width - 280 >= 615 {
+                    expectNarrowed(rig, from: start, side: c.side, width: 280, on: d, minWidth: min(615, start.width), c, "\(what), show \(round)")
+                }
+                // One that widens back past the display's edge on its own does
+                // so before the sidebar knows its minimum: checked at rest.
+                // A busy one replays what it was asked in a burst when it answers.
+                if widensLater || resize == .busy { expectAtRestOnDisplay(rig, d, c, "\(what), show \(round)") }
                 rig.toggle()
                 expectBack(rig, at: start, c, "\(what), hide \(round)")
             }
-            expectOnDisplay(rig, d, c, what)
+            if !widensLater, resize != .busy { expectOnDisplay(rig, d, c, what) }
         }
     }
 

@@ -68,10 +68,18 @@ public struct SidebarSlide: Equatable, Sendable {
         let inner = side == .left ? outerEdge + width * q : outerEdge - width * q
         guard hiddenWindow != shownWindow else { return (hiddenWindow, inner) }
         // No further out than the window gets back: one that lent less than the
-        // sidebar's width stops there while the sidebar's edge goes on.
+        // sidebar's width stops there while the sidebar's edge goes on. The far
+        // edge goes from the hidden window's to the shown one's: the same
+        // place, unless the shown window is the narrowest asked of a browser
+        // and the pair shifts to fit, and then the window ends exactly there.
         var w = hiddenWindow
-        if side == .left { w.origin.x = max(inner, hiddenWindow.minX); w.size.width = hiddenWindow.maxX - w.origin.x }
-        else { w.size.width = min(inner, hiddenWindow.maxX) - hiddenWindow.minX }
+        if side == .left {
+            let far = hiddenWindow.maxX + (shownWindow.maxX - hiddenWindow.maxX) * q
+            w.origin.x = max(inner, hiddenWindow.minX); w.size.width = far - w.origin.x
+        } else {
+            let far = hiddenWindow.minX + (shownWindow.minX - hiddenWindow.minX) * q
+            w.origin.x = far; w.size.width = min(inner, hiddenWindow.maxX) - far
+        }
         return (w, inner)
     }
 
