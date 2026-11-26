@@ -110,6 +110,48 @@ import Testing
         #expect(hub.collect().first?.store == reference(sent: sent))
     }
 
+    /// The extension sends the whole tab with each update, whatever its
+    /// `changes` name (browser-extension/bridge.js), so a line that names only
+    /// the title can carry a new address. Held, that address is still for the
+    /// saved links' held tabs at once when the line is read: when the app
+    /// collects the lists, or when a line that isn't a title comes.
+    @Test func aHeldTitleWithANewAddressIsHandedOnWhenItIsRead() throws {
+        let host = try FakeHost()
+        defer { host.close() }
+        let handed = Counter()
+        let hub = SyncHub(directory: host.dir, holdingContent: true, onChange: { _ in handed.add() })
+        hub.start()
+        try host.accept()
+        host.send([Self.snapshot()])
+        try wait(hub) { $0.first?.store.tabCount == Self.tabs }
+        _ = hub.collect()
+
+        var seq = 1
+        func next() -> Int { seq += 1; return seq }
+        // The first title is handed on; the one after it is held.
+        host.send([Self.updated(seq: next(), tab: 100, title: "handed")])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        let before = handed.value
+        let lines = hub.lineCount
+        host.send([Self.updated(seq: next(), tab: 101, title: "moved", url: "https://elsewhere.example/", changes: "title")])
+        try wait(hub) { _ in hub.lineCount == lines + 1 }
+        #expect(handed.value == before, "a title is held after one was handed on")
+        let collected = hub.collect()
+        #expect(collected.first?.store.tabs[101]?.url == "https://elsewhere.example/")
+        #expect(handed.value == before + 1, "a held title with a new address was not handed on when collected")
+
+        // Read because an icon came after it: an icon alone isn't handed on at once.
+        _ = hub.collect()
+        host.send([Self.updated(seq: next(), tab: 100, title: "handed again")])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        let beforeIcon = handed.value
+        host.send([Self.updated(seq: next(), tab: 102, title: "moved too", url: "https://further.example/", changes: "title"),
+                   #"{"type":"event","kind":"tabFavicon","seq":\#(next()),"t":1,"tabId":105,"favicon":"data:image/png;base64,AAAA"}"#])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(hub.current.first?.store.tabs[102]?.url == "https://further.example/")
+        #expect(handed.value == beforeIcon + 1, "a held title with a new address was not handed on when an icon came after it")
+    }
+
     /// A profile not found within a minute (its extension storage is written
     /// a moment after the extension starts) is one this browser's folder
     /// doesn't have: it is looked for again as seldom as a found one, not
@@ -150,8 +192,10 @@ import Testing
         return #"{"type":"snapshot","seq":1,"t":1,"windows":[{"id":1,"focused":false,"tabs":[\#(tabs)]}]}"#
     }
 
-    static func updated(seq: Int, tab id: Int, title: String, url: String? = nil) -> String {
-        #"{"type":"event","kind":"tabUpdated","seq":\#(seq),"t":1,"tab":\#(tab(id, index: id - 100, title: title, url: url)),"changes":["\#(url == nil ? "title" : "url")"]}"#
+    /// `changes`: what the update names, by default its title, or its
+    /// address when `url` is given.
+    static func updated(seq: Int, tab id: Int, title: String, url: String? = nil, changes: String? = nil) -> String {
+        #"{"type":"event","kind":"tabUpdated","seq":\#(seq),"t":1,"tab":\#(tab(id, index: id - 100, title: title, url: url)),"changes":["\#(changes ?? (url == nil ? "title" : "url"))"]}"#
     }
 
     /// The tab lists from reading every line in order, as the extension sent them.
