@@ -27,5 +27,6 @@ How it stays there:
 - **The host drains its pool per read** (`e2e/host-memory.test.mjs` fails if its memory grows).
 - **The extension says nothing** when an update changes nothing the app sees.
 - **A sidebar per window adds nothing while nothing changes.** No timer runs for a sidebar at rest. Each is handed what it shows only when its own window's tabs, Browser Profile or held tabs differ (`SidebarLook`, unit tested), so a tab changing in one window redraws no other window's sidebar, and one that isn't on screen is handed nothing. Their places among the windows are checked on app and window events, with one reading of the window list for all of them, and once more 0.3 s later.
+- **What kind a window is is read on events only** (`WindowKinds`, unit tested): a window is walked for its tabs when it opens or is named again by an event (its browser's own chrome, a few dozen elements, pages skipped; the walk stops at the first tab), and one that shows none at most five more times over three seconds. A window seen with tabs is not read again.
 - **Mouse drags are watched** only while a browser is in front, or until the button comes up after a window moved with it down.
 - **The sync rescan** skips this Mac's own file and may run up to 10 s late.
