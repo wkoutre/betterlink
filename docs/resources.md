@@ -14,7 +14,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 | Idle, no browser in front | app under 0.1% of a core, under 1 wakeup a second |
 | Quiet browser in front | the same |
 | Several quiet browser windows, each with its sidebar | the same |
-| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | app under 4% with four windows and 56 tabs changing; the aim is under 2%, as with the sidebar hidden. Measured with four windows and Finder in front: one background tab changing twice a second 0.61% of a core and 1.1 wakeups a second, 56 tabs changing 3.76% and 1.5 (one sidebar, before a sidebar per window: 0.33% and 1.79%) |
+| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | app under 4% with four windows and 56 tabs changing their titles twice a second; the aim is under 2%, as with the sidebar hidden, and is not met yet. Measured with four windows and Finder in front: one background tab changing twice a second 0.61% of a core and 1.1 wakeups a second, 56 tabs changing 3.76% and 1.5 (one sidebar, before a sidebar per window: 0.33% and 1.79%) |
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
