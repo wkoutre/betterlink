@@ -277,7 +277,7 @@ struct SidebarView: View {
         }
         if let p = profile {
             Divider()
-            Button("Rename…") { renaming = nil; profileDraft = p.name; renamingProfile = p.id }
+            Button("Rename…") { renaming = nil; iconEditing = nil; profileDraft = p.name; renamingProfile = p.id }
             Button("Delete…", role: .destructive) { confirmProfileDelete = p }
                 .disabled(lib.library.profiles.count <= 1)
         }
