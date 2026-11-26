@@ -8,6 +8,8 @@ public enum SidebarPresence {
     /// Where the panel sits among the windows: next to its browser window, so
     /// whatever covers that window covers it too. `attached`: beside the window
     /// rather than covering its edge, where only above can be seen.
+    /// Always above for now, whatever `attached` says: this is the one place
+    /// that decides it, kept for the change that orders an attached panel below.
     public static func relation(attached: Bool) -> Relation { .above }
 
     public enum Decision: Equatable, Sendable {

@@ -252,6 +252,8 @@ extension AgentCommand {
             "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
+            // False: this macOS no longer says which browser window is which, and no window gets a sidebar.
+            "canTellWindowsApart": AXWindow.numbersWindows,
             "browsers": (d.array(forKey: "sidebar.browsers") as? [String]).map { Browser.sidebarHosts($0).sorted() }
                 // Until changed, every installed browser the sidebar can attach to (SidebarController.defaultBrowsers).
                 ?? Browser.known.filter { $0.hostsSidebar
