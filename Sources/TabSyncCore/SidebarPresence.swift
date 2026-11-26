@@ -6,12 +6,10 @@ public enum SidebarPresence {
     public enum Relation: Equatable, Sendable { case above, below }
 
     /// Where the panel sits among the windows: next to its browser window, so
-    /// whatever covers that window covers it too. `attached`: beside the
-    /// window rather than covering its edge. Above either way: covering the
-    /// edge, only above can be seen; beside the window, the window's shadow
-    /// would fall across a panel under it (measured: the sidebar 15 to 32
-    /// percent darker along the seam), and the pair reads as one window.
-    public static func relation(attached: Bool) -> Relation { .above }
+    /// whatever covers that window covers it too. Above it: the window's
+    /// shadow would fall across a panel under it (measured: the sidebar 15 to
+    /// 32 percent darker along the seam), and the pair reads as one window.
+    public static let relation = Relation.above
 
     public enum Decision: Equatable, Sendable {
         /// Out of sight.
@@ -32,8 +30,7 @@ public enum SidebarPresence {
     ///     or its app hidden.
     ///   - settled: windows and Spaces have stopped moving, so a panel that
     ///     isn't on screen beside a window that is has been left behind.
-    public static func decide(window: UInt32, panel: UInt32?, onScreen: [UInt32], hidden: Bool, attached: Bool,
-                              settled: Bool) -> Decision {
+    public static func decide(window: UInt32, panel: UInt32?, onScreen: [UInt32], hidden: Bool, settled: Bool) -> Decision {
         guard !hidden else { return .away }
         let p = panel.flatMap { onScreen.firstIndex(of: $0) }
         guard let w = onScreen.firstIndex(of: window) else {
@@ -42,6 +39,6 @@ public enum SidebarPresence {
             return p != nil && settled ? .away : .asleep
         }
         guard let p else { return .shown(rehome: panel != nil && settled, reorder: true) }
-        return .shown(rehome: false, reorder: p != (relation(attached: attached) == .above ? w - 1 : w + 1))
+        return .shown(rehome: false, reorder: p != (relation == .above ? w - 1 : w + 1))
     }
 }

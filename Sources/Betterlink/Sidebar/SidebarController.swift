@@ -172,6 +172,11 @@ final class SidebarController: ObservableObject {
     func toggle() {
         guard enabled else { return }
         guard let i = front else { return setCollapsed(!allHidden) }
+        toggle(i)
+    }
+
+    /// Hides or shows one window's sidebar, and keeps that choice for the window.
+    func toggle(_ i: SidebarInstance) {
         i.toggle()
         chosen.set(hidden: i.hidden, window: i.window.number, pid: i.window.target.pid)
         saveChosen()
@@ -242,19 +247,28 @@ final class SidebarController: ObservableObject {
 
     private func stop() {
         feeds = []
-        tracker.stop() // lets every window go: each gets its space back (removed)
+        giveSpaceBack() // every window at once, not one after another as each is let go
+        tracker.stop() // lets every window go (removed)
         takenOver = []
         arrange()
     }
 
-    /// Gives every window the sidebar narrowed its space back, if it is still
-    /// as narrowed. Called when the app quits. A browser that doesn't answer
-    /// for one window isn't asked about its others (they keep their records):
-    /// each would wait out its time while the app is quitting.
-    func giveSpaceBack() {
-        var hung: Set<pid_t> = []
-        for i in instances.values where !hung.contains(i.window.target.pid) {
-            if !i.giveSpaceBack(), AXWindow.timedOut { hung.insert(i.window.target.pid) }
+    /// Gives every window the sidebar narrowed its space back. Called when
+    /// the app quits or the sidebar is turned off.
+    func giveSpaceBack() { giveSpaceBack(of: Array(instances.values)) }
+
+    /// Every window moved together (`AXWindow.placeNow`): the wait is the
+    /// slowest window's, bounded however many there are and whatever their
+    /// browsers do (review F3). A window whose browser didn't answer keeps
+    /// its record, so it is recognised later instead of narrowed again, and
+    /// is sent nothing more, also when it is let go (`stop()`, review F2).
+    /// `clock` and `pause`: the time, and waiting (tests step their own).
+    func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
+                       pause: @escaping (Double) -> Void = AXWindow.sleep) {
+        let moves = all.compactMap { $0.spaceBack() }
+        let missed = AXWindow.placeNow(moves, clock: clock, pause: pause)
+        for i in all {
+            if missed.contains(ObjectIdentifier(i.window.handle)) { i.letAlone() } else { i.unpair() }
         }
     }
 
@@ -364,27 +378,36 @@ final class SidebarController: ObservableObject {
         updateHotKey()
     }
 
-    /// Records what `window` has lent: only what was really lent (a window
-    /// asked and not narrowed is as it was), and nothing once it has it back.
-    func loanChanged(_ loan: WidthLoan?, of w: TrackedWindow) {
-        if let loan {
-            guard loan.phase == .lent else { return }
-            memory.record(.init(bundleId: w.target.bundleId, window: w.number, inner: loan.inner, outer: loan.outer))
-        } else {
-            memory.forget(window: w.number)
-        }
+    /// Records a window whose sidebar is open: where it is, and the pair's frame.
+    func paired(_ w: TrackedWindow, browser: CGRect, pair: CGRect) {
+        let e = FitMemory.Entry(bundleId: w.target.bundleId, window: w.number, inner: browser, outer: pair)
+        guard memory.fitted(browser, window: w.number) != e else { return }
+        memory.record(e)
         saveMemory()
     }
 
-    /// The record of a window narrowed before (this launch or an earlier one)
-    /// that is still exactly as narrowed.
+    /// The window's sidebar couldn't open (no room beside it): kept closed for
+    /// that window, as if hidden with the shortcut.
+    func refused(_ i: SidebarInstance) {
+        chosen.set(hidden: true, window: i.window.number, pid: i.window.target.pid)
+        saveChosen()
+    }
+
+    /// The window's sidebar is closed: nothing narrowed to remember.
+    func unpaired(_ w: TrackedWindow) {
+        memory.forget(window: w.number)
+        saveMemory()
+    }
+
+    /// The record of a window whose sidebar was open (this launch or an
+    /// earlier one) that is still where it was.
     func narrowedBefore(_ w: TrackedWindow, at frame: CGRect) -> FitMemory.Entry? { memory.fitted(frame, window: w.number) }
 
     /// A drag gave one window's sidebar this width: windows still to come take
     /// it too, and the others keep theirs, across a relaunch as well.
     func widthChosen(_ w: Double, for i: SidebarInstance) {
         for other in Array(instances.values) + [i] {
-            chosen.set(width: other.width, window: other.window.number, pid: other.window.target.pid)
+            chosen.set(width: other.chosenWidth, window: other.window.number, pid: other.window.target.pid)
         }
         width = w
         defaults.set(w, forKey: "sidebar.width")
@@ -412,7 +435,7 @@ final class SidebarController: ObservableObject {
     /// A followed window the list no longer has is closed
     /// (`WindowPairing.closed`): it is let go, which comes back here.
     private func pair(countingWindows: Bool = false) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
+        guard let h = Displays.primaryHeight else { return }
         // Every window followed, those still awaiting the browser's word too:
         // the pairing is what gives it.
         let followed = (instances.values.map(\.window) + awaiting.values).sorted { $0.id < $1.id }
@@ -508,7 +531,7 @@ final class SidebarController: ObservableObject {
 
     // MARK: - On screen
 
-    func isOnScreen(_ w: TrackedWindow) -> Bool { WindowServer.onScreen().contains(w.number) }
+    func isOnScreen(_ w: TrackedWindow) -> Bool { w.handle.isOnScreen }
 
     /// Puts every sidebar in its place: beside its window and next to it among
     /// the other windows, or out of sight. `settled`: a moment after the event,

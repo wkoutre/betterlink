@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import BetterlinkCore
+import TabSyncCore
 
 /// Follows every browser window of every running attached browser (which of
 /// a browser's windows those are: BrowserWatcher), in front or not: which
@@ -222,12 +223,6 @@ final class WindowTracker: NSObject {
     }
 
     // MARK: - Windows
-
-    /// Moves or resizes a window, and reports where it really went.
-    func setFrame(_ frame: CGRect, of w: TrackedWindow) {
-        AXWindow.setFrame(frame, of: w.element)
-        w.watcher?.refresh(w)
-    }
 
     func scheduleSettle(_ w: TrackedWindow) {
         w.settleWork?.cancel()

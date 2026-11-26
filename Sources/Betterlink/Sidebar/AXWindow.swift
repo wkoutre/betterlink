@@ -22,58 +22,93 @@ enum AXWindow {
     /// seconds, on the main thread, for each call a hung browser doesn't
     /// answer. Set on every element kept or asked more than once: per the
     /// header it holds for that object only, not for others equal to it.
-    static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, 1) }
+    static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, Float(callLimit)) }
+    static let callLimit = 1.0
 
-    static func frame(of win: AXUIElement) -> CGRect? {
-        guard let pv: AXValue = copy(win, kAXPositionAttribute), let sv: AXValue = copy(win, kAXSizeAttribute),
-              let mainHeight = NSScreen.screens.first?.frame.height else { return nil }
-        var p = CGPoint.zero, s = CGSize.zero
-        guard AXValueGetValue(pv, .cgPoint, &p), AXValueGetValue(sv, .cgSize, &s) else { return nil }
+    static func frame(of win: WindowHandle) -> CGRect? {
+        guard let p = win.position(), let s = win.size(), let mainHeight = Displays.primaryHeight else { return nil }
         return SidebarGeometry.cocoa(fromAX: CGRect(origin: p, size: s), mainScreenHeight: mainHeight)
     }
 
-    static func setFrame(_ frame: CGRect, of win: AXUIElement) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
-        let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
-        var origin = ax.origin, size = ax.size
-        guard let p = AXValueCreate(.cgPoint, &origin), let s = AXValueCreate(.cgSize, &size) else { return }
-        // Size, position, size: macOS limits each step to what fits on screen
-        // at that moment, so a move that needs the new size comes after it.
-        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
-        AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p)
-        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
+    /// Window's frame as the window server shows it now, Cocoa coordinates.
+    /// Cheap enough to call every frame.
+    static func shownFrame(of win: WindowHandle) -> CGRect? {
+        guard let b = win.shownBounds(), let h = Displays.primaryHeight else { return nil }
+        return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 
-    /// One step of a slide: the size, and the position too when the window's
-    /// left edge moves (the sidebar on the left), so a frame costs one or two
-    /// Accessibility calls rather than three. macOS limits each step to what
-    /// fits on screen, so a growing window moves first and a shrinking one
-    /// resizes first.
-    static func slide(_ win: AXUIElement, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
-        let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
-        var origin = ax.origin, size = ax.size
-        func move() { if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) } }
-        func resize() { if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) } }
-        // The far edge must not move: the origin goes where the width the window
-        // really has leaves it. A browser that is slow to narrow (or won't) is
-        // then simply not moved yet, never pushed off the screen.
-        func keepFarEdge() {
-            guard moveOrigin, let sv: AXValue = copy(win, kAXSizeAttribute) else { return }
-            var real = CGSize.zero
-            guard AXValueGetValue(sv, .cgSize, &real) else { return }
-            origin.x = ax.maxX - real.width
-        }
-        if growing {
-            move(); resize()
-            // Moved again only if the browser has not widened as far as asked.
-            let asked = origin.x
-            keepFarEdge()
-            if abs(origin.x - asked) >= 1 { move() }
-        } else {
-            resize(); keepFarEdge(); move()
+    /// Sends one of `WindowSteps`' calls.
+    static func send(_ call: WindowSteps.Call, to win: WindowHandle) {
+        guard let h = Displays.primaryHeight else { return }
+        switch call {
+        case .size(let f): win.setSize(f.size)
+        case .position(let f): win.setPosition(SidebarGeometry.ax(fromCocoa: f, mainScreenHeight: h).origin)
         }
     }
+
+    /// A window given its space back: the frame it takes, its browser's
+    /// process (a browser that misses a call is asked nothing more), and the
+    /// steps it was on: their call in flight is waited for first.
+    struct Move {
+        var window: WindowHandle
+        var frame: CGRect
+        var pid: pid_t
+        var after: WindowSteps?
+    }
+
+    /// The longest quitting (or turning the sidebar off) holds the app up,
+    /// however many windows there are and whatever their browsers do; and
+    /// the longest one call to a browser may wait meanwhile.
+    static let placeBound = 4 * WindowSteps.timeout
+    static let placeCall = 0.2
+
+    /// Moves each window to its frame now, for when there is no later (the
+    /// app quitting, the sidebar turned off): its final target sent whole
+    /// (`WindowSteps.resends`), so any call of betterlink's still on its way
+    /// to it lands first. All the windows together, each call sent as soon
+    /// as that window's last has landed, so the wait is that of the slowest
+    /// window, not the sum of them all (review F3). Each call may wait
+    /// `placeCall` for its browser, and none is sent that could end past
+    /// `placeBound`: a browser that misses one (hung) is sent nothing more,
+    /// for any of its windows, and what hasn't landed then is left as it is.
+    /// Returns the windows whose browser missed. `clock` and `pause`: the
+    /// time, and waiting (tests step their own).
+    @discardableResult
+    static func placeNow(_ moves: [Move], clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) -> Set<ObjectIdentifier> {
+        var all = moves.map { (move: $0, steps: WindowSteps(target: $0.frame, keep: nil, resends: true, after: $0.after), over: false) }
+        var hung: Set<pid_t> = []
+        var missed: Set<ObjectIdentifier> = []
+        for m in moves { m.window.limitWaiting(placeCall) }
+        defer { for m in moves { m.window.limitWaiting(callLimit) } }
+        let began = clock()
+        while all.contains(where: { !$0.over }) {
+            for k in all.indices where !all[k].over {
+                let m = all[k].move
+                if hung.contains(m.pid) {
+                    missed.insert(ObjectIdentifier(m.window))
+                    all[k].over = true
+                    continue
+                }
+                // Out of time: left as it is. Gone: nothing to do.
+                guard clock() - began + placeCall <= placeBound, let seen = shownFrame(of: m.window) else { all[k].over = true; continue }
+                if let call = all[k].steps.step(seen: seen, now: clock()) {
+                    send(call, to: m.window)
+                    if m.window.missed {
+                        hung.insert(m.pid)
+                        missed.insert(ObjectIdentifier(m.window))
+                        all[k].over = true
+                        continue
+                    }
+                }
+                all[k].over = all[k].steps.done
+            }
+            if all.contains(where: { !$0.over }) { pause(0.01) }
+        }
+        return missed
+    }
+
+    /// Waits `seconds` on this thread.
+    nonisolated static func sleep(_ seconds: Double) { usleep(UInt32(max(0, seconds) * 1_000_000)) }
 
     /// Brings the window in front of its app's other windows.
     static func raise(_ win: AXUIElement) {
@@ -168,12 +203,16 @@ enum WindowServer {
         }
     }
 
+    /// Window `n`'s bounds right now (what is on screen), Accessibility
+    /// coordinates. Cheap enough to call every frame.
+    static func bounds(_ n: UInt32) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first else { return nil }
+        return (info[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+    }
+
     /// Window `n`'s frame right now (what is on screen), Cocoa coordinates.
-    /// Cheap enough to call every frame.
     static func frame(_ n: UInt32) -> CGRect? {
-        guard let h = NSScreen.screens.first?.frame.height,
-              let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first,
-              let b = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { return nil }
+        guard let b = bounds(n), let h = Displays.primaryHeight else { return nil }
         return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 

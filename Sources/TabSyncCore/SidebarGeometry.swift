@@ -17,9 +17,6 @@ public struct SidebarPlacement: Equatable, Sendable {
     /// Where the sidebar panel goes.
     public var sidebar: CGRect
     public var side: SidebarSide
-    /// True when the sidebar sits over the window's edge instead of beside it
-    /// (only when the browser refused to make room).
-    public var overlaps: Bool
     /// The pixels per point of the screen it was placed on.
     public var scale: CGFloat
 }
@@ -38,44 +35,70 @@ public enum SidebarGeometry {
 
     /// Places a `width`-wide sidebar flush against the outside of `window`'s
     /// edge, the full height of the window. The pair moves like one window, so
-    /// the sidebar goes wherever the window does, off the screen too. With
-    /// `keepOnScreen` (the browser refused to make room) it covers the
-    /// window's edge instead.
+    /// the sidebar goes wherever the window does, off the screen too.
     ///
     /// Each edge goes to the nearest pixel of a screen with `scale` pixels
     /// per point, the window's edges on their own: the sidebar's top, bottom
     /// and seam are the window's, to the pixel, on any scale.
-    public static func place(window: CGRect, screen: CGRect, width: CGFloat,
-                             side: SidebarSide, keepOnScreen: Bool = false, scale: CGFloat = 1) -> SidebarPlacement {
+    public static func place(window: CGRect, width: CGFloat, side: SidebarSide, scale: CGFloat = 1) -> SidebarPlacement {
         let px = { (v: CGFloat) in SidebarSeam.aligned(v, scale: scale) }
         let minY = px(window.minY), maxY = px(window.maxY)
         let edge = px(side == .left ? window.minX : window.maxX)
         let outside = side == .left ? px(edge - width) : edge
         let w = side == .left ? edge - outside : px(edge + width) - edge
-        let x = keepOnScreen ? min(max(outside, screen.minX), screen.maxX - w) : outside
-        return SidebarPlacement(sidebar: CGRect(x: x, y: minY, width: w, height: max(0, maxY - minY)),
-                                side: side, overlaps: x != outside, scale: scale)
+        return SidebarPlacement(sidebar: CGRect(x: outside, y: minY, width: w, height: max(0, maxY - minY)),
+                                side: side, scale: scale)
     }
 
-    /// The free width beside the window on the sidebar's side.
-    public static func room(beside w: CGRect, screen: CGRect, side: SidebarSide) -> CGFloat {
-        side == .left ? w.minX - screen.minX : screen.maxX - w.maxX
+    /// Frames within 2 pt count as the same: browsers round.
+    public static func same(_ a: CGRect, _ b: CGRect) -> Bool {
+        abs(a.minX - b.minX) < 2 && abs(a.minY - b.minY) < 2 && abs(a.width - b.width) < 2 && abs(a.height - b.height) < 2
     }
 
-    /// Whether going from `a` to `b` pushes the window off the screen: an edge
-    /// that was on it is now past it.
-    public static func leaves(_ screen: CGRect, from a: CGRect, to b: CGRect) -> Bool {
-        (a.maxX <= screen.maxX + 2 && b.maxX > screen.maxX + 2) || (a.minX >= screen.minX - 2 && b.minX < screen.minX - 2)
+    /// The browser's frame when its sidebar opens in `frame` (where the window
+    /// was with the sidebar closed): the pair occupies that frame, the
+    /// sidebar `width` wide on `side`, the browser the rest, its far edge
+    /// where it was. Never narrower than a point: a browser asked for less
+    /// stops where it can, and the sidebar has what is left.
+    public static func opened(_ frame: CGRect, width: CGFloat, side: SidebarSide) -> CGRect {
+        var b = frame
+        b.size.width = max(1, frame.width - width)
+        if side == .left { b.origin.x = frame.maxX - b.width }
+        return b
     }
 
-    /// The browser's minimum width, when its answer to being asked to narrow
-    /// to `asked` shows one: it took the place asked and narrowed from
-    /// `wasWidth`, but not as far as asked. A window as wide as before has not
-    /// answered yet, or won't narrow: that width is no minimum.
-    public static func minimumWidth(asked: CGRect, got: CGRect, wasWidth: CGFloat) -> CGFloat? {
-        guard abs(got.minX - asked.minX) < 2, abs(got.height - asked.height) < 2,
-              got.width > asked.width + 2, got.width < wasWidth - 2 else { return nil }
-        return got.width
+    /// The browser's frame when its sidebar closes: the pair's frame (the
+    /// browser `browser`, the sidebar `width` wide beside it on `side`), moved
+    /// as little as it takes to be on the displays side by side at its height
+    /// (`displays`, whole frames): the browser never ends off screen. A pair
+    /// wider than they are (the person widened the browser while the sidebar
+    /// was open) fills them: macOS makes no window wider than its displays.
+    public static func closed(browser b: CGRect, width: CGFloat, side: SidebarSide, displays: [CGRect]) -> CGRect {
+        var p = b
+        p.size.width += width
+        if side == .left { p.origin.x -= width }
+        guard let span = span(at: p, of: displays) else { return p }
+        p.size.width = min(p.width, span.upperBound - span.lowerBound)
+        if p.maxX > span.upperBound { p.origin.x = span.upperBound - p.width }
+        if p.minX < span.lowerBound { p.origin.x = span.lowerBound }
+        return p
+    }
+
+    /// The horizontal span of the display under most of `r` and of those
+    /// touching it side by side at `r`'s height.
+    static func span(at r: CGRect, of displays: [CGRect]) -> ClosedRange<CGFloat>? {
+        let level = displays.filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }
+        guard let home = level.max(by: { $0.intersection(r).area < $1.intersection(r).area }) else { return nil }
+        var lo = home.minX, hi = home.maxX
+        var grew = true
+        while grew {
+            grew = false
+            for d in level {
+                if d.minX <= hi + 1, d.maxX > hi { hi = d.maxX; grew = true }
+                if d.maxX >= lo - 1, d.minX < lo { lo = d.minX; grew = true }
+            }
+        }
+        return lo...hi
     }
 
     /// The narrowest and widest the sidebar gets.
@@ -83,11 +106,10 @@ public enum SidebarGeometry {
 
     /// The sidebar's new width and the window's new frame when the edge
     /// between them is dragged so the sidebar would be `wanted` wide: the pair
-    /// keeps its outer edges. The window never goes below `minWindowWidth`
-    /// (one already narrower gives up nothing more).
-    public static func resized(window w: CGRect, width: CGFloat, to wanted: CGFloat, side: SidebarSide,
-                               minWindowWidth: CGFloat) -> (width: CGFloat, window: CGRect) {
-        let most = min(widths.upperBound, width + max(0, w.width - minWindowWidth))
+    /// keeps its outer edges. The browser is asked for what is left; what it
+    /// really takes is read off its window.
+    public static func resized(window w: CGRect, width: CGFloat, to wanted: CGFloat, side: SidebarSide) -> (width: CGFloat, window: CGRect) {
+        let most = min(widths.upperBound, width + max(0, w.width - 1))
         let new = min(max(wanted, widths.lowerBound), max(most, widths.lowerBound)).rounded()
         var out = w
         out.size.width = w.width + width - new
@@ -97,13 +119,10 @@ public enum SidebarGeometry {
 
     /// The browser window's frame when the pair (window plus sidebar) is to
     /// fill `rect`, with the sidebar on `side` (left or right) keeping its
-    /// `width`: what a snap or move aimed at the sidebar means. The window never
-    /// goes below `minWindowWidth`; then it overflows `rect` away from the
-    /// sidebar rather than covering it.
-    public static func window(filling rect: CGRect, width: CGFloat, side: SidebarSide,
-                              minWindowWidth: CGFloat = 0) -> CGRect {
+    /// `width`: what a snap or move aimed at the sidebar means.
+    public static func window(filling rect: CGRect, width: CGFloat, side: SidebarSide) -> CGRect {
         let r = rect.integral
-        let w = max(r.width - width, minWindowWidth)
+        let w = max(r.width - width, 1)
         let x = side == .left ? r.minX + width : r.maxX - width - w
         return CGRect(x: x, y: r.minY, width: w, height: r.height)
     }
@@ -115,81 +134,30 @@ public enum SidebarGeometry {
     /// panel's new height. A new width means the panel was given a tile to
     /// fill, so the pair fills it (see `window(filling:)`).
     public static func windowAfterPanelMoved(from old: CGRect, to new: CGRect, window w: CGRect, width: CGFloat,
-                                             side: SidebarSide, minWindowWidth: CGFloat = 0) -> CGRect {
+                                             side: SidebarSide) -> CGRect {
         if abs(new.width - old.width) < 2 {
             return CGRect(x: w.minX + (new.minX - old.minX), y: new.minY, width: w.width, height: new.height).integral
         }
-        return window(filling: new, width: width, side: side, minWindowWidth: minWindowWidth)
-    }
-
-    /// True when every edge of `w` lies on a half, third or quarter line of
-    /// `screen` (the visible frame): the window was snapped, not placed by hand.
-    /// The tolerance covers the gaps window managers leave around tiles.
-    public static let snapTolerance: CGFloat = 10
-
-    public static func isSnapped(_ w: CGRect, screen s: CGRect, tolerance: CGFloat = snapTolerance) -> Bool {
-        snapError(w, screen: s) <= tolerance
-    }
-
-    /// How far the edge farthest from a half, third or quarter line is from one.
-    static func snapError(_ w: CGRect, screen s: CGRect) -> CGFloat {
-        guard s.width > 0, s.height > 0 else { return .infinity }
-        let lines: [CGFloat] = [0, 1, 1 / 2, 1 / 3, 2 / 3, 1 / 4, 3 / 4]
-        func off(_ v: CGFloat, _ origin: CGFloat, _ length: CGFloat) -> CGFloat {
-            lines.map { abs(origin + $0 * length - v) }.min() ?? .infinity
-        }
-        return max(off(w.minX, s.minX, s.width), off(w.maxX, s.minX, s.width),
-                   off(w.minY, s.minY, s.height), off(w.maxY, s.minY, s.height))
-    }
-
-    /// The frame a window that came to rest should take so that the window and
-    /// its sidebar together behave as one window, or nil to leave it alone.
-    ///
-    /// - Snapped to a tile: the pair fills exactly that tile.
-    /// - Placed by hand with too little room for the sidebar before the
-    ///   screen's edge: the window gives up only what is missing.
-    ///
-    /// At the window's minimum width the pair is wider than the tile and shifts to stay on screen.
-    public static func settled(window: CGRect, screen: CGRect, width: CGFloat, side: SidebarSide,
-                               minWindowWidth: CGFloat = 500) -> CGRect? {
-        let w = window.integral
-        let room = room(beside: w, screen: screen, side: side)
-        let need: CGFloat
-        if isSnapped(w, screen: screen) {
-            need = width
-        } else if room >= 0, room < width {
-            need = width - room
-        } else {
-            return nil // enough room, or the user dragged that edge off the screen
-        }
-        var out = w
-        out.size.width = max(minWindowWidth, w.width - need)
-        if side == .left {
-            out.origin.x = w.minX + need
-            out.origin.x = max(screen.minX + width, min(out.origin.x, screen.maxX - out.width))
-        } else {
-            out.origin.x = max(screen.minX, min(w.minX, screen.maxX - width - out.width))
-        }
-        // A browser too wide for the sidebar to fit beside it on this screen at
-        // all keeps its place: never pushed off the screen's other edge.
-        if leaves(screen, from: w, to: out) || out.width + width > screen.width + 2 { return nil }
-        return out == w ? nil : out
+        return window(filling: new, width: width, side: side)
     }
 }
 
-/// The windows the sidebar has narrowed, kept across launches. From its frame
-/// alone a narrowed window can look freshly snapped (a half less the sidebar
-/// can sit on the one-third line) and a freshly snapped one can look already
-/// fitted, so whether a window was narrowed is remembered, not guessed. A
-/// window is known by its window-server number, which stays the same for the
-/// window's life (betterlink relaunching included) and is never shared, so
-/// another window at the same frame is never mistaken for it.
+private extension CGRect {
+    var area: CGFloat { isNull ? 0 : width * height }
+}
+
+/// The windows whose sidebar is open, narrowed for it, kept across launches:
+/// from its frame alone a narrowed window can't be told from one that is
+/// not, so a window found at a launch is narrowed again only when it isn't
+/// one of these. A window is known by its window-server number, which stays
+/// the same for the window's life (betterlink relaunching included) and is
+/// never shared, so another window at the same frame is never mistaken for it.
 public struct FitMemory: Codable, Equatable, Sendable {
     public struct Entry: Codable, Equatable, Sendable {
         public var bundleId: String
         /// The window's window-server number (CGWindowID).
         public var window: UInt32
-        /// What the window was narrowed to, and the space it had before.
+        /// Where the window is with its sidebar open, and the pair's frame.
         public var inner: CGRect, outer: CGRect
         public init(bundleId: String, window: UInt32, inner: CGRect, outer: CGRect) {
             self.bundleId = bundleId; self.window = window; self.inner = inner; self.outer = outer
@@ -199,9 +167,9 @@ public struct FitMemory: Codable, Equatable, Sendable {
     public private(set) var entries: [Entry] = []
     public init(entries: [Entry] = []) { self.entries = entries }
 
-    /// The record for this window when it is still exactly as narrowed.
+    /// The record for this window when it is still where it was with its sidebar open.
     public func fitted(_ frame: CGRect, window: UInt32) -> Entry? {
-        entries.last { $0.window == window && WidthLoan.same($0.inner, frame) }
+        entries.last { $0.window == window && SidebarGeometry.same($0.inner, frame) }
     }
 
     public mutating func record(_ e: Entry) {

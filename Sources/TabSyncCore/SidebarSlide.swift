@@ -3,10 +3,9 @@ import Foundation
 import CoreGraphics
 #endif
 
-/// Showing and hiding the sidebar as one slide with the browser window (Nick,
-/// 2026-11-24). The sidebar's outer edge (the screen side) stays put; its
-/// inner edge and the window's edge move together, so the seam never opens
-/// or overlaps. Hidden, the window fills the whole tile; shown, the pair does.
+/// Showing and hiding the sidebar as a slide (Nick, 2026-11-24). The
+/// sidebar's outer edge stays put and its inner edge moves, never past where
+/// the browser window really is, so the seam never opens or overlaps.
 public struct SidebarSlide: Equatable, Sendable {
     public enum Phase: Equatable, Sendable { case shown, hidden, showing, hiding }
 
@@ -57,22 +56,13 @@ public struct SidebarSlide: Equatable, Sendable {
         length = reduceMotion ? 0 : SidebarSlide.duration * abs(target - now)
     }
 
-    /// The frames at `progress` p for a sidebar `width` wide whose outer edge
-    /// is at `outerEdge` on `side`. With a window that gives the sidebar room
-    /// (`hiddenWindow` and `shownWindow` differ), the window's seam edge is
-    /// exactly the sidebar's inner edge. Otherwise the window stays put and
-    /// only the sidebar's inner edge moves. Cocoa coordinates.
-    public static func frames(hiddenWindow: CGRect, shownWindow: CGRect, outerEdge: CGFloat, width: CGFloat,
-                              side: SidebarSide, progress p: Double) -> (window: CGRect, innerEdge: CGFloat) {
+    /// Where the sidebar's inner edge is at `progress` p, for a sidebar
+    /// `width` wide whose outer edge is at `outerEdge` on `side`. The browser
+    /// is not moved frame by frame: it is moved by `WindowSteps`, and the
+    /// sidebar shows only up to where the browser really is (`seam`).
+    public static func innerEdge(outerEdge: CGFloat, width: CGFloat, side: SidebarSide, progress p: Double) -> CGFloat {
         let q = CGFloat(min(max(p, 0), 1))
-        let inner = side == .left ? outerEdge + width * q : outerEdge - width * q
-        guard hiddenWindow != shownWindow else { return (hiddenWindow, inner) }
-        // No further out than the window gets back: one that lent less than the
-        // sidebar's width stops there while the sidebar's edge goes on.
-        var w = hiddenWindow
-        if side == .left { w.origin.x = max(inner, hiddenWindow.minX); w.size.width = hiddenWindow.maxX - w.origin.x }
-        else { w.size.width = min(inner, hiddenWindow.maxX) - hiddenWindow.minX }
-        return (w, inner)
+        return side == .left ? outerEdge + width * q : outerEdge - width * q
     }
 
     /// Where the sidebar is revealed up to, given where the window's seam edge

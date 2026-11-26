@@ -4,8 +4,14 @@ import SwiftUI
 import TabSyncCore
 
 /// One browser window's sidebar: its panel, what it shows, whether it is
-/// hidden, how wide it is, and the width its window lent it. The settings all
-/// sidebars share, and what goes on between windows, are SidebarController's.
+/// hidden, and how wide it is. The settings all sidebars share, and what goes
+/// on between windows, are SidebarController's.
+///
+/// Showing and hiding keep four rules (Nick, 2026-11-26), in every browser,
+/// wherever the window is: (1) the browser's width with its sidebar closed is
+/// where it starts; (2) open, the sidebar and the browser share that frame,
+/// the browser's far edge where it was; (3) while open, the person moves and
+/// resizes either as they like; (4) closed, the browser takes the pair's frame.
 @MainActor
 final class SidebarInstance: ObservableObject {
     let window: TrackedWindow
@@ -27,24 +33,50 @@ final class SidebarInstance: ObservableObject {
     /// The window as last reported, to tell what changed.
     var reported: WindowTracker.Target
 
-    /// The width the window lent the sidebar. Mirrored into the controller's
-    /// FitMemory, which outlives the app, once it has really been lent.
-    private var loan: WidthLoan? {
-        didSet { if loan != oldValue { sidebar.loanChanged(loan, of: window) } }
+    /// The width this window's sidebar opens at; `width` is what it has now,
+    /// less when the browser couldn't give it all.
+    private(set) var chosenWidth: Double
+    /// The browser is narrowed for its open sidebar: closing gives it the
+    /// pair's frame. Mirrored into the controller's FitMemory, which outlives the app.
+    private var paired = false
+    /// An open being carried out, until its last call (`answer()`): the
+    /// frame the pair occupies (the window's with the sidebar closed), what
+    /// the browser was asked for, and when the open's cap is reached
+    /// (`WindowSteps.cap`, every call of it included).
+    private struct Opening {
+        var frame: CGRect
+        var asked: CGRect
+        var ends: Double
+        /// The browser has answered and the sidebar stays open: from here a
+        /// change by someone else leaves it open beside their frame (rule 3).
+        var answered = false
+        /// Its far edge was put back once.
+        var corrected = false
     }
-    /// The narrowest the browser let this window get, once it stopped us.
-    private var minWidth: CGFloat?
-    private var askedAt = Date.distantPast
-    /// The frame the window would not give up, so it isn't asked again.
-    private var refused: CGRect?
+    private var opening: Opening?
+    /// A refused open's window on its way back to the frame it had: a press
+    /// meanwhile is held until it is there (the last press wins).
+    private var restoring: CGRect?
+    /// A new width (`refit`) closing the pair before it opens again: the
+    /// frame it is closing to.
+    private var refitting: CGRect?
+    /// A hide being carried out: the frame it is closing to.
+    private var closing: CGRect?
+
+    /// Shows the note saying why a sidebar didn't open (SidebarNotice), over
+    /// its window. Tests record it instead.
+    static var tell: (SidebarNotice, CGRect) -> Void = { notice, window in
+        SidebarNoticeWindow.shared.show(notice.text, over: window)
+    }
 
     init(window: TrackedWindow, sidebar: SidebarController, hidden: Bool, width: Double) {
         self.window = window
         self.sidebar = sidebar
         self.hidden = hidden
         self.width = width
+        chosenWidth = width
         reported = window.target
-        cornerDisplay = display(for: window.target.frame).flatMap(Self.number)
+        cornerDisplay = display(for: window.target.frame)?.number
         readCorner("followed")
     }
 
@@ -58,10 +90,6 @@ final class SidebarInstance: ObservableObject {
     private var cornerRead: CGFloat?
     /// The display the window was on when its corner was last read.
     private var cornerDisplay: CGDirectDisplayID?
-
-    private static func number(_ screen: NSScreen) -> CGDirectDisplayID? {
-        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
-    }
 
     /// Asks the window server once: when the window is first followed, when
     /// it enters or leaves full screen, and each time it comes to rest (the
@@ -93,7 +121,8 @@ final class SidebarInstance: ObservableObject {
         outsideMove?.cancel()
         edgeTimer?.invalidate()
         edgeTimer = nil
-        if closed { slideRun?.timer?.invalidate(); slideRun = nil } else { giveSpaceBack() }
+        restoring = nil
+        if closed { slideRun = nil; steps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
         panelTokens.forEach(NotificationCenter.default.removeObserver)
         panelTokens = []
         panel?.orderOut(nil)
@@ -110,358 +139,593 @@ final class SidebarInstance: ObservableObject {
 
     // MARK: - Show and hide as one slide
 
-    /// The shortcut and the menu item: hide the sidebar and give the window its
-    /// space back, or show it and make room again.
+    /// The shortcut and the menu item: hide the sidebar, the browser taking the
+    /// pair's frame, or show it in the browser's frame.
     func toggle() {
         DragTrace.log("toggle: window \(window.number) hidden \(hidden) -> \(!hidden)")
         if hidden { slideIn() } else { slideOut() }
     }
 
-    /// A slide in progress: where the sidebar's outer edge is, the window's
-    /// frames hidden and shown (equal when the window doesn't make room), and
-    /// the timer stepping it.
+    /// A slide in progress: where the sidebar's outer edge is, and the
+    /// browser's frames closed and open. Only the panel slides, revealed up to
+    /// where the browser really is; the browser is moved by `steps`.
     private struct SlideRun {
         var slide: SidebarSlide
         var side: SidebarSide
         var outer: CGFloat
         var hiddenWindow: CGRect
         var shownWindow: CGRect
-        var timer: Timer?
         var frames = 0, started = CACurrentMediaTime(), worstGap: CGFloat = 0
-        var fitted: Bool { hiddenWindow != shownWindow }
     }
     private var slideRun: SlideRun?
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// The browser on its way somewhere, one Accessibility call at a time,
+    /// each waited for on screen (`WindowSteps`), and what follows once it is
+    /// there. Never a call per frame: on macOS 27 each call is animated, and
+    /// the next one cuts it short where it has got to.
+    private var steps: WindowSteps?
+    /// The longest a call of the last steps took to land.
+    private var lastSlowest = 0.0
+    /// The last steps ended at their cap, not where they were going.
+    private var lastCapped = false
+    /// The last steps ended because the window stopped short (`WindowSteps.stoppedShort`).
+    private var lastStoppedShort = false
+    /// The width this window's browser was seen to stop at when asked
+    /// narrower, opening: its minimum as far as anything has shown. It
+    /// shapes the next open (`WindowSteps.stops`: a window already that
+    /// narrow that doesn't move when asked twice has stopped there, refused
+    /// for want of room at once, not at the cap), and never skips asking the
+    /// browser. Seen narrower since (the person resized it), it is forgotten.
+    private var stops: CGFloat?
+    private var afterSteps: (() -> Void)?
+    private var ticker: Timer?
 
-    /// Hides: the sidebar's inner edge and the window's edge slide toward the
-    /// outer edge together; at the end the window fills the tile.
+    /// Reduce Motion, and the clock. Tests set their own and step the slide
+    /// and the browser's moves tick by tick (`stepSlide`), as the timer does.
+    var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    var clock: () -> CFTimeInterval = CACurrentMediaTime
+    /// Waiting on the main thread, for quitting, which has no later.
+    var pause: (Double) -> Void = AXWindow.sleep
+    /// The panel sliding, or the browser being moved.
+    var sliding: Bool { slideRun != nil || steps != nil }
+
+    /// The window as the window server shows it. Accessibility can read back
+    /// a size or position before it is on screen (on macOS 27 at once, while
+    /// the change is still animating), so what is on screen decides.
+    private var onScreenFrame: CGRect { AXWindow.shownFrame(of: window.handle) ?? window.target.frame }
+
+    /// The browser's frame when the sidebar closes from a browser at `b` (rule 4).
+    private func closedFrame(from b: CGRect, side: SidebarSide) -> CGRect {
+        SidebarGeometry.closed(browser: b, width: CGFloat(width), side: side, displays: Displays.all.map(\.frame))
+    }
+
+    /// The browser's frame with its sidebar closed while betterlink is still
+    /// carrying something out, nil when nothing is (then the pair as it is
+    /// on screen decides, rule 4). The browser isn't where it is going yet,
+    /// so a frame worked out from where it is would be wrong (review F1: a
+    /// hide 50 ms into an open by `settle` widened a 1028 pt window to 1299):
+    /// a new width closing the pair (`refit`), an open, or a hide: the frame
+    /// it closes to, or opens in (rule 2).
+    private var closedUnderWay: CGRect? { refitting ?? opening?.frame ?? closing }
+
+    /// Moves the browser to `frame`, its far edge (away from `keep`) where
+    /// `frame` has it whatever width it takes, then does `then`.
+    /// `widest`: opening, the widest the browser may stop at and leave the
+    /// sidebar its least width (`WindowSteps.widest`). `deadline`: when a
+    /// show or hide is capped (`WindowSteps.cap`); with one, a change by
+    /// someone else meanwhile ends it, and `then` is not done: `takenByOther()` is.
+    /// `retreats`: false when giving space back (`WindowSteps.retreats`).
+    private func move(to frame: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, patience: Double = WindowSteps.timeout,
+                      deadline: Double? = nil, then: @escaping () -> Void = {}) {
+        // Opening (only an open has `widest`): what this window's browser was seen to stop at.
+        steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: widest == nil ? nil : stops,
+                            after: steps)
+        steps?.patience = patience
+        afterSteps = then
+        stepWindow()
+        runTicker()
+    }
+
+    /// The end of a show, a hide or a refusal, or a cap: `frame`, betterlink's
+    /// final target for the window, sent once more whole (`WindowSteps.resends`),
+    /// after every other call of betterlink's to it, so any of those still on
+    /// its way lands before it. From then on whatever the window does is
+    /// someone else's, and stands: nothing is sent to it again because it
+    /// changed. `watching`: nothing of betterlink's can still be on its way
+    /// (the last steps weren't capped, nor a drag's, which lets calls go),
+    /// so someone else's change meanwhile ends it as it ends any steps.
+    /// `settling`: every size held still before it counts (`WindowSteps.settles`).
+    private func resend(_ frame: CGRect, watching: Bool, settling: Bool = false, then: @escaping () -> Void = {}) {
+        steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching, settles: settling)
+        afterSteps = then
+        stepWindow()
+        runTicker()
+    }
+
+    /// When a show or a hide begun now is capped.
+    private var cap: Double { clock() + WindowSteps.cap }
+
+    private func runTicker() {
+        guard sliding, ticker == nil else { return }
+        let t = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
+            MainActor.assumeIsolated { self?.stepSlide() }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        ticker = t
+    }
+
+    private func stopTicker() {
+        ticker?.invalidate()
+        ticker = nil
+    }
+
+    /// One tick: the browser's next call once its last is on screen, then the
+    /// panel's slide.
+    func stepSlide() {
+        stepWindow()
+        stepPanel()
+        if resizing != nil { follow() } // mid-drag the panel follows the window's real edge, tick by tick
+        revealOpening()
+        if !sliding { stopTicker() }
+    }
+
+    /// An open without a slide (a new width, a window followed or back from
+    /// full screen): the panel is shown beside the frame the browser was
+    /// asked for, and until the browser has made room it is revealed only up
+    /// to where the browser really is, as a slide's is (`stepPanel`): a slow
+    /// or unmoving browser shows no panel over its content (the guard's
+    /// panel property, seed 20261126 case 408: a new width's open lay 281 pt
+    /// over a late browser for over 0.9 s). Its whole shape, the seam's
+    /// notches included, once the browser's edge is at its inner edge.
+    private func revealOpening() {
+        guard slideRun == nil, let panel else { return }
+        guard opening != nil, panel.isVisible, let real = AXWindow.shownFrame(of: window.handle) else {
+            if panel.reveal != nil { panel.reveal = nil }
+            return
+        }
+        let left = panel.attachedSide == .left
+        let edge = left ? real.minX : real.maxX
+        let inner = left ? panel.frame.maxX - panel.reach : panel.frame.minX + panel.reach
+        let short = left ? edge < inner - 0.5 : edge > inner + 0.5
+        if short { panel.reveal = edge } else if panel.reveal != nil { panel.reveal = nil }
+    }
+
+    private func stepWindow() {
+        guard var s = steps else { return }
+        if let call = s.step(seen: onScreenFrame, now: clock()) { AXWindow.send(call, to: window.handle) }
+        guard s.done else { steps = s; return }
+        steps = nil
+        lastSlowest = s.slowest
+        lastCapped = s.capped
+        lastStoppedShort = s.stoppedShort
+        let then = afterSteps
+        afterSteps = nil
+        if s.interrupted { takenByOther() } else { then?() }
+    }
+
+    /// Someone else moved or resized the window while betterlink was moving
+    /// it (the person, or another app: `WindowSteps.interrupted`): nothing
+    /// more is sent, and their frame stands. An open not yet answered is
+    /// given up, the sidebar closed; a hide, or a refused open going back,
+    /// ends where the window is; an open sidebar stays open beside it (rule 3).
+    /// A press held meanwhile goes with it: theirs is the latest word.
+    private func takenByOther() {
+        DragTrace.log("moved by someone else: window \(window.number) at \(onScreenFrame), left there")
+        let giveUp = opening.map { !$0.answered } ?? false
+        opening = nil
+        refitting = nil
+        closing = nil
+        if restoring != nil { restoring = nil; hidden = true }
+        if giveUp { hidden = true; sidebar.refused(self) }
+        if hidden {
+            closePanelNow()
+            unpair()
+        } else if slideRun != nil {
+            slideRun = nil
+            panel?.reveal = nil
+        }
+        layout()
+    }
+
+    /// The panel gone at once, mid-slide too.
+    private func closePanelNow() {
+        slideRun = nil
+        panel?.reveal = nil
+        panel?.hideNow()
+        isShown = false
+    }
+
+    /// Hides (rule 4): the browser takes the pair's frame, read off the screen
+    /// now, wherever the two have been moved or resized since. Capped
+    /// (`WindowSteps.cap`), and ended by sending that frame once more.
     private func slideOut() {
         endResize() // hiding mid-drag: the drag ends here
         hidden = true
+        // A refused open still going back: it stays closed once there.
+        if restoring != nil { return }
+        // An open or a new width still under way: closed in the frame it began in.
+        let underWay = closedUnderWay
+        opening = nil
+        refitting = nil
+        let ends = cap
         if var run = slideRun { // turning back mid-show
-            run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+            run.slide.hide(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
-            return
+            let back = run.hiddenWindow
+            closing = back
+            return move(to: back, keep: run.side, retreats: false, deadline: ends) { [weak self] in self?.closed(at: back) }
         }
+        guard paired else { return layout() }
         // Out of sight (another Space, minimized): no slide to watch.
-        guard isShown, let panel, panel.isVisible, let attached = panel.attachedSide else {
-            giveSpaceBack(); layout(); return
+        guard isShown, let panel, panel.isVisible else {
+            let back = underWay ?? closedFrame(from: onScreenFrame, side: placedSide)
+            closing = back
+            move(to: back, keep: nil, retreats: false, deadline: ends) { [weak self] in self?.closed(at: back) { self?.unpair() } }
+            return layout()
         }
-        let t = window.target
-        let visible = panel.frame
-        let outer = attached == .left ? visible.minX : visible.maxX
-        // What the window lent comes back, wherever it has been since.
-        let back = loan?.givenBack(from: t.frame, screen: screen(for: t.frame)) ?? t.frame
-        var run = SlideRun(slide: SidebarSlide(shown: true), side: attached, outer: outer, hiddenWindow: back, shownWindow: t.frame)
-        run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
-        start(run)
+        let side = panel.attachedSide
+        let b = onScreenFrame
+        let back = underWay ?? closedFrame(from: b, side: side)
+        closing = back
+        let outer = side == .left ? panel.frame.minX : panel.frame.maxX
+        var run = SlideRun(slide: SidebarSlide(shown: true), side: side, outer: outer, hiddenWindow: back, shownWindow: b)
+        run.slide.hide(at: clock(), reduceMotion: reducesMotion())
+        slideRun = run
+        move(to: back, keep: side, retreats: false, deadline: ends) { [weak self] in self?.closed(at: back) }
+        stepPanel()
     }
 
-    /// Shows: the window narrows and the sidebar opens from its outer edge,
-    /// together, the reverse of a hide.
+    /// A hide's calls are over (landed, or capped): its frame sent once more, and the hide is done.
+    private func closed(at back: CGRect, then: (() -> Void)? = nil) {
+        if lastCapped { DragTrace.log("hide: window \(window.number) not at \(back) within \(WindowSteps.cap) s (at \(onScreenFrame)): sent once more") }
+        resend(back, watching: !lastCapped) { [weak self] in
+            self?.closing = nil
+            then?()
+        }
+    }
+
+    /// Shows (rule 2): the sidebar opens in the browser's frame, the browser
+    /// narrowing from that side, the reverse of a hide.
     private func slideIn() {
         hidden = false
-        if var run = slideRun { // turning back mid-hide
-            run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+        // A refused open still going back: it opens once there (restored()).
+        if restoring != nil { return }
+        if var run = slideRun { // turning back mid-hide: open in the frame it was closing to (rule 2)
+            closing = nil
+            let browser = SidebarGeometry.opened(run.hiddenWindow, width: CGFloat(width), side: run.side)
+            let panel = placePanel(placement(beside: browser))
+            run.outer = run.side == .left ? panel.frame.minX : panel.frame.maxX
+            run.shownWindow = browser
+            run.slide.show(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
-            return
+            let o = Opening(frame: run.hiddenWindow, asked: browser, ends: cap)
+            opening = o
+            return move(to: browser, keep: run.side, widest: run.hiddenWindow.width - SidebarGeometry.widths.lowerBound, deadline: o.ends) { [weak self] in
+                self?.answer()
+            }
         }
         let t = window.target
-        // Out of sight (another Space, minimized, full screen): it makes room
+        // Out of sight (another Space, minimized, full screen): it opens
         // without a slide, where that applies, and shows when its window does.
         guard !t.fullScreen, !t.minimized, !t.appHidden, sidebar.isOnScreen(window) else { settle(t); layout(); return }
-        // As settle() does: a refusal only holds for the frame it was made at (review N2).
-        if let r = refused, !Self.same(r, t.frame) { refused = nil }
-        // Where the window goes: narrowed to make room when it was given a
-        // tile, else where it is.
-        let screen = screen(for: t.frame)
-        let inner = refused == nil ? SidebarGeometry.settled(window: t.frame, screen: screen, width: width, side: sidebar.side,
-                                                             minWindowWidth: minWidth ?? 500) : nil
-        // No room beside it and none it could give: the sidebar covers its edge.
-        if inner == nil { coverIfNoRoom(t, on: screen) }
-        let shown = inner ?? t.frame
-        let panel = placePanel(placement(beside: shown))
-        guard let attached = panel.attachedSide else { layout(); return }
-        let outer = attached == .left ? panel.frame.minX : panel.frame.maxX
-        if inner != nil {
-            loan = .asking(outer: t.frame, inner: shown, side: attached)
-            askedAt = Date()
-        }
-        panel.reveal = outer
-        panel.showNow(at: place(panel))
-        isShown = true
-        var run = SlideRun(slide: SidebarSlide(shown: false), side: attached, outer: outer, hiddenWindow: t.frame, shownWindow: shown)
-        run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
-        start(run)
+        let from = closedUnderWay ?? onScreenFrame
+        closing = nil
+        open(from: from, slide: true)
         layout() // the list is on screen, and kept to the moment, from the first frame of the slide
     }
 
-    private func start(_ run: SlideRun) {
-        slideRun = run
-        stepSlide()
-        guard slideRun != nil else { return } // Reduce Motion: done in one step
-        let timer = Timer(timeInterval: 1.0 / 120, repeats: true) { [weak self] _ in
-            MainActor.assumeIsolated { self?.stepSlide() }
+    /// Opens the sidebar in `frame`, the browser's frame with it closed: the
+    /// browser is asked for the frame less the sidebar's width, its far edge
+    /// kept. What it really takes decides the sidebar's width (`answer()`).
+    private func open(from frame: CGRect, slide: Bool) {
+        width = chosenWidth
+        let side = sidebar.side
+        let browser = SidebarGeometry.opened(frame, width: CGFloat(width), side: side)
+        let o = Opening(frame: frame, asked: browser, ends: cap)
+        opening = o
+        paired = true
+        let panel = placePanel(placement(beside: browser))
+        if slide {
+            let outer = side == .left ? panel.frame.minX : panel.frame.maxX
+            panel.reveal = outer
+            panel.showNow(at: place(panel))
+            isShown = true
+            var run = SlideRun(slide: SidebarSlide(shown: false), side: side, outer: outer, hiddenWindow: frame, shownWindow: browser)
+            run.slide.show(at: clock(), reduceMotion: reducesMotion())
+            slideRun = run
         }
-        RunLoop.main.add(timer, forMode: .common)
-        slideRun?.timer = timer
+        move(to: browser, keep: side, widest: frame.width - SidebarGeometry.widths.lowerBound, deadline: o.ends) { [weak self] in self?.answer() }
+        stepPanel()
     }
 
-    /// One frame: the window to its frame for this moment, then the sidebar
-    /// revealed up to where the window really is, so the seam stays tight
-    /// even when the browser lags behind.
-    private func stepSlide() {
+    /// One frame of the panel's slide: revealed up to where the browser
+    /// really is, so the seam stays tight however the browser moves. Over
+    /// once the panel has slid and the browser is where it was going.
+    private func stepPanel() {
         guard var run = slideRun, let panel else { return }
-        let now = CACurrentMediaTime()
-        let p = run.slide.progress(at: now)
-        let f = SidebarSlide.frames(hiddenWindow: run.hiddenWindow, shownWindow: run.shownWindow,
-                                    outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: p)
-        var seam = f.innerEdge
-        if run.fitted {
-            // Hiding widens the window; showing narrows it.
-            AXWindow.slide(window.element, to: f.window, moveOrigin: run.side == .left,
-                           growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
-            if let real = WindowServer.frame(window.number) {
-                let edge = run.side == .left ? real.minX : real.maxX
-                run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
-                seam = SidebarSlide.seam(windowEdge: edge, innerEdge: f.innerEdge,
-                                         hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
-            }
+        let now = clock()
+        let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: run.slide.progress(at: now))
+        var seam = inner
+        if run.hiddenWindow != run.shownWindow, let real = AXWindow.shownFrame(of: window.handle) {
+            let edge = run.side == .left ? real.minX : real.maxX
+            run.worstGap = max(run.worstGap, abs(edge - inner))
+            seam = SidebarSlide.seam(windowEdge: edge, innerEdge: inner,
+                                     hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
         }
         panel.reveal = seam
         run.frames += 1
-        if run.slide.done(at: now) {
-            run.slide.settle(at: now)
-            run.timer?.invalidate()
-            slideRun = nil
-            finishSlide(run)
-            return
-        }
-        slideRun = run
+        guard run.slide.done(at: now), steps == nil else { slideRun = run; return runTicker() }
+        run.slide.settle(at: now)
+        slideRun = nil
+        finishSlide(run)
     }
 
     private func finishSlide(_ run: SlideRun) {
         let ms = (CACurrentMediaTime() - run.started) * 1000
-        DragTrace.log(String(format: "slide %@: %d frames in %.0f ms (%.0f fps), worst seam gap %.1f pt, window %@",
-                             run.slide.phase == .hidden ? "out" : "in", run.frames, ms, Double(run.frames) / max(ms / 1000, 0.001),
-                             run.worstGap, run.fitted ? "resized" : "unchanged"))
-        if run.slide.phase == .hidden {
+        let out = run.slide.phase == .hidden
+        let asked = out ? run.hiddenWindow : run.shownWindow
+        // What the window did, as the window server shows it, not what was asked.
+        let got = onScreenFrame
+        DragTrace.log(String(format: "slide %@: %d frames in %.0f ms, worst seam gap %.1f pt, window asked %@ got %@ (%@)",
+                             out ? "out" : "in", run.frames, ms, run.worstGap,
+                             "\(asked)", "\(got)", SidebarGeometry.same(asked, got) ? "as asked" : "not as asked"))
+        panel?.reveal = nil
+        if out {
             // Closed first, then the mask lifted: the whole panel never flashes.
             panel?.hideNow()
-            panel?.reveal = nil
             isShown = false
-            loan = nil
-            // A browser that answered late or not at all is asked once more:
-            // the window must end up with what it lent.
-            if run.fitted, let now = AXWindow.frame(of: window.element), !Self.same(now, run.hiddenWindow) {
-                tracker.setFrame(run.hiddenWindow, of: window)
-            }
-        } else {
-            panel?.reveal = nil
-            if run.fitted, let now = AXWindow.frame(of: window.element) { slidIn(run, at: now) }
+            unpair()
         }
         layout()
     }
 
-    /// The window's answer to a slide in: what it lent, or a refusal.
-    private func slidIn(_ run: SlideRun, at now: CGRect) {
-        let asked = loan?.inner
-        let at = observe(at: now)
-        guard let l = loan else { return }
-        // Not narrowed, so the sidebar covers its edge for now. A browser that
-        // answers late has lent it then.
-        if l.phase == .asked { refused = at; return }
-        // A browser at its minimum width: the pair shifts to fit the screen.
-        if let asked, SidebarGeometry.room(beside: at, screen: screen(for: at), side: run.side) < width - 2 {
-            _ = learnMinWidth(asked: asked, got: window.target, wasWidth: run.hiddenWindow.width)
-            fit(window.target, into: l.outer)
+    /// The browser's answer to opening, once its calls have landed: the pair
+    /// stays in the frame it opened in (rule 2). The browser keeps its far
+    /// edge at the width it really took, and the sidebar has the rest of the
+    /// frame. One that took part and stopped is at its minimum, and is never
+    /// asked again: if that leaves the sidebar less than its least width, or
+    /// the browser took no size at all, or it didn't answer within the cap
+    /// (`WindowSteps.cap`), the sidebar stays closed at once and the window
+    /// goes back to its exact frame (`refuse`). Else its frame is sent once
+    /// more (`resend`), and the open is over: nothing after it is answered.
+    private func answer() {
+        guard var o = opening, steps == nil else { return }
+        let side = sidebar.side
+        let real = onScreenFrame
+        // Past the cap: a browser slower than that, or one that never took the size.
+        if lastCapped { return refuse(o, real: real, .noSize) }
+        // Took part and stopped: as far as it goes. (Not moved at all and taken as stopped, `stops` already says so.)
+        if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { stops = real.width }
+        // Stopped short where it was seen to stop before: no room, though it didn't move.
+        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastStoppedShort ? .noRoom : notice) }
+        let room = o.frame.width - real.width
+        // Its far edge where it was, at the width it really has.
+        var at = real
+        at.origin.x = side == .left ? o.frame.maxX - real.width : o.frame.minX
+        let w = min(Double(room), Double(SidebarGeometry.widths.upperBound))
+        if w != width { width = w }
+        o.answered = true
+        if abs(at.minX - real.minX) >= 0.5, !o.corrected {
+            o.corrected = true
+            opening = o
+            move(to: at, keep: side, deadline: o.ends) { [weak self] in self?.answer() }
+        } else {
+            opening = o
+            resend(at, watching: true) { [weak self] in
+                guard let self else { return }
+                self.opening = nil
+                self.remember()
+                self.follow()
+            }
         }
+        remember()
+        follow()
     }
 
-    /// Brings the loan up to date with where the window is, putting it right
-    /// if it narrowed from the wrong side. Returns where it is then.
-    @discardableResult
-    private func observe(at frame: CGRect) -> CGRect {
-        guard let l = loan else { return frame }
-        let seen = l.seen(at: frame, screen: screen(for: frame))
-        loan = seen.loan
-        guard let place = seen.correction else { return frame }
-        tracker.setFrame(place, of: window)
-        return place
+    /// The sidebar can't open: closed at once, the note saying why shown, and
+    /// the window put back to the frame it had (waited for, one call at a
+    /// time, then sent once more), unless someone else moves it meanwhile
+    /// (`takenByOther()`). Past the cap, calls of the open may still be on
+    /// their way: the frame is sent whole at once (`resend`), after them.
+    private func refuse(_ o: Opening, real: CGRect, _ notice: SidebarNotice) {
+        DragTrace.log("open: window \(window.number) took \(Int(real.width)) of \(Int(o.frame.width)) pt\(lastCapped ? " within \(WindowSteps.cap) s" : ""), leaving the sidebar "
+                      + "\(Int(o.frame.width - real.width)), less than its least \(Int(SidebarGeometry.widths.lowerBound)): back to \(o.frame), the sidebar closed")
+        opening = nil
+        hidden = true
+        sidebar.refused(self)
+        closePanelNow()
+        unpair()
+        Self.tell(notice, o.frame)
+        restoring = o.frame
+        // Watching for someone else's change unless the open's calls, or the way back's, were capped.
+        let back: () -> Void = { [weak self] in
+            guard let self else { return }
+            self.resend(o.frame, watching: !self.lastCapped) { [weak self] in self?.restored(o.frame) }
+        }
+        if lastCapped || SidebarGeometry.same(real, o.frame) { back() } else { move(to: o.frame, keep: nil, retreats: false, deadline: cap, then: back) }
+        layout()
     }
 
-    private func coverIfNoRoom(_ t: WindowTracker.Target, on screen: CGRect) {
-        // Dragged past that edge by hand, the pair runs off together instead.
-        if (0..<CGFloat(width - 2)).contains(SidebarGeometry.room(beside: t.frame, screen: screen, side: sidebar.side)) { refused = t.frame }
+    /// A refused open's window is back. Pressed again meanwhile (the last
+    /// press asked for it open): tried again from there.
+    private func restored(_ frame: CGRect) {
+        restoring = nil
+        guard !hidden else { return layout() }
+        hidden = true
+        slideIn()
     }
 
-    /// Gives the window its space back, if it is still as narrowed: the
-    /// sidebar is turned off, its browser no longer attached, or the app quits.
-    /// False when the window couldn't be read.
+    /// Records where the open pair is, for a relaunch.
+    private func remember() {
+        guard paired else { return }
+        let b = window.target.frame
+        sidebar.paired(window, browser: b, pair: closedUnderWay ?? closedFrame(from: b, side: placedSide))
+    }
+
+    /// Its browser missed a call while every window was given back (quitting,
+    /// the sidebar turned off): nothing more is sent to it, not even when it
+    /// is let go, and its record is kept, so it is recognised later instead
+    /// of narrowed again.
+    func letAlone() { paired = false }
+
+    func unpair() {
+        guard paired else { return }
+        paired = false
+        sidebar.unpaired(window)
+    }
+
+    /// The browser takes the pair's frame (rule 4) at once, without a slide:
+    /// the sidebar is turned off, its browser no longer attached, or the app
+    /// quits. False when its browser didn't answer in time: then the window
+    /// keeps its record, so it is recognised later instead of narrowed again.
     @discardableResult
     func giveSpaceBack() -> Bool {
-        // Mid-slide the window goes back to its full frame first, since it is
-        // at neither the narrowed nor the full width.
-        if let run = slideRun {
-            run.timer?.invalidate()
-            slideRun = nil
-            if run.fitted { tracker.setFrame(run.hiddenWindow, of: window) }
-            loan = nil
-            panel?.reveal = nil
-        }
-        // A window that can't be read now (a hung browser) keeps its record,
-        // so it is recognised later instead of narrowed again.
-        guard let l = loan else { return true }
-        guard let now = AXWindow.frame(of: window.element) else { return false }
-        let back = l.givenBack(from: now, screen: screen(for: now))
-        if !Self.same(back, now) { tracker.setFrame(back, of: window) }
-        loan = nil
-        return true
+        let missed = spaceBack().map { AXWindow.placeNow([$0], clock: clock, pause: pause) } ?? []
+        let answered = missed.isEmpty
+        if answered { unpair() }
+        return answered
     }
 
-    // MARK: - Fitting the window
-
-    /// Frames within a point count as the same: the browser rounds.
-    private static func same(_ a: CGRect, _ b: CGRect) -> Bool { WidthLoan.same(a, b) }
-
-    private func screen(for frame: CGRect) -> CGRect { display(for: frame)?.visibleFrame ?? frame }
+    /// What giving the space back takes: the move that gives the browser
+    /// the pair's frame (rule 4), nil when it has it already with nothing of
+    /// betterlink's on its way, or nothing was taken from it. Ends whatever
+    /// was under way: the caller makes the move, at once
+    /// (`AXWindow.placeNow`), for every window together when betterlink
+    /// quits, and then lets the window go (`unpair`) unless its browser
+    /// didn't answer. Reads nothing from the browser: a hung one would hold
+    /// quitting up.
+    func spaceBack() -> AXWindow.Move? {
+        let underWay = closedUnderWay
+        opening = nil
+        refitting = nil
+        closing = nil
+        let goingBack = restoring // a refused open's window on its way back
+        restoring = nil
+        let mid = slideRun
+        let inFlight = steps
+        slideRun = nil
+        steps = nil
+        afterSteps = nil
+        stopTicker()
+        panel?.reveal = nil
+        // Mid-slide, the slide's closed frame; an open, a new width or a hide
+        // under way, the frame it began in (review F1).
+        let back = goingBack ?? mid?.hiddenWindow ?? underWay ?? (paired ? closedFrame(from: onScreenFrame, side: placedSide) : nil)
+        guard let back, inFlight != nil || !SidebarGeometry.same(back, onScreenFrame) else { return nil }
+        return AXWindow.Move(window: window.handle, frame: back, pid: window.target.pid, after: inFlight)
+    }
 
     /// The display most of `frame` is on.
-    private func display(for frame: CGRect) -> NSScreen? {
-        NSScreen.screens.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area } ?? NSScreen.main
-    }
+    private func display(for frame: CGRect) -> Display? { Displays.display(for: frame) }
 
-    /// The window came to rest: make the pair fill the space the window was given.
+    /// The window came to rest. Open: the person's moves and resizes stand
+    /// (rule 3). Shown but not yet narrowed for it (a window just followed,
+    /// or back from full screen): it opens. Nothing else: a window at rest
+    /// is never moved because it changed.
     func settle(_ t: WindowTracker.Target) {
         // At rest, its corner is asked again: not while it is dragged, slid
         // or its edge is dragged (it comes to rest again after those).
         if slideRun == nil, resizing == nil, !tracker.isDragging(window) {
-            let on = display(for: t.frame).flatMap(Self.number)
+            let on = display(for: t.frame)?.number
             readCorner(on != cornerDisplay ? "settled on another display" : "settled")
             cornerDisplay = on
         }
-        // A resize by the edge still open ends with the loan read off the window.
-        guard resizing == nil else { return }
+        guard resizing == nil, !sliding else { return }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
-        if let r = refused, !Self.same(r, t.frame) { refused = nil }
-        let screen = screen(for: t.frame)
-        if let l = loan {
-            if l.rests(at: t.frame) { return layout() }
-            if refused != nil { return layout() } // still the answer it gave
-            if l.phase == .asked, learnMinWidth(asked: l.inner, got: t, wasWidth: l.outer.width) {
-                loan = nil
-                fit(t, into: l.outer) // it stops there: place the pair knowing that
+        guard paired else {
+            // Open since before betterlink last started, and still where it was: narrowed already.
+            if let e = sidebar.narrowedBefore(window, at: t.frame) {
+                paired = true
+                width = min(max(Double(e.outer.width - e.inner.width), Double(SidebarGeometry.widths.lowerBound)),
+                            Double(SidebarGeometry.widths.upperBound))
                 return layout()
             }
-            let at = observe(at: t.frame)
-            if let now = loan {
-                // Moved to where the sidebar has no room beside it: the window
-                // makes that room, out of what hiding would give back.
-                if now.phase == .lent, (0..<CGFloat(width - 2)).contains(SidebarGeometry.room(beside: at, screen: screen, side: sidebar.side)) {
-                    fit(t, into: now.givenBack(from: at, screen: screen))
-                }
-                return layout()
-            }
-            // Snapped again, or moved before it ever narrowed: that space is the pair's.
-        }
-        guard refused == nil else { return }
-        // Narrowed before (this launch or an earlier one) and not moved since: keep it.
-        if loan == nil, let e = sidebar.narrowedBefore(window, at: t.frame) {
-            loan = .lent(outer: e.outer, inner: t.frame, side: sidebar.side)
+            open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
-        fit(t, into: t.frame)
+        remember()
         layout()
     }
 
-    /// Narrows the window so it and the sidebar fill `outer`. A browser that
-    /// stops at its minimum width is asked once more, with that width known, so
-    /// the pair stays on the screen.
-    private func fit(_ t: WindowTracker.Target, into outer: CGRect) {
-        let screen = screen(for: outer)
-        // Back where it was, its edge covered. What was asked stands, for a
-        // browser that answers late.
-        func putBack(from now: CGRect) {
-            if !Self.same(now, t.frame) { tracker.setFrame(t.frame, of: window) }
-            observe(at: t.frame)
-            refused = t.frame
-        }
-        for pass in 0..<2 {
-            guard let inner = SidebarGeometry.settled(window: outer, screen: screen, width: width, side: sidebar.side,
-                                                      minWindowWidth: minWidth ?? 500) else {
-                // At its minimum width the pair has no place on this screen.
-                if pass > 0 { return putBack(from: window.target.frame) }
-                return coverIfNoRoom(t, on: screen)
-            }
-            loan = .asking(outer: outer, inner: inner, side: sidebar.side)
-            askedAt = Date()
-            tracker.setFrame(inner, of: window)
-            let now = window.target
-            if Self.same(now.frame, inner) { observe(at: now.frame); return }
-            // Where it was: it has not answered, or won't narrow.
-            if Self.same(now.frame, t.frame) { return putBack(from: now.frame) }
-            // It narrowed, as far as it goes: asked again knowing that, as after a slide.
-            if learnMinWidth(asked: inner, got: now, wasWidth: t.frame.width) { continue }
-            // It would not narrow, only move.
-            if SidebarGeometry.leaves(screen, from: t.frame, to: now.frame) { return putBack(from: now.frame) }
-            observe(at: now.frame)
-            return
-        }
-        observe(at: window.target.frame)
-    }
-
-    /// True when the window shows the browser's minimum width, not known yet
-    /// (`SidebarGeometry.minimumWidth`): `wasWidth` is how wide it was before
-    /// it was asked. Only right after asking; later, it is the user widening
-    /// the window. Never from a drag of the edge (EdgeDrag): mid-drag a window
-    /// that has not answered yet looks the same.
-    private func learnMinWidth(asked: CGRect, got t: WindowTracker.Target, wasWidth: CGFloat) -> Bool {
-        guard Date().timeIntervalSince(askedAt) < 0.5,
-              let w = SidebarGeometry.minimumWidth(asked: asked, got: t.frame, wasWidth: wasWidth),
-              w > (minWidth ?? 0) + 2 else { return false }
-        minWidth = w
-        return true
-    }
-
-    /// The side or width changed: start again from the space the pair was given.
+    /// The side or width changed: closed and opened again, without a slide.
+    /// While it closes, the frame it closes to is the pair's (`refitting`):
+    /// a hide, a quit or a press meanwhile closes there too (review F1). A
+    /// browser that doesn't close within the cap stays closed in the pair's
+    /// frame, with the note, as a refused open does.
     func refit() {
-        refused = nil
-        let t = window.target
-        if let l = loan {
-            loan = nil
-            tracker.setFrame(l.givenBack(from: t.frame, screen: screen(for: t.frame)), of: window)
+        guard paired, !hidden, !sliding else { return }
+        let back = closedUnderWay ?? closedFrame(from: onScreenFrame, side: placedSide)
+        opening = nil
+        refitting = back
+        move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in
+            guard let self else { return }
+            guard self.lastCapped else { return self.refitted(back) }
+            DragTrace.log("width: window \(self.window.number) not closed to \(back) within \(WindowSteps.cap) s: stays closed")
+            self.hidden = true
+            self.sidebar.refused(self)
+            self.closePanelNow()
+            self.unpair()
+            Self.tell(.noSize, back)
+            self.resend(back, watching: false) { [weak self] in self?.refitting = nil }
+            self.layout()
         }
-        settle(window.target)
+    }
+
+    /// A new width's close is done, the window in the pair's frame: it
+    /// opens again there.
+    private func refitted(_ back: CGRect) {
+        refitting = nil
+        unpair()
+        open(from: back, slide: false)
         layout()
     }
 
     /// The width every window's sidebar was given (`betterlink sidebar
     /// settings set --width`). Mid-drag, the drag's own width stands.
     func setWidth(_ w: Double) {
-        guard resizing == nil, w != width else { return }
-        width = w
-        refit()
+        guard resizing == nil, w != chosenWidth else { return }
+        chosenWidth = w
+        if paired { refit() } else { width = w }
     }
 
     // MARK: - Resizing by the edge
 
     /// A drag of the edge between the sidebar and the window (EdgeDrag): the
-    /// window is asked to make room, and the sidebar is as wide as the room it
-    /// has really made.
+    /// window is asked to make room, by the same one-call-at-a-time steps as
+    /// a show (`WindowSteps`, its far edge kept): at most one call is out to
+    /// the browser, the pointer's latest width is what the next call asks,
+    /// and the next goes only once the window server shows the last landed.
+    /// The sidebar is as wide as the room the window has really made (read
+    /// off the screen, not Accessibility, which on macOS 27 reads back a size
+    /// before it is on screen). On macOS 26 each call lands at once and the
+    /// drag is live; on macOS 27 the window trails by its animation, and never
+    /// cuts one short into a frame nobody asked for.
     private struct Resize {
         var drag: EdgeDrag
-        /// The space a narrowed window gave up, to give back later.
-        var outer: CGRect?
         /// How much wider than at the start the pointer wants the sidebar.
         var delta: CGFloat = 0
-        /// The frame last asked of the window, so it isn't asked twice.
+        /// The frame the pointer wants the window at now: the latest wins.
         var asked: CGRect
-        /// Where it was last put back for that ask, so a browser that won't
-        /// go there isn't told again every tick.
-        var put: CGRect?
+        /// The frame the steps out (or last run) are for.
+        var ran: CGRect?
         /// A single step, open until its window answers (nudge(by:)).
         var waits = false
+        /// The button is up: once the window has landed, it is checked (once
+        /// more for what is missing, as a show is) and the drag ends.
+        var ending = false
+        var checked = false
+        var resent = false
+        var rechecked = false
+        /// The widest it went when asked wider, this drag: a screen's edge stops
+        /// it there. The narrowest it went when asked narrower: its minimum,
+        /// for this drag only (it may have stopped only for a moment).
+        var most: CGFloat?
+        var least: CGFloat?
+        /// The longest a call has taken to land, this drag: a call that
+        /// changes nothing is waited for three times that (at least 0.15 s),
+        /// not the full timeout, since the pointer's next width comes anyway
+        /// and the end is checked.
+        var slowest: Double?
     }
     private var resizing: Resize?
     /// False while the browser has stopped answering (BrowserWatcher): each
@@ -470,15 +734,12 @@ final class SidebarInstance: ObservableObject {
     private var browserAnswers: Bool { window.watcher?.isStalled != true }
     /// Ends a single step whose window has not answered in time.
     private var stepEnd: DispatchWorkItem?
-
     /// Starts resizing. False when there is no window at rest to resize against.
     func beginResize() -> Bool {
         endResize() // a single step still waiting for its window ends when a drag begins
-        guard slideRun == nil, !hidden, isShown, let panel, panel.isVisible else { return false }
-        let t = window.target
-        let l = loan?.seen(at: t.frame, screen: screen(for: t.frame)).loan
-        resizing = Resize(drag: EdgeDrag(window: t.frame, width: width, side: placedSide, covers: panel.attachedSide == nil),
-                          outer: l?.phase == .lent ? l?.outer : nil, asked: t.frame)
+        guard !sliding, !hidden, isShown, let panel, panel.isVisible else { return false }
+        let t = onScreenFrame
+        resizing = Resize(drag: EdgeDrag(window: t, width: width, side: placedSide), asked: t)
         return true
     }
 
@@ -496,14 +757,12 @@ final class SidebarInstance: ObservableObject {
             if x != last {
                 last = x
                 self.resize(by: self.placedSide == .right ? start - x : x - start)
-            } else {
-                self.keepFarEdge() // an answer that came after the pointer stopped
             }
             // Over: the button is up, or something else ended the resize.
             guard self.resizing == nil || NSEvent.pressedMouseButtons & 1 == 0 else { return }
             self.edgeTimer?.invalidate()
             self.edgeTimer = nil
-            self.endResize()
+            self.dragEnded()
             self.returnFocusToBrowser()
         }
         let t = Timer(timeInterval: 1.0 / 60, repeats: true) { _ in MainActor.assumeIsolated { step() } }
@@ -512,76 +771,144 @@ final class SidebarInstance: ObservableObject {
     }
 
     /// The pointer wants the sidebar `delta` points wider than when the drag
-    /// began. The window is asked for that room; the sidebar takes what the
-    /// window has made (follow()), not what was asked.
+    /// began. The window is asked for that room as soon as its last call has
+    /// landed; the sidebar takes what the window has made (follow()).
     func resize(by delta: CGFloat) {
-        guard var r = resizing else { return }
+        guard var r = resizing, !r.ending else { return }
         r.delta = delta
-        let ask = browserAnswers ? r.drag.ask(delta: delta).flatMap { $0 == r.asked ? nil : $0 } : nil
-        if let ask { r.asked = ask; r.put = nil }
+        if browserAnswers, let ask = r.drag.ask(delta: delta) { r.asked = within(ask, r) }
         resizing = r
-        if let ask {
-            // One step that keeps the far edge whatever width the browser
-            // takes: a window at its minimum is not moved off its tile.
-            AXWindow.slide(window.element, to: ask, moveOrigin: r.drag.side == .left,
-                           growing: ask.width > window.target.frame.width)
-            window.watcher?.refresh(window)
-        }
-        keepFarEdge()
+        stepResize()
         follow()
     }
 
-    /// Mid-drag: a window that narrowed where it stood (an answer that came
-    /// late) goes back to the far edge the drag began with.
-    private func keepFarEdge() {
-        guard browserAnswers, var r = resizing, let at = r.drag.kept(window.target.frame), at != r.put else { return }
-        r.put = at
+    /// `ask`, never narrower than this browser has shown it goes, nor wider
+    /// than it went this drag, its far edge where the drag keeps it: each ask
+    /// past them would change nothing, and be waited out.
+    private func within(_ ask: CGRect, _ r: Resize) -> CGRect {
+        var w = ask.width
+        if let least = r.least, w < least - 0.5 { w = least }
+        if let most = r.most, w > most + 0.5 { w = most }
+        guard w != ask.width else { return ask }
+        var a = ask
+        a.size.width = w
+        a.origin.x = r.drag.side == .left ? ask.maxX - w : ask.minX
+        return a
+    }
+
+    /// The window's next steps toward the width the pointer wants now, once
+    /// nothing is out; and, the button up and the window landed, the check
+    /// and the end.
+    private func stepResize() {
+        guard var r = resizing, steps == nil else { return }
+        guard browserAnswers else { return r.ending ? endResize() : () }
+        let real = onScreenFrame
+        if r.ran != nil, lastSlowest > 0 { r.slowest = max(r.slowest ?? 0, lastSlowest); resizing = r }
+        // The last steps asked it narrower than it went: that is its minimum.
+        // Wider: that is as far as it goes from here, this drag.
+        if let ran = r.ran, abs(ran.width - real.width) >= 2 {
+            if ran.width < real.width { r.least = real.width } else { r.most = real.width }
+            r.asked = within(r.asked, r)
+            resizing = r
+        }
+        if r.ran != r.asked, !SidebarGeometry.same(onScreenFrame, r.asked) {
+            r.ran = r.asked
+            resizing = r
+            let patience = r.slowest.map { min(WindowSteps.timeout, max(0.15, 3 * $0)) } ?? WindowSteps.timeout
+            return move(to: r.asked, keep: r.drag.side, patience: patience) { [weak self] in self?.stepResize() }
+        }
+        guard r.ending else { return }
+        // Landed. Its far edge not where the drag keeps it (a call dropped, or
+        // put back by another app): asked once more, as a show is.
+        if !r.checked, let at = r.drag.kept(onScreenFrame) {
+            r.checked = true
+            resizing = r
+            return move(to: at, keep: r.drag.side) { [weak self] in self?.stepResize() }
+        }
+        // The drag's frame, sent once more: a call it stopped waiting for lands before it (`resend`).
+        guard r.resent else {
+            r.resent = true
+            resizing = r
+            return resend(onScreenFrame, watching: false, settling: true) { [weak self] in self?.stepResize() }
+        }
+        // Its far edge moved meanwhile (a browser that widened itself back to its minimum): checked and sent once more again.
+        if !r.rechecked, r.drag.kept(onScreenFrame) != nil {
+            r.rechecked = true
+            r.checked = false
+            r.resent = false
+            resizing = r
+            return stepResize()
+        }
+        endResize()
+    }
+
+    /// The button is up (or a single step's wait is over): the drag ends once
+    /// the window has landed where it was last asked, and has been checked.
+    func dragEnded() {
+        stepEnd?.cancel()
+        stepEnd = nil
+        guard var r = resizing else { return }
+        r.ending = true
+        r.waits = false
         resizing = r
-        tracker.setFrame(at, of: window)
+        stepResize()
     }
 
     /// Mid-drag the sidebar is as wide as the room the window has made.
     private func trackResize() {
         guard let r = resizing else { return }
-        let w = Double(r.drag.width(delta: r.delta, beside: window.target.frame))
+        let w = Double(r.drag.width(delta: r.delta, beside: onScreenFrame))
         if w != width { width = w }
     }
 
     /// One step without a pointer (the edge's adjustable action: VoiceOver,
     /// the keyboard). There is no button to come up, so the resize stays open
     /// until the window has answered (follow()), or `EdgeDrag.answerWait` has
-    /// passed, and then ends from the window's frame as a drag does. A step
-    /// taken while the last one still waits (key repeat) adds to what is
-    /// asked, and the wait starts again.
+    /// passed, and then ends as a drag does. A step taken while the last one
+    /// is still open, waiting or ending with a call out (key repeat,
+    /// VoiceOver's increments), adds to the width last asked, and the wait
+    /// starts again.
     func nudge(by step: CGFloat) {
-        guard edgeTimer == nil, resizing?.waits == true || beginResize(), let open = resizing else { return }
+        guard edgeTimer == nil else { return }
+        if var open = resizing {
+            // Still open (its window not answered yet, or ending while a call
+            // is out): the step adds to the width last asked, never to the
+            // window's width mid-call, and none is lost.
+            open.ending = false
+            open.checked = false
+            open.resent = false
+            open.rechecked = false
+            resizing = open
+        } else if !beginResize() {
+            return
+        }
+        guard let open = resizing else { return }
         resize(by: open.drag.stepped(open.delta, by: step))
         guard let r = resizing else { return }
-        if r.drag.answered(r.asked, by: window.target.frame) { return endResize() }
+        if steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { return dragEnded() }
         resizing?.waits = true
         stepEnd?.cancel()
-        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.endResize() } }
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.dragEnded() } }
         stepEnd = work
         DispatchQueue.main.asyncAfter(deadline: .now() + EdgeDrag.answerWait, execute: work)
     }
 
+    /// Ends the resize now, with the window as it is on screen: the width
+    /// saved is the room it really made. A browser that has stopped answering
+    /// is taken as last seen.
     func endResize() {
         stepEnd?.cancel()
         stepEnd = nil
-        resizing?.waits = false
         guard let r = resizing else { return }
-        // Where the window is now, an answer still on its way included: the
-        // width saved and the loan are what it really gave. A browser that
-        // has stopped answering is taken as last seen.
         if browserAnswers { window.watcher?.refresh(window) }
-        if browserAnswers, let at = r.drag.kept(window.target.frame) { tracker.setFrame(at, of: window) }
         trackResize()
         resizing = nil
+        chosenWidth = width
         sidebar.widthChosen(width, for: self)
-        let now = window.target.frame
-        if let l = r.drag.loan(lent: r.outer, at: now) { loan = l }
+        let now = onScreenFrame
         DragTrace.log("edge drag: window \(window.number) \(r.drag.side) wanted \(Int(r.delta)), window \(r.drag.window) -> \(now), "
-                      + "sidebar \(Int(r.drag.width)) -> \(Int(width)), lent \(Int(loan?.taken ?? 0))")
+                      + "sidebar \(Int(r.drag.width)) -> \(Int(width))")
+        remember()
         layout()
     }
 
@@ -595,15 +922,15 @@ final class SidebarInstance: ObservableObject {
     /// that isn't showing too.
     func follow() {
         trackResize()
-        // A single step still open: the window goes back to its far edge, and
-        // its answer ends the step.
-        if let r = resizing, r.waits {
-            keepFarEdge()
-            if r.drag.answered(r.asked, by: window.target.frame) { endResize() }
-        }
-        // A slide places the panel itself, frame by frame.
+        // Narrower than its browser was seen to stop at: that was no minimum.
+        if let s = stops, onScreenFrame.width < s - 1 { stops = nil }
+        // A single step still open: its answer ends the step.
+        if let r = resizing, r.waits, steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }
+        // A slide places the panel itself, frame by frame. Mid-drag, beside
+        // the window as it is on screen.
         guard slideRun == nil, panel?.isVisible == true else { return }
-        placePanel(placement(beside: window.target.frame))
+        placePanel(placement(beside: resizing != nil ? onScreenFrame : window.target.frame))
+        revealOpening()
     }
 
     /// Shows the panel in its place, lets it sleep on its window's Space, or
@@ -615,7 +942,7 @@ final class SidebarInstance: ObservableObject {
         let p = placement(beside: t.frame)
         let decision = SidebarPresence.decide(window: window.number, panel: panel.flatMap { $0.isVisible ? UInt32(exactly: $0.windowNumber) : nil },
                                               onScreen: onScreen, hidden: hidden || t.fullScreen || t.minimized || t.appHidden,
-                                              attached: !p.overlaps, settled: settled)
+                                              settled: settled)
         switch decision {
         case .away:
             isShown = false
@@ -629,20 +956,18 @@ final class SidebarInstance: ObservableObject {
             if rehome { panel.reenter(at: place(panel)) } else if reorder, panel.isVisible { panel.order(at: place(panel)) }
             panel.fadeIn(at: place(panel))
         }
+        revealOpening()
     }
 
     /// The panel's place among the windows: next to this one.
     private func place(_ panel: SidebarPanel) -> SidebarPanel.Place {
-        .init(relation: SidebarPresence.relation(attached: panel.attachedSide != nil), window: window.number)
+        .init(relation: SidebarPresence.relation, window: window.number)
     }
 
     /// Where the panel goes beside a window at `frame` (this window's, or
     /// where it is about to be).
     private func placement(beside frame: CGRect) -> SidebarPlacement {
-        let l = loan.flatMap { Self.same($0.inner, frame) ? $0 : nil }
-        let on = display(for: frame)
-        return SidebarGeometry.place(window: frame, screen: on?.visibleFrame ?? frame, width: width, side: l?.side ?? sidebar.side,
-                                     keepOnScreen: refused.map { Self.same($0, frame) } ?? false, scale: on?.backingScaleFactor ?? 1)
+        SidebarGeometry.place(window: frame, width: width, side: sidebar.side, scale: display(for: frame)?.scale ?? 1)
     }
 
     /// Puts the panel there, attached to the window's edge. Returns the panel.
@@ -651,7 +976,7 @@ final class SidebarInstance: ObservableObject {
         if placedSide != p.side { placedSide = p.side }
         let fresh = self.panel == nil
         let panel = self.panel ?? makePanel()
-        let attached: SidebarSide? = p.overlaps ? nil : p.side
+        let attached = p.side
         // Beside the window, the panel reaches over the window's rounded
         // corners to fill what they leave open (SidebarSeam), so it is that
         // much wider.
@@ -671,7 +996,7 @@ final class SidebarInstance: ObservableObject {
         }
         if DragTrace.enabled, panel.frame != was, !tracker.isDragging(window) {
             DragTrace.log("place: window \(window.number) reported \(window.target.frame), on screen \(WindowServer.frame(window.number).map { "\($0)" } ?? "?"), "
-                + "panel asked \(frame) got \(panel.frame), scale \(p.scale), over the window \(reach) pt, \(attached == nil ? "covering its edge" : "beside it")")
+                + "panel asked \(frame) got \(panel.frame), scale \(p.scale), over the window \(reach) pt")
         }
         return panel
     }
@@ -706,7 +1031,7 @@ final class SidebarInstance: ObservableObject {
     /// browser window and the sidebar fill the panel's new frame together, the
     /// sidebar keeping its width on its side, as snapping the browser does.
     private func panelFrameChanged() {
-        guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed) else { return }
+        guard let panel, let placed = placedPanelFrame, !SidebarGeometry.same(panel.frame, placed) else { return }
         // macOS moves windows itself when displays change; that is no snap.
         guard Date().timeIntervalSince(sidebar.screensChangedAt) > 1 else { return }
         outsideMove?.cancel()
@@ -715,26 +1040,11 @@ final class SidebarInstance: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    private func movePairToPanel() {
-        guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed), !hidden, isShown else { return }
-        let t = window.target
-        let rect = panel.frame
-        let side = placedSide
-        let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: rect, window: t.frame, width: width, side: side,
-                                                          minWindowWidth: minWidth ?? 500)
-        let before = loan
-        if abs(rect.width - placed.width) >= 2 {
-            // Given a tile: hiding the sidebar later gives the browser all of it.
-            loan = .asking(outer: rect, inner: inner, side: side)
-        } else if let l = before {
-            // Carried along: the space to give back moves with the window.
-            loan = l.moved(by: inner.minX - t.frame.minX, to: inner)
-        }
-        askedAt = Date()
-        tracker.setFrame(inner, of: window)
-        observe(at: window.target.frame)
-        // It would not go there: what it had lent still stands.
-        if loan == nil, let before { loan = before }
+    func movePairToPanel() {
+        guard let panel, let placed = placedPanelFrame, !SidebarGeometry.same(panel.frame, placed), !hidden, isShown else { return }
+        let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: panel.frame, window: window.target.frame, width: width,
+                                                          side: placedSide)
+        move(to: inner, keep: nil, deadline: cap) { [weak self] in self?.remember() }
         layout()
     }
 
@@ -758,8 +1068,4 @@ final class SidebarInstance: ObservableObject {
         // nothing from this non-activating panel: let the keyboard go by hand.
         if let panel, panel.isKeyWindow { panel.reenter(at: place(panel)) }
     }
-}
-
-private extension CGRect {
-    var area: CGFloat { isNull ? 0 : width * height }
 }

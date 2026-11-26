@@ -21,7 +21,30 @@ final class SidebarPanel: NSPanel {
             let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
             DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
         }
-        super.orderOut(sender)
+        away()
+    }
+
+    /// Tests: ordered in and out without the window server, so no panel shows
+    /// on the Mac that runs them (SidebarGuardTests). Everything else, its
+    /// frame included, is the real panel's.
+    static var headless = false
+    private var headlessVisible = false
+
+    override var isVisible: Bool { Self.headless ? headlessVisible : super.isVisible }
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        Self.headless ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        guard Self.headless else { return super.order(place, relativeTo: otherWin) }
+        headlessVisible = place != .out
+    }
+
+    /// Off the screen at once.
+    private func away() {
+        headlessVisible = false
+        if !Self.headless { super.orderOut(nil) }
     }
 
     private let effect = NSVisualEffectView()
@@ -30,9 +53,8 @@ final class SidebarPanel: NSPanel {
     private let tint = NSView()
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
-    private var side: SidebarSide?
+    private var side = SidebarSide.right
     /// How far the panel reaches over the browser window now, in points.
-    /// None while it covers the window's edge.
     private(set) var reach: CGFloat = 0
     /// The corner radius of the window it is beside, and the pixels per point
     /// of the screen it is on.
@@ -91,12 +113,11 @@ final class SidebarPanel: NSPanel {
     }
 
     /// Which side of the browser window the panel is on, reaching `reach`
-    /// over the window, or nil when it covers the window's edge instead (all
-    /// four corners rounded, nothing to fill). `radius`: that window's corner
-    /// radius. `scale`: the pixels per point of its screen.
-    func attach(to side: SidebarSide?, reach: CGFloat, radius: CGFloat, scale: CGFloat) {
+    /// over the window. `radius`: that window's corner radius. `scale`: the
+    /// pixels per point of its screen.
+    func attach(to side: SidebarSide, reach: CGFloat, radius: CGFloat, scale: CGFloat) {
         self.side = side
-        self.reach = side == nil ? 0 : reach
+        self.reach = reach
         self.radius = radius
         self.scale = scale
         // The content keeps to the sidebar: none of it over the window.
@@ -137,7 +158,7 @@ final class SidebarPanel: NSPanel {
     /// The panel's outline in its own bounds, pixel by pixel on a screen with
     /// `scale` pixels per point (`SidebarSeam.mask` says what is in it).
     /// `reveal`: x in the bounds; the content stays anchored and isn't reflowed.
-    static func outline(in b: CGRect, scale: CGFloat, side: SidebarSide?, reach: CGFloat, radius: CGFloat, reveal: CGFloat?) -> CGPath {
+    static func outline(in b: CGRect, scale: CGFloat, side: SidebarSide, reach: CGFloat, radius: CGFloat, reveal: CGFloat?) -> CGPath {
         let key = "\(radius) \(scale)"
         let corner = corners[key] ?? WindowCorner.pixels(radius: radius, scale: scale)
         corners[key] = corner
@@ -162,8 +183,8 @@ final class SidebarPanel: NSPanel {
 
     private static var now: Double { CACurrentMediaTime() }
 
-    /// The side the panel is attached on, nil when it covers the window's edge.
-    var attachedSide: SidebarSide? { side }
+    /// The side of its window the panel is on.
+    var attachedSide: SidebarSide { side }
 
     /// A place among the windows: next to a browser window, by its number.
     struct Place {
@@ -201,14 +222,14 @@ final class SidebarPanel: NSPanel {
     /// active app's window that way (it keeps it until it is ordered out), and
     /// a panel on another Space comes to the one showing.
     func reenter(at place: Place) {
-        super.orderOut(nil)
+        away()
         order(at: place)
     }
 
     /// Hides at once, at the end of a slide.
     func hideNow() {
         fadeTimer?.invalidate(); fadeTimer = nil
-        super.orderOut(nil)
+        away()
         fade = Fade(shown: false)
         alphaValue = 1
     }
@@ -248,7 +269,7 @@ final class SidebarPanel: NSPanel {
         fadeTimer?.invalidate(); fadeTimer = nil
         if fade.phase == .hidden {
             DragTrace.log("fade done: orderOut")
-            super.orderOut(nil)
+            away()
             alphaValue = 1
         }
     }
