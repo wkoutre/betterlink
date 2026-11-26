@@ -15,7 +15,18 @@ final class SidebarNoticeWindow {
     private var panel: NSPanel?
     private var generation = 0
 
+    /// Tests: no panel is put on screen.
+    static var headless = false
+
+    /// Says the note to VoiceOver (and any other assistive app), at once and
+    /// over what it was saying. Tests record it instead.
+    static var announce: (String) -> Void = { text in
+        NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
+                             userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
+    }
+
     func show(_ text: String, over window: CGRect) {
+        guard !Self.headless else { return }
         generation += 1
         let mine = generation
         let display = NSScreen.screens.max { $0.frame.intersection(window).area < $1.frame.intersection(window).area }

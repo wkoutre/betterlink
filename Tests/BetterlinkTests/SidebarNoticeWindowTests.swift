@@ -39,4 +39,19 @@ import TabSyncCore
             #expect(size.height <= 120 && size.height >= 30, "\(notice): \(size)")
         }
     }
+
+    /// Review of 1cb4342, F4: the note is drawn and nothing else, so a
+    /// VoiceOver user heard nothing about why the sidebar didn't open. Each
+    /// note is announced, its own words, at high priority, when it shows.
+    @Test func theNoteIsAnnounced() {
+        let was = (SidebarNoticeWindow.headless, SidebarNoticeWindow.announce)
+        defer { (SidebarNoticeWindow.headless, SidebarNoticeWindow.announce) = was }
+        var said: [String] = []
+        SidebarNoticeWindow.headless = true
+        SidebarNoticeWindow.announce = { said.append($0) }
+        for notice in [SidebarNotice.noRoom, .noSize] {
+            SidebarNoticeWindow.shared.show(notice.text, over: CGRect(x: 1256, y: 0, width: 800, height: 1259))
+        }
+        #expect(said == [SidebarNotice.noRoom.text, SidebarNotice.noSize.text], "announced \(said)")
+    }
 }

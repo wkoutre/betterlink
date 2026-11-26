@@ -47,16 +47,21 @@ enum AXWindow {
 
     /// Moves the window to `frame` one call at a time, each waited for on
     /// screen, now: for when there is no later (the app quitting). At most
-    /// `WindowSteps.timeout` a call.
-    static func placeNow(_ win: WindowHandle, to frame: CGRect, keep side: SidebarSide?) {
+    /// `WindowSteps.timeout` a call. `clock` and `pause`: the time, and
+    /// waiting (tests step their own).
+    static func placeNow(_ win: WindowHandle, to frame: CGRect, keep side: SidebarSide?,
+                         clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) {
         var steps = WindowSteps(target: frame, keep: side)
-        let began = CACurrentMediaTime()
-        while !steps.done, CACurrentMediaTime() - began < 4 * WindowSteps.timeout {
+        let began = clock()
+        while !steps.done, clock() - began < 4 * WindowSteps.timeout {
             guard let seen = shownFrame(of: win) ?? Self.frame(of: win) else { return }
-            if let call = steps.step(seen: seen, now: CACurrentMediaTime()) { send(call, to: win) }
-            usleep(10_000)
+            if let call = steps.step(seen: seen, now: clock()) { send(call, to: win) }
+            pause(0.01)
         }
     }
+
+    /// Waits `seconds` on this thread.
+    nonisolated static func sleep(_ seconds: Double) { usleep(UInt32(max(0, seconds) * 1_000_000)) }
 
     /// Brings the window in front of its app's other windows.
     static func raise(_ win: AXUIElement) {

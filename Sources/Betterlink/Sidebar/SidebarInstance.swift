@@ -169,6 +169,8 @@ final class SidebarInstance: ObservableObject {
     /// and the browser's moves tick by tick (`stepSlide`), as the timer does.
     var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     var clock: () -> CFTimeInterval = CACurrentMediaTime
+    /// Waiting on the main thread, for quitting, which has no later.
+    var pause: (Double) -> Void = AXWindow.sleep
     /// The panel sliding, or the browser being moved.
     var sliding: Bool { slideRun != nil || steps != nil }
 
@@ -529,7 +531,7 @@ final class SidebarInstance: ObservableObject {
         guard AXWindow.frame(of: window.handle) != nil else { return false }
         // Mid-slide, the slide's closed frame.
         let back = goingBack ?? mid?.hiddenWindow ?? closedFrame(from: onScreenFrame, side: placedSide)
-        if !SidebarGeometry.same(back, onScreenFrame) { AXWindow.placeNow(window.handle, to: back, keep: nil) }
+        if !SidebarGeometry.same(back, onScreenFrame) { AXWindow.placeNow(window.handle, to: back, keep: nil, clock: clock, pause: pause) }
         unpair()
         return true
     }

@@ -256,9 +256,13 @@ final class SidebarController: ObservableObject {
     /// as narrowed. Called when the app quits. A browser that doesn't answer
     /// for one window isn't asked about its others (they keep their records):
     /// each would wait out its time while the app is quitting.
-    func giveSpaceBack() {
+    func giveSpaceBack() { giveSpaceBack(of: Array(instances.values)) }
+
+    /// `clock` and `pause`: the time, and waiting (tests step their own).
+    func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
+                       pause: @escaping (Double) -> Void = AXWindow.sleep) {
         var hung: Set<pid_t> = []
-        for i in instances.values where !hung.contains(i.window.target.pid) {
+        for i in all where !hung.contains(i.window.target.pid) {
             if !i.giveSpaceBack(), AXWindow.timedOut { hung.insert(i.window.target.pid) }
         }
     }
