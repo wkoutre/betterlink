@@ -192,7 +192,7 @@ final class TabsModel: ObservableObject {
 
     /// The host binary inside the running app (Contents/Helpers), or next to the
     /// executable for `swift run`.
-    static var hostPath: String {
+    nonisolated static var hostPath: String {
         let bundled = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/betterlink-tabhost")
         if FileManager.default.isExecutableFile(atPath: bundled.path) { return bundled.path }
         return Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("betterlink-tabhost").path
@@ -202,6 +202,9 @@ final class TabsModel: ObservableObject {
         guard let folder = b.dataFolder else { return .notInstalled }
         return HostRegistration.state(dataFolder: folder, hostPath: Self.hostPath)
     }
+
+    /// `betterlink tabs setup` wrote or removed a helper file from another process.
+    func registrationChanged() { registrationVersion += 1 }
 
     func setRegistered(_ on: Bool, _ b: Browser) {
         guard let folder = b.dataFolder else { return }

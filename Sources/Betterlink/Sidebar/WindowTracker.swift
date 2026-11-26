@@ -39,7 +39,7 @@ final class WindowTracker: NSObject {
     /// button is up.
     var onSettle: ((Target) -> Void)?
     /// Another window has the focus, in its browser or of all, or a browser
-    /// has made a window (followed or not).
+    /// has made or lost a window (followed or not).
     var onFocus: (() -> Void)?
     /// What is on screen, or in which order, may have changed. `settled`: a
     /// moment later, when Spaces and windows have stopped moving.
@@ -170,6 +170,12 @@ final class WindowTracker: NSObject {
     }
 
     func focusChanged() { onFocus?() }
+
+    /// The window server no longer has `w`: it is closed, whether or not
+    /// Accessibility has said so yet.
+    func closed(_ w: TrackedWindow) {
+        if let watcher = w.watcher { watcher.remove(w) } else { removed(w) }
+    }
 
     func removed(_ w: TrackedWindow) {
         if drag?.window === w { stopDrag() }
