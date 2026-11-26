@@ -9,17 +9,31 @@ public struct DragFocus: Equatable, Sendable {
     private var dragging = false
     /// The field had the keyboard when a drag began, and hasn't had it back.
     private var owed = false
+    /// Where the caret was in the field's text when the drag began (UTF-16).
+    private var caret: Int?
 
     public init() {}
 
     /// The drag is over and the field is still to get the keyboard back.
     public var owes: Bool { owed && !dragging }
 
-    /// A drag began. `focused`: the field has the keyboard now. One begun
-    /// before the last was settled finds the field without: what was owed stands.
-    public mutating func began(focused: Bool) {
+    /// A drag began. `focused`: the field has the keyboard now, its caret at
+    /// `caret`. One begun before the last was settled finds the field without:
+    /// what was owed stands, and where the caret was.
+    public mutating func began(focused: Bool, caret: Int? = nil) {
+        if focused { self.caret = caret }
         owed = owed || focused
         dragging = true
+    }
+
+    /// Where to put the caret now that the field has the keyboard back, with
+    /// `selected` of its `length` selected (UTF-16). AppKit selects all of a
+    /// field's text as it takes the keyboard, and the next key typed would
+    /// replace it: the caret goes back where it was, or to the end. Nil when
+    /// anything else is selected: that is the person's own, from a click.
+    public func caret(selected: Range<Int>, length: Int) -> Int? {
+        guard selected == 0..<length else { return nil }
+        return min(max(caret ?? length, 0), length)
     }
 
     /// The drag ended, dropped or not. `hasKeyboard`: the field has it now (it

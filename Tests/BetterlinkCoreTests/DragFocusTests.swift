@@ -52,6 +52,38 @@ import Testing
         #expect(given(.began(focused: true), .ended(hasKeyboard: false), .settled, .began(focused: false), .ended(hasKeyboard: false)) == [true, false])
     }
 
+    /// AppKit selects all of a field's text as it takes the keyboard, so the
+    /// next key typed would replace it: the caret goes back where it was.
+    @Test func theCaretGoesBackWhereItWas() {
+        var f = DragFocus()
+        f.began(focused: true, caret: 2)
+        #expect(f.caret(selected: 0..<3, length: 3) == 2)
+        f = DragFocus()
+        f.began(focused: true, caret: 3)
+        // A drag begun before the last was settled finds no field: the first's caret stands.
+        f.began(focused: false, caret: nil)
+        #expect(f.caret(selected: 0..<3, length: 3) == 3)
+    }
+
+    /// Not known, or past what is there now: at the end, so typing goes on.
+    @Test func aCaretNotKnownGoesToTheEnd() {
+        var f = DragFocus()
+        f.began(focused: true)
+        #expect(f.caret(selected: 0..<3, length: 3) == 3)
+        f.began(focused: true, caret: 9)
+        #expect(f.caret(selected: 0..<3, length: 3) == 3)
+        #expect(f.caret(selected: 0..<0, length: 0) == 0)
+    }
+
+    /// Only AppKit's select-all is undone. A caret or selection that is not
+    /// the whole text is the person's own (a click into the field): left alone.
+    @Test func aSelectionThatIsNotTheWholeTextIsLeftAlone() {
+        var f = DragFocus()
+        f.began(focused: true, caret: 3)
+        #expect(f.caret(selected: 1..<1, length: 3) == nil)
+        #expect(f.caret(selected: 0..<2, length: 3) == nil)
+    }
+
     /// A drag's end is seen a moment after the mouse comes up. One begun
     /// meanwhile, or before the field has the keyboard back, finds it without:
     /// what the first drag saw stands.

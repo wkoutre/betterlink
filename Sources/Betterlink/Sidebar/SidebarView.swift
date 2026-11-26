@@ -556,8 +556,10 @@ struct SidebarView: View {
 
     /// Starts a drag of `key`, remembering it for the drop targets.
     private func drag(_ key: String) -> NSItemProvider {
-        DragTrace.log("drag: began \(key.prefix { $0 != ":" }), New Tab had the keyboard \(newTabHasKeyboard) (\(newTabTrace))")
-        dragFocus.began(focused: newTabHasKeyboard)
+        let had = newTabHasKeyboard
+        let caret = had ? newTabEditor.map { NSMaxRange($0.selectedRange()) } : nil
+        DragTrace.log("drag: began \(key.prefix { $0 != ":" }), New Tab had the keyboard \(had), caret \(caret.map(String.init) ?? "none") (\(newTabTrace))")
+        dragFocus.began(focused: had, caret: caret)
         animate { dragging = key }
         dragCount += 1
         let mine = dragCount
@@ -698,6 +700,8 @@ struct SidebarView: View {
                 .onChange(of: newTabFocused) { _, on in
                     DragTrace.log("new tab: focused \(on)")
                     watchDownKey(on)
+                    // Back after a drag: its caret too, once the field editor is in.
+                    if on, dragFocus.owes { DispatchQueue.main.async { giveNewTabTheKeyboard("focused") } }
                 }
                 .onDisappear { watchDownKey(false) }
                 .onSubmit {
@@ -716,7 +720,12 @@ struct SidebarView: View {
     /// holds a focus that was set and did not take.)
     private var newTabHasKeyboard: Bool {
         guard newTabFocused, let panel = sidebar.panel, panel.isKeyWindow else { return false }
-        return (panel.firstResponder as? NSTextView)?.isFieldEditor == true
+        return newTabEditor != nil
+    }
+
+    /// The field editor of the field being edited in this panel.
+    private var newTabEditor: NSTextView? {
+        (sidebar.panel?.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0 : nil }
     }
 
     /// For trace.log (BETTERLINK_TRACE=1).
@@ -731,8 +740,17 @@ struct SidebarView: View {
         guard dragFocus.owes else { return }
         let before = newTabTrace
         var did = "has the keyboard"
-        if newTabHasKeyboard {
-            dragFocus.settle()
+        if newTabHasKeyboard, let editor = newTabEditor {
+            // The text as it was, so typing goes on (DragFocus.caret). Only
+            // here, never when the field is clicked into: nothing is owed then.
+            let now = editor.selectedRange(), length = editor.string.utf16.count
+            let caret = dragFocus.caret(selected: now.location..<NSMaxRange(now), length: length)
+            if let caret {
+                editor.setSelectedRange(NSRange(location: caret, length: 0))
+                DragTrace.log("new tab: caret put back at \(caret) of \(length)")
+            }
+            // Selected otherwise: looked at again until the last try.
+            if caret != nil || last { dragFocus.settle() }
         } else {
             did = last ? "gave up" : "focus on its way"
             // It had the keyboard, so its panel was the key window: again now
