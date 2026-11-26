@@ -7,9 +7,13 @@ public struct AgentEnvironment: Sendable {
     public let installed: [Browser]
     /// The bundled TypeScript compiler, for config.check. Nil when unavailable.
     public let compiler: TypeScriptCompiler?
+    /// Whether this Mac draws a built-in symbol by that name. The app passes
+    /// AppKit's answer; nil (tests, no AppKit) checks the name's shape only.
+    public let symbolExists: (@Sendable (String) -> Bool)?
 
-    public init(folder: SettingsFolder, installed: [Browser], compiler: TypeScriptCompiler? = nil) {
-        self.folder = folder; self.installed = installed; self.compiler = compiler
+    public init(folder: SettingsFolder, installed: [Browser], compiler: TypeScriptCompiler? = nil,
+                symbolExists: (@Sendable (String) -> Bool)? = nil) {
+        self.folder = folder; self.installed = installed; self.compiler = compiler; self.symbolExists = symbolExists
     }
 }
 
