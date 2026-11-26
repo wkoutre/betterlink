@@ -61,6 +61,7 @@ test: fetch
 	python3 scripts/gen-tokens.py --check
 	python3 scripts/gen-tour.py --check
 	python3 scripts/check-tour-pr.py --self-test
+	python3 scripts/gen-changelog.py --self-test
 	$(SWIFTPM_LOCK) swift test $(SWIFT_JOBS) $(SWIFT_TEST_FLAGS)
 
 # The betterlink command (cli/), compiled with Bun into one executable that
@@ -132,6 +133,9 @@ build: fetch icon cli
 	cp Vendor/typescript/typescript.js Vendor/typescript/LICENSE.txt Vendor/typescript/ThirdPartyNoticeText.txt $(CONTENTS)/Resources/typescript/
 	cp Vendor/typescript/lib/lib.*.d.ts $(CONTENTS)/Resources/typescript/lib/
 	cp LICENSE $(CONTENTS)/Resources/LICENSE
+	# What changed in each release, read from git history (scripts/gen-changelog.py):
+	# the Changelog page and `betterlink changelog list` show it.
+	python3 scripts/gen-changelog.py --out $(CONTENTS)/Resources/changelog.json
 	# The Tabs extension rides in the app, which keeps a copy where browsers
 	# load it from (ExtensionCopy). The same files the store zip holds, plus
 	# the manifest's key, so an unpacked copy has the store item's id.

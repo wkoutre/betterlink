@@ -54,12 +54,18 @@ if [ -n "$UPDATE_KEY" ]; then
   fi
 fi
 
+# Every release has its entry in the changelog the app shows, which needs
+# the clone's tags and history (actions/checkout with fetch-depth: 0).
+python3 scripts/gen-changelog.py --require "$VERSION"
+
 UPDATES=1 make build
 
 # The Tabs extension reaches other Macs inside the app (docs/tabs.md).
 for f in manifest.json background.js bridge.js icons/128.png; do
   [ -s "$APP/Contents/Resources/browser-extension/$f" ] || { echo "The app has no browser-extension/$f." >&2; exit 1; }
 done
+grep -q "\"version\": \"$VERSION\"" "$APP/Contents/Resources/changelog.json" ||
+  { echo "The app's changelog has no entry for $VERSION." >&2; exit 1; }
 
 if [ -n "$SIGN_IDENTITY" ]; then
   scripts/sign.sh "$SIGN_IDENTITY" --release

@@ -124,6 +124,8 @@ Merge a pull request. That's it. On every push to `main` that changes more than 
 3. **release**: builds, signs, notarizes and staples the app, uploads `betterlink-<version>.zip`, `betterlink-macos.zip` (the same file under a fixed name, which simplyautomated.io/betterlink/download points at), `SHA256SUMS`, `betterlink.rb` (the Homebrew cask) and `appcast.xml` (the Sparkle feed) to a draft, then publishes it in one step. Installed copies see the update within a day: their feed URL follows GitHub's latest published release. A run without the signing secrets, or with an update key that doesn't match `SUPublicEDKey`, fails instead of shipping.
 4. **tap**: copies `betterlink.rb` into the tap as `Casks/betterlink.rb`.
 
+Release notes come from the same place as the app's Changelog page: `scripts/gen-changelog.py` reads the squash commits merged since the previous tag (their titles, or a `Changelog:` line in the commit message) and the release job publishes that entry as the GitHub Release's notes. That is why the release job checks out with `fetch-depth: 0`, and why `scripts/release.sh` refuses to build a version with no entry. Nothing to write by hand.
+
 Merges while a release runs wait for it, then release together.
 
 Merges that land while a release runs collapse: GitHub keeps one waiting run, a newer merge replaces it, and that run tests and ships `main`'s tip, so it carries every change merged in the meantime. A burst of merges costs at most two releases.

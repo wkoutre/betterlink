@@ -53,6 +53,13 @@ enum AgentCommand {
                 return emit(AgentResponseJSON.failure(refusal.message))
             }
         }
+        if ChangelogAgent.commands.contains(command) {
+            let installed = Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""
+            switch ChangelogAgent.run(command, input: input, changelog: Changelog.bundled(), installed: installed) {
+            case .success(let data): return emit(AgentResponseJSON.success(data))
+            case .failure(let refusal): return emit(AgentResponseJSON.failure(refusal.message))
+            }
+        }
         if appCommands.contains(command) {
             let out = runAppCommand(command, input, folder: folder)
             if changes(command) && isOK(out) { notifyApp() }
@@ -72,7 +79,7 @@ enum AgentCommand {
         return emit(out)
     }
 
-    static var allCommands: [String] { Agent.commands + appCommands + tabCommands + TourAgent.commands }
+    static var allCommands: [String] { Agent.commands + appCommands + tabCommands + TourAgent.commands + ChangelogAgent.commands }
 
     private static func changes(_ command: String) -> Bool {
         !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check"].contains(command)

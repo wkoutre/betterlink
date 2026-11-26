@@ -426,6 +426,17 @@
             "commands": ["updates"],
             "settings": ["Pages.updater.automaticallyChecks"]
           }
+        },
+        {
+          "id": "changelog",
+          "revision": 1,
+          "title": "See what changed in each release",
+          "body": "The Changelog page lists every release, newest first: the day it shipped and what it changed, each line linked to the pull request behind it. It is built from betterlink's release history, so it never falls behind.",
+          "cli": "betterlink changelog list --limit 3",
+          "covers": {
+            "pages": ["changelog"],
+            "commands": ["changelog"]
+          }
         }
       ]
     }

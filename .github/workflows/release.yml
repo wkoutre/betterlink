@@ -68,6 +68,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          fetch-depth: 0 # tags and history: the app's changelog (scripts/gen-changelog.py)
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
@@ -196,6 +197,7 @@ jobs:
         with:
           ref: ${{ needs.version.outputs.sha }}
           persist-credentials: false
+          fetch-depth: 0 # tags and history: the app's changelog and these release notes
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
@@ -256,6 +258,9 @@ jobs:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           tag="v$VERSION"
+          # The notes are this release's entry in the changelog the app shows
+          # (scripts/gen-changelog.py), so the page and the window agree.
+          python3 scripts/gen-changelog.py --markdown "$VERSION" > "$RUNNER_TEMP/notes.md"
           files="dist/betterlink-$VERSION.zip dist/betterlink-macos.zip dist/SHA256SUMS dist/betterlink.rb dist/appcast.xml"
           # Upload everything to a draft first, then publish in one step, so
           # the appcast never goes live before the zip it points at. Each try
@@ -269,7 +274,7 @@ jobs:
               gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber $files || return 1
             else
               gh release create "$tag" --repo "$GITHUB_REPOSITORY" --draft --verify-tag \
-                --title "betterlink $VERSION" --generate-notes $files || return 1
+                --title "betterlink $VERSION" --notes-file "$RUNNER_TEMP/notes.md" $files || return 1
             fi
             gh release edit "$tag" --repo "$GITHUB_REPOSITORY" --draft=false --latest
           }
