@@ -58,6 +58,17 @@ public struct TabStore: Equatable, Sendable {
         }
     }
 
+    /// Title changes read together (`SyncHub`): `updates` holds each tab's
+    /// newest, in the order they came, standing for every message through
+    /// `seq`. A tab update replaces the tab whole, keeping only an icon the
+    /// store already has, and a title alone changing leaves the browser's
+    /// icon address as it was, so the newest alone leaves the store as all
+    /// of them in order would.
+    public mutating func applyTitles(_ updates: [Inbound], through seq: Int) {
+        for m in updates { applyEvent(m) }
+        lastSeq = seq
+    }
+
     public struct WindowEntry: Identifiable, Sendable {
         public var window: BrowserWindow
         public var tabs: [Tab]

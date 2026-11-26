@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import BetterlinkCore
+import TabSyncCore
 
 /// One browser window being followed.
 @MainActor
@@ -34,16 +35,29 @@ final class TrackedWindow {
                        title: "", frame: .zero, fullScreen: false, minimized: false, appHidden: false)
     }
 
+    /// When its title is read: at once while its browser is in front, else at
+    /// the next pairing (`readTitleIfChanged`).
+    var titleReads = WindowTitleReads()
+
     /// Reads the window again. False when it can't be read now.
     @discardableResult
     func read() -> Bool {
         guard let frame = AXWindow.frame(of: handle) else { return false }
         target.frame = frame
         target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
+        titleReads.readWhole()
         target.fullScreen = AXWindow.copy(element, "AXFullScreen") ?? false
         target.minimized = AXWindow.copy(element, kAXMinimizedAttribute) ?? false
         target.appHidden = watcher?.isHidden ?? false
         return true
+    }
+
+    /// Reads the title again when it changed while its browser was behind
+    /// another app: the pairing is the only one to use it, so it is read when
+    /// a pairing is about to (`WindowTitleReads`).
+    func readTitleIfChanged() {
+        guard titleReads.pairing(readable: watcher?.isStalled == false) else { return }
+        target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
     }
 
     /// Whether it has its browser's focus now, for the pairing.
@@ -478,6 +492,8 @@ final class BrowserWatcher {
             tracker.orderMayHaveChanged()
         case kAXTitleChangedNotification:
             guard let w = tracked(el) else { return }
+            // Behind another app, read at the next pairing (`WindowTitleReads`).
+            guard w.titleReads.titleChanged(browserInFront: tracker.frontPid == pid) else { return }
             let title: String = AXWindow.copy(el, kAXTitleAttribute) ?? ""
             guard title != w.target.title else { return }
             w.target.title = title

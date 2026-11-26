@@ -20,6 +20,8 @@ final class TabsModel: ObservableObject {
     /// paints its window frame, when it has one.
     @Published private(set) var profiles: [String: (ref: ProfileRef, name: String, color: UInt32?)] = [:]
     private var profileLookups: [String: Date] = [:]
+    /// When each instance's profile was first looked for.
+    private var profileFirstLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
     @Published private(set) var registrationVersion = 0
@@ -36,7 +38,10 @@ final class TabsModel: ObservableObject {
     func start() {
         guard hub == nil else { return }
         refreshExtension()
-        let hub = SyncHub(onLine: { [weak self] path, m in
+        // The hub hands on a title or icon change once, then holds the rest
+        // until `publish()` collects the lists: under churn the main thread
+        // hears of what tabs show once per publish, not once per message.
+        let hub = SyncHub(holdingContent: true, onLine: { [weak self] path, m in
             // Two things saved links' held tabs need the moment the browser says
             // them: the tab an open made (its ack), and a tab closed on its own.
             if m.type == "ack", let id = m.id, let tab = m.tabId {
@@ -56,7 +61,8 @@ final class TabsModel: ObservableObject {
             self.seen.withLock { $0 = s.count }
             DispatchQueue.main.async {
                 // Every list, not only the ones drawn: a held tab's address
-                // must be known the moment it changes, before it closes.
+                // must be known the moment it changes, before it closes (the
+                // hub hands an address change on at once).
                 SidebarHoldsModel.shared.settle(s, links: SidebarLibraryModel.shared.library.allLinkIDs)
                 self.changed(s, urgent: urgent)
             }
@@ -71,7 +77,8 @@ final class TabsModel: ObservableObject {
     var interval = PublishPacer.interval(sidebarOnScreen: false, browserInFront: false) {
         didSet { if interval < oldValue, latest != nil { publish() } }
     }
-    /// The newest tab lists, when not published yet.
+    /// The tab lists as last handed on, when not published yet. The hub may
+    /// hold newer titles and icons: `publish()` collects those.
     private var latest: [BrowserSession]?
     private var pacer = PublishPacer()
     /// A paced publish waiting to happen; one that goes early takes its place.
@@ -95,8 +102,9 @@ final class TabsModel: ObservableObject {
     private func publish() {
         later?.cancel()
         later = nil
-        guard let s = latest else { return }
+        guard let handed = latest else { return }
         latest = nil
+        let s = hub?.collect() ?? handed
         pacer.published(now: CACurrentMediaTime())
         sessions = s
         lookUpProfiles(s)
@@ -139,21 +147,23 @@ final class TabsModel: ObservableObject {
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the
-    /// browser's Local State. Retried at most every 5 s until found (the
-    /// browser writes the storage a moment after the extension starts).
+    /// browser's Local State. Retried at most every 5 s until found, for a
+    /// minute, then every 30 s (`ProfileLocator.lookAgain`).
     /// The color comes from the profile's Preferences (a custom theme) or
     /// Local State (the frame color).
     private func lookUpProfiles(_ sessions: [BrowserSession]) {
         for s in sessions {
-            // Unknown profiles retry every 5 s; known ones are read again at most
-            // every 30 s, on the next tab change, so a name or color changed in
-            // the browser shows up.
+            // Known ones are read again at most every 30 s, on the next tab
+            // change, so a name or color changed in the browser shows up.
             guard let instance = s.instance,
-                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > (profiles[instance] == nil ? 5 : 30),
+                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast)
+                    > ProfileLocator.lookAgain(found: profiles[instance] != nil,
+                                               lookingFor: Date().timeIntervalSince(profileFirstLookups[instance] ?? Date())),
                   let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
                   let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
                   let folder = browser.dataFolder else { continue }
             profileLookups[instance] = Date()
+            if profileFirstLookups[instance] == nil { profileFirstLookups[instance] = Date() }
             let root = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
             DispatchQueue.global(qos: .utility).async {

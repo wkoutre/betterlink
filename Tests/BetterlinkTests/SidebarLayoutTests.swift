@@ -1,5 +1,6 @@
 import AppKit
 import BetterlinkCore
+import Combine
 import SwiftUI
 import TabSyncCore
 import Testing
@@ -77,10 +78,18 @@ private nonisolated(unsafe) var made: String?
 
     /// The sidebar as drawn while `key` is dragged (nil: nothing is).
     private func drawn(dragging key: String?) throws -> NSBitmapImageRep {
+        try drawing(hosted(dragging: key))
+    }
+
+    private func hosted(dragging key: String? = nil) -> NSView {
         let host = NSHostingView(rootView: SidebarView(dragging: key).environmentObject(instance))
         host.sizingOptions = []
         host.appearance = NSAppearance(named: .aqua)
         host.frame = CGRect(origin: .zero, size: size)
+        return host
+    }
+
+    private func drawing(_ host: NSView) throws -> NSBitmapImageRep {
         // Lazy rows and measured sizes arrive over a few turns of the run loop.
         for _ in 0..<3 {
             host.layoutSubtreeIfNeeded()
@@ -150,5 +159,84 @@ private nonisolated(unsafe) var made: String?
         #expect(height(changed[0]) <= DS.Size.sizeRow)
         #expect(inked(idle, from: 0, to: changed[0].lowerBound) > 20)
         #expect(inked(idle, from: changed[0].upperBound, to: size.height) > 20)
+    }
+
+    /// A window of 56 tabs, each changing its title twice a second, another
+    /// app in front: every 2 s every title is new (PublishPacer). The sidebar
+    /// isn't told its whole look changed for that, so nothing but the titles is
+    /// worked out again, and it draws just what a sidebar drawn afresh with
+    /// the new titles draws. A tab switching is still a new look.
+    @Test func newTitlesRedrawOnlyTheTitlesAndDrawAsAFreshSidebarDoes() throws {
+        try show(profile(favorites: 1))
+        let churning = (0..<56).map {
+            BrowserTab(id: 200 + $0, windowId: 1, index: $0, title: "Page \($0)", url: "https://page\($0).example/", active: $0 == 0)
+        }
+        instance.show(look(churning))
+        let live = hosted()
+        let before = try drawing(live)
+        var told = 0
+        let watching = instance.objectWillChange.sink { told += 1 }
+        defer { watching.cancel() }
+
+        let renamed = churning.map { t -> BrowserTab in var t = t; t.title = "Renamed \(t.id)"; return t }
+        instance.show(look(renamed))
+        #expect(told == 0, "the sidebar was told its look changed \(told) times for new titles")
+        #expect(instance.look == look(renamed))
+        let drawn = try drawing(live)
+        let fresh = try drawing(hosted())
+        #expect(try bands(drawn, fresh).isEmpty)
+        // And the new titles are what is drawn.
+        #expect(try !bands(before, drawn).isEmpty)
+
+        var switched = renamed
+        switched[0].active = false
+        switched[1].active = true
+        instance.show(look(switched))
+        #expect(told == 1)
+    }
+
+    /// After new titles alone the view keeps the tab list it last drew, and a
+    /// lazy row built later (scrolled to) is made from that list: its title
+    /// is the newest the sidebar was shown, not the one in that old list.
+    @Test func aRowBuiltAfterNewTitlesShowsTheNewTitle() throws {
+        try show(profile(favorites: 0))
+        let drawn = (0..<8).map {
+            BrowserTab(id: 300 + $0, windowId: 1, index: $0, title: "Page \($0)", url: "https://page\($0).example/", active: $0 == 0)
+        }
+        instance.show(look(drawn))
+        // Only the first row was built before the titles changed.
+        #expect(instance.title(of: drawn[0]).text == "Page 0")
+        let renamed = drawn.map { t -> BrowserTab in var t = t; t.title = "Renamed \(t.id)"; return t }
+        instance.show(look(renamed))
+        #expect(instance.title(of: drawn[0]).text == "Renamed 300")
+        // Built now, from the list the view last drew.
+        #expect(instance.title(of: drawn[5]).text == "Renamed 305")
+    }
+
+    /// Saving a tab, from its menu or by dragging it, takes the tab its row
+    /// was made with; after new titles alone that row wasn't made again, and
+    /// the link is saved with the newest title.
+    @Test func aTabSavedAfterNewTitlesIsSavedWithTheNewTitle() throws {
+        try show(profile(favorites: 0))
+        let drawn = (0..<3).map {
+            BrowserTab(id: 400 + $0, windowId: 1, index: $0, title: "Page \($0)", url: "https://page\($0).example/", active: $0 == 0)
+        }
+        instance.show(look(drawn))
+        let renamed = drawn.map { t -> BrowserTab in var t = t; t.title = "Renamed \(t.id)"; return t }
+        instance.show(look(renamed))
+        #expect(instance.current(drawn[2]).title == "Renamed 402")
+        #expect(SidebarView.saved(instance.current(drawn[2])).title == "Renamed 402")
+        // A tab no longer in the window is as it was.
+        let gone = BrowserTab(id: 999, windowId: 1, index: 9, title: "Gone", url: "https://gone.example/")
+        #expect(instance.current(gone) == gone)
+    }
+
+    private func look(_ tabs: [BrowserTab]) -> SidebarLook {
+        var session = BrowserSession(socketPath: "/layout-test")
+        var snapshot = Inbound(type: "snapshot")
+        snapshot.seq = 1
+        snapshot.windows = [SnapshotWindow(id: 1, focused: true, tabs: tabs, left: 0, top: 0, width: 1000, height: 800)]
+        session.store.apply(snapshot)
+        return .window(.init(session: session, window: session.store.entry(1)))
     }
 }
