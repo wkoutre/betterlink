@@ -55,6 +55,52 @@ import Testing
         #expect(end == narrowed)
     }
 
+    /// Brave at its minimum (615 of 800 asked down to 520): the size is sent
+    /// once, never again, and the steps end as soon as it has stopped.
+    @Test func aMinimumIsNotAskedAgain() {
+        let start = CGRect(x: 1256, y: 0, width: 800, height: 1259)
+        let target = CGRect(x: 1536, y: 0, width: 520, height: 1259)
+        let (calls, end) = run(WindowSteps(target: target, keep: .left), from: start, least: 615)
+        #expect(end == CGRect(x: 1441, y: 0, width: 615, height: 1259))
+        #expect(calls.filter { if case .size = $0 { true } else { false } }.count == 1, "\(calls)")
+    }
+
+    /// Opening, a stop short of `widest` ends the steps there: the window isn't moved to keep its far edge first.
+    @Test func stoppingShortOfWidestEndsAtOnce() {
+        let start = CGRect(x: 1256, y: 0, width: 800, height: 1259)
+        var s = WindowSteps(target: CGRect(x: 1536, y: 0, width: 520, height: 1259), keep: .left, widest: 600)
+        var w = start, t = 0.0, calls: [WindowSteps.Call] = []
+        while !s.done, t < 2 {
+            if let c = s.step(seen: w, now: t) {
+                calls.append(c)
+                if case .size(let f) = c { w.size.width = max(615, f.width) }
+            }
+            t += 1.0 / 120
+        }
+        #expect(s.stoppedShort && calls.count == 1 && t < 0.1, "\(calls) in \(t) s")
+    }
+
+    /// Someone else moves the window while a call is out: nothing more is sent.
+    @Test func aMoveByAnyoneElseEndsTheSteps() {
+        var s = WindowSteps(target: narrowed, keep: .left)
+        #expect(s.step(seen: full, now: 0) == .size(narrowed))
+        let moved = full.offsetBy(dx: -40, dy: -20) // its top left moved: no size call does that
+        #expect(s.step(seen: moved, now: 0.01) == nil)
+        #expect(s.done && s.interrupted)
+    }
+
+    /// A call still out when new steps take over is waited for first, not cut short.
+    @Test func aCallInFlightIsWaitedForByTheStepsAfter() {
+        var first = WindowSteps(target: narrowed, keep: .left)
+        #expect(first.step(seen: full, now: 0) == .size(narrowed))
+        var back = WindowSteps(target: full, keep: nil, after: first)
+        #expect(back.step(seen: full, now: 0.01) == nil) // the size hasn't landed: nothing sent over it
+        let landed = CGRect(x: 0, y: 0, width: 1776, height: 1290)
+        #expect(back.step(seen: landed, now: 0.02) == nil)
+        #expect(back.step(seen: landed, now: 0.04) == .size(full))
+        #expect(!back.interrupted)
+    }
+
     @Test func nothingToDoSendsNothing() {
         var s = WindowSteps(target: full, keep: nil)
         #expect(s.step(seen: full, now: 0) == nil && s.done)

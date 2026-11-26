@@ -55,6 +55,15 @@ final class SidebarInstance: ObservableObject {
         var seen: CGRect?
     }
     private var opening: Opening?
+    /// A refused open's window on its way back to the frame it had: a press
+    /// meanwhile is held until it is there (the last press wins).
+    private var restoring: CGRect?
+
+    /// Shows the note saying why a sidebar didn't open (SidebarNotice), over
+    /// its window. Tests record it instead.
+    static var tell: (SidebarNotice, CGRect) -> Void = { notice, window in
+        SidebarNoticeWindow.shared.show(notice.text, over: window)
+    }
 
     init(window: TrackedWindow, sidebar: SidebarController, hidden: Bool, width: Double) {
         self.window = window
@@ -108,6 +117,7 @@ final class SidebarInstance: ObservableObject {
         outsideMove?.cancel()
         edgeTimer?.invalidate()
         edgeTimer = nil
+        restoring = nil
         if closed { slideRun = nil; steps = nil; afterSteps = nil; stopTicker() } else { giveSpaceBack() }
         panelTokens.forEach(NotificationCenter.default.removeObserver)
         panelTokens = []
@@ -172,8 +182,11 @@ final class SidebarInstance: ObservableObject {
 
     /// Moves the browser to `frame`, its far edge (away from `keep`) where
     /// `frame` has it whatever width it takes, then does `then`.
-    private func move(to frame: CGRect, keep: SidebarSide?, then: @escaping () -> Void = {}) {
-        steps = WindowSteps(target: frame, keep: keep)
+    /// `widest`: opening, the widest the browser may stop at and leave the
+    /// sidebar its least width (`WindowSteps.widest`). Moved meanwhile by
+    /// someone else, `then` is not done: `takenByOther()` is.
+    private func move(to frame: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, then: @escaping () -> Void = {}) {
+        steps = WindowSteps(target: frame, keep: keep, widest: widest, after: steps)
         afterSteps = then
         stepWindow()
         runTicker()
@@ -208,7 +221,37 @@ final class SidebarInstance: ObservableObject {
         steps = nil
         let then = afterSteps
         afterSteps = nil
-        then?()
+        if s.interrupted { takenByOther() } else { then?() }
+    }
+
+    /// Someone else moved or resized the window while betterlink was moving
+    /// it (the person, or another app: `WindowSteps.interrupted`): nothing
+    /// more is sent, and their frame stands. An open not yet answered is
+    /// given up, the sidebar closed; a hide, or a refused open going back,
+    /// ends where the window is; an open sidebar stays open beside it (rule 3).
+    /// A press held meanwhile goes with it: theirs is the latest word.
+    private func takenByOther() {
+        DragTrace.log("moved by someone else: window \(window.number) at \(onScreenFrame), left there")
+        let giveUp = opening.map { $0.left == nil } ?? false
+        opening = nil
+        if restoring != nil { restoring = nil; hidden = true }
+        if giveUp { hidden = true; sidebar.refused(self) }
+        if hidden {
+            closePanelNow()
+            unpair()
+        } else if slideRun != nil {
+            slideRun = nil
+            panel?.reveal = nil
+        }
+        layout()
+    }
+
+    /// The panel gone at once, mid-slide too.
+    private func closePanelNow() {
+        slideRun = nil
+        panel?.reveal = nil
+        panel?.hideNow()
+        isShown = false
     }
 
     /// Hides (rule 4): the browser takes the pair's frame, read off the screen
@@ -216,6 +259,8 @@ final class SidebarInstance: ObservableObject {
     private func slideOut() {
         endResize() // hiding mid-drag: the drag ends here
         hidden = true
+        // A refused open still going back: it stays closed once there.
+        if restoring != nil { return }
         opening = nil
         if var run = slideRun { // turning back mid-show
             run.slide.hide(at: clock(), reduceMotion: reducesMotion())
@@ -244,11 +289,20 @@ final class SidebarInstance: ObservableObject {
     /// narrowing from that side, the reverse of a hide.
     private func slideIn() {
         hidden = false
-        if var run = slideRun { // turning back mid-hide
+        // A refused open still going back: it opens once there (restored()).
+        if restoring != nil { return }
+        if var run = slideRun { // turning back mid-hide: open in the frame it was closing to (rule 2)
+            if tooNarrow(run.hiddenWindow) { return }
+            let browser = SidebarGeometry.opened(run.hiddenWindow, width: CGFloat(width), side: run.side)
+            let panel = placePanel(placement(beside: browser))
+            run.outer = run.side == .left ? panel.frame.minX : panel.frame.maxX
+            run.shownWindow = browser
             run.slide.show(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
-            opening = Opening(frame: run.hiddenWindow, asked: run.shownWindow, at: Date())
-            return move(to: run.shownWindow, keep: run.side) { [weak self] in self?.answer() }
+            opening = Opening(frame: run.hiddenWindow, asked: browser, at: Date())
+            return move(to: browser, keep: run.side, widest: run.hiddenWindow.width - SidebarGeometry.widths.lowerBound) { [weak self] in
+                self?.answer()
+            }
         }
         let t = window.target
         // Out of sight (another Space, minimized, full screen): it opens
@@ -262,6 +316,7 @@ final class SidebarInstance: ObservableObject {
     /// browser is asked for the frame less the sidebar's width, its far edge
     /// kept. What it really takes decides the sidebar's width (`answer()`).
     private func open(from frame: CGRect, slide: Bool) {
+        if tooNarrow(frame) { return layout() }
         width = chosenWidth
         let side = sidebar.side
         let browser = SidebarGeometry.opened(frame, width: CGFloat(width), side: side)
@@ -277,7 +332,7 @@ final class SidebarInstance: ObservableObject {
             run.slide.show(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
         }
-        move(to: browser, keep: side) { [weak self] in self?.answer() }
+        move(to: browser, keep: side, widest: frame.width - SidebarGeometry.widths.lowerBound) { [weak self] in self?.answer() }
         stepPanel()
     }
 
@@ -325,48 +380,52 @@ final class SidebarInstance: ObservableObject {
     /// The browser's answer to opening, once it is where it was asked to go,
     /// or rests: the pair stays in the frame it opened in (rule 2). The
     /// browser keeps its far edge at the width it really took, and the
-    /// sidebar has the rest of the frame. One that took less than asked (a
-    /// request dropped, a tiling app that put it back, a minimum width) is
-    /// asked again while it keeps doing something; one that leaves the
-    /// sidebar less than its least
-    /// width gets its frame back, and the sidebar stays closed.
+    /// sidebar has the rest of the frame. One that took none of what it was
+    /// asked, though it did something since the last look (a tiling app put
+    /// it back, a request was dropped), is asked again. One that took part
+    /// and stopped is at its minimum, and is never asked again: if that
+    /// leaves the sidebar less than its least width, or the browser took no
+    /// size at all, the sidebar stays closed at once and the window goes back
+    /// to its frame (`refuse`).
     /// `atRest`: the window tracker says it has stopped moving. Opening ends
-    /// at the first rest that finds it where it was left: a tiling app that
-    /// puts it back, or a browser that widens itself back to its minimum, is
-    /// answered again.
+    /// at the first rest that finds it where it was left. Found with its top
+    /// left moved, and not back in its old frame, it was moved or resized by
+    /// the person: open, that stands (rule 3).
     private func answer(atRest: Bool = false) {
         guard var o = opening, steps == nil else { return }
         let side = sidebar.side
         let real = onScreenFrame
-        if let left = o.left, SidebarGeometry.same(real, left) || o.corrections >= 3 {
-            guard atRest else { return }
-            opening = nil // it rests where it was put
-            return remember()
+        if let left = o.left {
+            if SidebarGeometry.same(real, left) || o.corrections >= 3 {
+                guard atRest else { return }
+                opening = nil // it rests where it was put
+                return remember()
+            }
+            // Moved from where it was left (its top left elsewhere), and not
+            // back in its old frame (a tiling app putting it back in its
+            // tile): the person's move or resize. It is open: theirs stands
+            // (rule 3). A browser keeps its top left whatever size it takes.
+            let movedAway = abs(real.minX - left.minX) >= 2 || abs(real.maxY - left.maxY) >= 2
+            if movedAway, !SidebarGeometry.same(real, o.frame) {
+                opening = nil
+                remember()
+                return follow()
+            }
         }
-        // Short of what was asked: asked again, the first time, and after each
-        // time it did something meanwhile (a tiling app put it back, it stopped
-        // at a minimum); a browser that did nothing has refused.
-        let moved = o.seen.map { !SidebarGeometry.same($0, real) } ?? true
+        let moved = !SidebarGeometry.same(o.seen ?? o.frame, real)
         o.seen = real
         opening = o
-        if real.width > o.asked.width + 2, o.tries < 3, o.tries == 0 || moved {
+        let tookNothing = abs(real.width - o.frame.width) < 2
+        // Took part and stopped: its minimum.
+        if !tookNothing, real.width > o.asked.width + 2 { least = real.width }
+        if real.width > o.asked.width + 2, tookNothing, moved, o.tries < 3 {
             o.tries += 1
             o.at = Date()
             opening = o
-            return move(to: o.asked, keep: side) { [weak self] in self?.answer() }
+            return move(to: o.asked, keep: side, widest: o.frame.width - SidebarGeometry.widths.lowerBound) { [weak self] in self?.answer() }
         }
+        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, notice) }
         let room = o.frame.width - real.width
-        guard room >= SidebarGeometry.widths.lowerBound - 0.5 else {
-            DragTrace.log("open: window \(window.number) took \(Int(real.width)) of \(Int(o.frame.width)) pt, leaving the sidebar "
-                          + "\(Int(room)), less than its least \(Int(SidebarGeometry.widths.lowerBound)): back to \(o.frame), the sidebar closed")
-            opening = nil
-            hidden = true
-            unpair()
-            panel?.hideNow()
-            isShown = false
-            if !SidebarGeometry.same(real, o.frame) { move(to: o.frame, keep: nil) }
-            return layout()
-        }
         // Its far edge where it was, at the width it really has.
         var at = real
         at.origin.x = side == .left ? o.frame.maxX - real.width : o.frame.minX
@@ -384,6 +443,51 @@ final class SidebarInstance: ObservableObject {
         }
         remember()
         follow()
+    }
+
+    /// The sidebar can't open: closed at once, the note saying why shown, and
+    /// the window put back to the frame it had (waited for, one call at a
+    /// time), unless someone else moves it meanwhile (`takenByOther()`).
+    private func refuse(_ o: Opening, real: CGRect, _ notice: SidebarNotice) {
+        DragTrace.log("open: window \(window.number) took \(Int(real.width)) of \(Int(o.frame.width)) pt, leaving the sidebar "
+                      + "\(Int(o.frame.width - real.width)), less than its least \(Int(SidebarGeometry.widths.lowerBound)): back to \(o.frame), the sidebar closed")
+        opening = nil
+        hidden = true
+        sidebar.refused(self)
+        closePanelNow()
+        unpair()
+        Self.tell(notice, o.frame)
+        if !SidebarGeometry.same(real, o.frame) {
+            restoring = o.frame
+            move(to: o.frame, keep: nil) { [weak self] in self?.restored() }
+        }
+        layout()
+    }
+
+    /// The narrowest this window has been seen to go when asked to go
+    /// narrower: its browser's minimum, learned from a refused or short
+    /// open. Seen narrower since (the person resized it), that is its least.
+    private var least: CGFloat?
+
+    /// Too narrow, by what this window has shown it can't go below, to leave
+    /// the sidebar its least width out of `frame`: it stays closed at once,
+    /// with its note, and nothing is asked of the browser.
+    private func tooNarrow(_ frame: CGRect) -> Bool {
+        guard let least, frame.width - least < SidebarGeometry.widths.lowerBound - 0.5 else { return false }
+        DragTrace.log("open: window \(window.number) goes no narrower than \(Int(least)) pt, leaving the sidebar \(Int(frame.width - least)) of \(Int(frame.width)): stays closed")
+        hidden = true
+        sidebar.refused(self)
+        Self.tell(.noRoom, frame)
+        return true
+    }
+
+    /// A refused open's window is back. Pressed again meanwhile (the last
+    /// press asked for it open): tried again from there.
+    private func restored() {
+        restoring = nil
+        guard !hidden else { return layout() }
+        hidden = true
+        slideIn()
     }
 
     /// Records where the open pair is, for a relaunch.
@@ -405,18 +509,20 @@ final class SidebarInstance: ObservableObject {
     @discardableResult
     func giveSpaceBack() -> Bool {
         opening = nil
+        let goingBack = restoring // a refused open's window on its way back
+        restoring = nil
         let mid = slideRun
         slideRun = nil
         steps = nil
         afterSteps = nil
         stopTicker()
         panel?.reveal = nil
-        guard mid != nil || paired else { return true }
+        guard mid != nil || paired || goingBack != nil else { return true }
         // A window that can't be read now (a hung browser) keeps its record,
         // so it is recognised later instead of narrowed again.
         guard AXWindow.frame(of: window.handle) != nil else { return false }
         // Mid-slide, the slide's closed frame.
-        let back = mid?.hiddenWindow ?? closedFrame(from: onScreenFrame, side: placedSide)
+        let back = goingBack ?? mid?.hiddenWindow ?? closedFrame(from: onScreenFrame, side: placedSide)
         if !SidebarGeometry.same(back, onScreenFrame) { AXWindow.placeNow(window.handle, to: back, keep: nil) }
         unpair()
         return true
@@ -625,6 +731,7 @@ final class SidebarInstance: ObservableObject {
     /// The window moved or resized: the panel stays beside it, on a Space
     /// that isn't showing too.
     func follow() {
+        if let l = least, window.target.frame.width < l - 1 { least = window.target.frame.width }
         trackResize()
         // A single step still open: the window goes back to its far edge, and
         // its answer ends the step.

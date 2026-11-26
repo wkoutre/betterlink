@@ -377,6 +377,13 @@ final class SidebarController: ObservableObject {
         saveMemory()
     }
 
+    /// The window's sidebar couldn't open (no room beside it): kept closed for
+    /// that window, as if hidden with the shortcut.
+    func refused(_ i: SidebarInstance) {
+        chosen.set(hidden: true, window: i.window.number, pid: i.window.target.pid)
+        saveChosen()
+    }
+
     /// The window's sidebar is closed: nothing narrowed to remember.
     func unpaired(_ w: TrackedWindow) {
         memory.forget(window: w.number)

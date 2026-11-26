@@ -349,7 +349,12 @@ final class SidebarRig {
         instance.clock = { [unowned self] in self.time }
         fake.now = { [unowned self] in self.time }
         instance.reducesMotion = { reduceMotion }
+        SidebarRig.notices = []
+        SidebarInstance.tell = { notice, frame in SidebarRig.notices.append((notice, frame)) }
     }
+
+    /// The notes shown since the rig was made: why the sidebar didn't open, and over which frame.
+    static var notices: [(SidebarNotice, CGRect)] = []
 
     var open: Bool { !instance.hidden }
     var sidebarWidth: CGFloat { CGFloat(instance.width) }
@@ -387,6 +392,8 @@ final class SidebarRig {
     private(set) var callsBefore = 0
     /// The presses in this one (the first and those during it).
     private(set) var presses = 0
+    /// The browser's width when the first press came.
+    private(set) var widthAtPress: CGFloat = 0
     /// What the last press asked for: open (true) or closed.
     private(set) var askedOpen = false
     /// Where the person put the browser during it, if they did.
@@ -415,6 +422,7 @@ final class SidebarRig {
     func toggle(within: Double? = nil) {
         fake.sliding = true
         callsBefore = fake.setCalls
+        widthAtPress = fake.frame.width
         presses = 0
         personPut = nil
         samples = []
@@ -440,6 +448,7 @@ final class SidebarRig {
     func toggle(during: [(at: Double, what: During)]) {
         fake.sliding = true
         callsBefore = fake.setCalls
+        widthAtPress = fake.frame.width
         presses = 0
         personPut = nil
         samples = []
@@ -489,7 +498,10 @@ final class SidebarRig {
         if b.timing != .atOnce { each += b.lateBy }
         if b.stall > 0 { each += Double(b.stall) / 60 }
         var waits = 0.0
-        if !b.sizesStick { waits += 2 * WindowSteps.timeout * Double(presses) }
+        // A browser already at its minimum takes none of a narrower size: as
+        // one that takes no size, nothing tells it from a late answer or a
+        // dropped call before the waits are out.
+        if !b.sizesStick || b.minWidth >= widthAtPress - 1 { waits += 2 * WindowSteps.timeout * Double(presses) }
         if b.dropsSizeCall != nil { waits += WindowSteps.timeout }
         return 0.5 + calls * each + waits
     }
@@ -651,7 +663,8 @@ struct RuleCheck {
 
     /// Rule 2 after showing from `start`; or, when it can't open, the window
     /// as it was. `mustOpen`: the browser can give the sidebar its least width.
-    mutating func shown(from start: CGRect, mustOpen: Bool, _ step: String) {
+    /// `offFrom`: the frame "never further off screen" is measured from, when not `start`.
+    mutating func shown(from start: CGRect, mustOpen: Bool, offFrom: CGRect? = nil, _ step: String) {
         let b = rig.fake.frame
         if rig.open {
             let far = rig.side == .left ? (b.maxX, start.maxX) : (b.minX, start.minX)
@@ -672,7 +685,7 @@ struct RuleCheck {
             if mustOpen { problems.append("\(step): didn't open, though the browser could make room (window \(start))") }
         }
         besideTheBrowser(step)
-        noFurtherOff(than: start, step)
+        noFurtherOff(than: offFrom ?? start, step)
     }
 
     /// Rule 3: the person's move or resize stands.
@@ -725,6 +738,20 @@ struct RuleCheck {
         } else if busy > bound {
             problems.append(String(format: "%@: kept moving the window %.0f ms after the last press or change, more than %.0f ms", step, busy * 1000, bound * 1000))
         }
+    }
+
+    /// The first of `checks` that finds nothing, or else the first: for an
+    /// end that two frames can rightly start from (a press during a show that
+    /// came before or after the window had been put on screen to close).
+    mutating func either(_ checks: [(inout RuleCheck) -> Void]) {
+        var first: RuleCheck?
+        for c in checks {
+            var copy = self
+            c(&copy)
+            if copy.problems.count == problems.count { self = copy; return }
+            if first == nil { first = copy }
+        }
+        if let first { self = first }
     }
 
     /// Rule 4: the browser takes the pair's frame.
@@ -884,12 +911,19 @@ struct GuardCase: CustomStringConvertible {
         var c = GuardCase(displays: displays, window: w, side: r.bool() ? .left : .right, width: Double(r.int(200...440)),
                           behaviour: b, reduceMotion: r.bool(0.15), actions: actions)
         c.during = (0..<2).map { _ in (show: r.bool(0.3) ? during(&r) : [], hide: r.bool(0.3) ? during(&r) : []) }
+        if b.tiler {
+            // The fake tiling app has one home, the first frame, and acts only at rest: it can't follow a
+            // window that a press during a show or hide moved on screen meanwhile (rule 4), as a real one
+            // re-tiling after every move would. Its put-back is then the person's move. No presses with it.
+            let noPress = { (d: [(at: Double, what: SidebarRig.During)]) in d.filter { if case .press = $0.what { false } else { true } } }
+            c.during = c.during.map { (show: noPress($0.show), hide: noPress($0.hide)) }
+        }
         return c
     }
 
     /// Whether the browser can give the sidebar its least width out of `frame`.
     func canOpen(from frame: CGRect) -> Bool {
-        behaviour.sizesStick && behaviour.minWidth <= frame.width - SidebarGeometry.widths.lowerBound
+        behaviour.sizesStick && max(behaviour.minWidth, 1) <= frame.width - SidebarGeometry.widths.lowerBound
     }
 
     /// Show, what the person does, hide; twice, each show and hide with what
@@ -906,9 +940,13 @@ struct GuardCase: CustomStringConvertible {
             if let put = rig.personPut {
                 check.personDid(put, "\(show), moved or resized by the person while it was carried out")
             } else if rig.askedOpen {
-                check.shown(from: start, mustOpen: canOpen(from: start), show)
+                // Pressed more than once, it may have closed meanwhile, on screen (rule 4), and opened from there.
+                let onScreen = pairFrame(browser: start, sidebar: 0, side: side)
+                check.either([start, onScreen].map { from in { $0.shown(from: from, mustOpen: canOpen(from: from), offFrom: start, show) } })
             } else {
-                check.hidden(from: start, sidebar: 0, wasOpen: false, "\(show), pressed again while it was carried out")
+                let step = "\(show), pressed again while it was carried out"
+                check.either([{ $0.hidden(from: start, sidebar: 0, wasOpen: false, step) },
+                              { $0.hidden(from: start, sidebar: 0, wasOpen: true, step) }])
             }
             if !rig.open, rig.askedOpen, rig.personPut == nil {
                 // Refused: the window is the person's again. Moved to a fresh frame, it stays there.
@@ -954,7 +992,7 @@ struct GuardCase: CustomStringConvertible {
                     check.personDid(put, "\(hide), moved or resized by the person while it was carried out")
                 } else if rig.askedOpen {
                     let pair = pairFrame(browser: b, sidebar: w, side: side)
-                    check.shown(from: pair, mustOpen: canOpen(from: pair), "\(hide), pressed again while it was carried out")
+                    check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: b, "\(hide), pressed again while it was carried out")
                     if rig.open {
                         let b2 = rig.fake.frame, w2 = rig.sidebarWidth
                         rig.toggle()
@@ -973,8 +1011,15 @@ struct GuardCase: CustomStringConvertible {
             }
             if !check.problems.isEmpty { break }
         }
+        if Self.verbose {
+            print("SidebarGuard case: \(self)\n  \(check.problems.joined(separator: "\n  "))")
+            for h in rig.fake.history { print("  \(h.byPerson ? "person" : "app/browser") \(h.frame)") }
+        }
         return check.problems
     }
+
+    /// `BETTERLINK_GUARD_ONLY`: the case's frames, every one it had, printed.
+    static var verbose = false
 }
 
 /// The sidebar's show and hide, end to end, against fake browser windows on
@@ -997,7 +1042,9 @@ struct GuardCase: CustomStringConvertible {
         let seed = env["BETTERLINK_GUARD_SEED"].flatMap { UInt64($0) } ?? 0x5EED_92
         let count = env["BETTERLINK_GUARD_CASES"].flatMap { Int($0) } ?? 2000
         var failed: [(Int, GuardCase, [String])] = []
-        for i in 0..<count {
+        let only = env["BETTERLINK_GUARD_ONLY"].map { Set($0.split(separator: ",").compactMap { Int($0) }) }
+        GuardCase.verbose = only != nil
+        for i in 0..<count where only?.contains(i) ?? true {
             var r = GuardRandom(seed: seed &+ UInt64(i) &* 0x9E37_79B9)
             let c = GuardCase.random(&r)
             let problems = c.run()
@@ -1146,6 +1193,13 @@ struct GuardCase: CustomStringConvertible {
             var check = RuleCheck(rig, displays: [screen])
             check.timely("refused")
             #expect(check.problems.isEmpty, "\(b): \(check.problems)")
+            // One note, saying why, over the window's frame.
+            #expect(SidebarRig.notices.map(\.0) == [.noRoom] && SidebarRig.notices.first.map { GuardFrames.same($0.1, start) } == true,
+                    "\(b): notes \(SidebarRig.notices)")
+            // Pressed again: it is known now that the window goes no narrower than 615. The note at once, nothing asked of the browser.
+            let calls = rig.fake.setCalls
+            rig.toggle(during: [])
+            #expect(!rig.open && rig.fake.setCalls == calls && SidebarRig.notices.count == 2, "\(b): pressed again, \(rig.fake.setCalls - calls) calls")
 
             // Pressed again while it is carried out: the last press wins.
             for presses in [[0.05], [0.05, 0.1], [0.3], [0.1, 0.4]] {
@@ -1182,6 +1236,7 @@ struct GuardCase: CustomStringConvertible {
                 run(c)
                 let rig = SidebarRig(displays: [screen], frame: w, side: side, width: 280, behaviour: .init())
                 rig.toggle()
+                #expect(SidebarRig.notices.isEmpty, "\(w) \(side): a note though it opened")
                 var want = w
                 want.size.width -= 280
                 if side == .left { want.origin.x += 280 }
