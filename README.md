@@ -69,7 +69,9 @@ betterlink finds a browser's profiles in its own files: `Local State` for Chromi
 
 ## Link Rules
 
-Each rule reads "Open … in a profile". Rules are checked top to bottom.
+Each rule reads "Open … in a profile". Rules are checked top to bottom, across every profile, and the first one that matches decides.
+
+The Link Rules page lists the profiles that have rules. Click one to see and edit only its rules; each keeps its number in the full order, and **All Rules in Order** shows the whole list. Grouping hides the order between profiles, so a profile's page says where it still matters: a rule for another profile above that takes the links a rule is written for ("domains matching example.com" in Personal above "domains matching app.example.com" in Work) is marked hidden, with a button to move it above, and an exception that only works while it stays above ("URLs starting with https://github.com/acme" in Work above "domains matching github.com" in Personal) says so on both rules. Editing one profile's rules leaves every other profile's rules in their places; new rules go last.
 
 - **domains matching** `example.com` matches example.com and every subdomain. It never matches `evil-example.com` or `example.com.evil.com`.
 - **URLs starting with** `https://app.example.com/billing` needs exactly that host, then that path, ending at a `/`, `?` or `#` (so it doesn't match `/billingx`); a prefix that reaches into the query (`?tab=`) is matched as plain text. Leave the scheme out to match both http and https.
@@ -190,7 +192,9 @@ If your shell then can't find `betterlink`, `~/.local/bin` isn't on your PATH. A
 
 ```sh
 betterlink status                                    # settings folder, counts, fallback, browsers
-betterlink rules list
+betterlink rules list                                # every rule in order, and which rules for other profiles come first
+betterlink rules profiles                            # the profiles that have rules, as the Link Rules page lists them
+betterlink rules list --profile Work                 # one profile's rules, numbered by their place in the full order
 betterlink rules add --kind domain --pattern example.com --profile Work
 betterlink test https://app.example.com/billing      # where it would open, and why
 betterlink keys add --keys control,command --profile Work   # hold ⌃⌘ to open in Work

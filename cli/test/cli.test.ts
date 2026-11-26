@@ -133,6 +133,35 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'rules', 'list').json.length).toBe(1)
   })
 
+  test('groups rules by profile and shows where another profile\'s rule comes first', () => {
+    const d = home()
+    const browser = chromium(d)
+    expect(run(d, 'profiles', 'add', '--browser', browser, '--directory', 'Profile 1', '--name', 'Work').code).toBe(0)
+    expect(run(d, 'profiles', 'add', '--browser', browser, '--directory', 'Default', '--name', 'Personal').code).toBe(0)
+    // 1 example.com in Personal hides 2 app.example.com in Work;
+    // 3 github.com/acme in Work is an exception to 4 github.com in Personal.
+    for (const [kind, pattern, profile] of [['domain', 'example.com', 'Personal'], ['domain', 'app.example.com', 'Work'],
+      ['startsWith', 'https://github.com/acme', 'Work'], ['domain', 'github.com', 'Personal']]) {
+      expect(run(d, 'rules', 'add', '--kind', kind, '--pattern', pattern, '--profile', profile).code).toBe(0)
+    }
+
+    const groups = run(d, 'rules', 'profiles').json
+    expect(groups.map((g: any) => [g.profileName, g.rules, g.positions, g.hidden]))
+      .toEqual([['Work', 2, [2, 3], 1], ['Personal', 2, [1, 4], 0]])
+
+    const work = run(d, 'rules', 'list', '--profile', 'Work').json
+    expect(work.map((r: any) => [r.position, r.pattern])).toEqual([[2, 'app.example.com'], [3, 'https://github.com/acme']])
+    expect(work[0].hiddenBy.position).toBe(1)
+    expect(work[0].hiddenBy.example).toBe('https://app.example.com/')
+    expect(work[1].hiddenBy).toBeNull()
+    expect(work[1].checkedBefore.map((r: any) => r.position)).toEqual([4])
+
+    // Moving the hidden rule above the one that hid it clears it.
+    expect(run(d, 'rules', 'move', work[0].id, '--to', '1').code).toBe(0)
+    expect(run(d, 'rules', 'profiles').json.map((g: any) => g.hidden)).toEqual([0, 0])
+    expect(run(d, 'rules', 'list', '--browser', browser).code).not.toBe(0)
+  })
+
   test('modifier keys pick a profile for the held keys only', () => {
     const d = home()
     const browser = chromium(d)
