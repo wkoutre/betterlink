@@ -2,7 +2,7 @@
 // (`make build` first) and a temporary settings folder.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -243,6 +243,104 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     })
     expect(r.status).toBe(0)
     expect(JSON.parse(readFileSync(join(d, 'sent.json'), 'utf8'))).toEqual({ standard: true })
+  })
+
+  // The tour (docs/tour.md): what the window shows, an agent can read, mark
+  // seen and put back. Nothing here opens a window: the temporary settings
+  // folder has no running app.
+  test('the tour: status, done, reset and what is new', () => {
+    const d = home()
+    const fresh = run(d, 'tour', 'status').json
+    expect(fresh.welcomed).toBe(false)
+    expect(fresh.showsNext).toBe('welcome')
+    expect(fresh.new).toEqual([])
+    // A step that does something says how an agent does the same (a step
+    // that only explains has neither a command nor a reason for none).
+    const steps = fresh.topics.flatMap((t: any) => t.steps)
+    const commands = steps.map((s: any) => s.command).filter(Boolean)
+    expect(commands.length).toBeGreaterThan(10)
+    for (const c of commands) expect(c).toStartWith('betterlink ')
+    for (const s of steps) expect(s.state).toBe('new')
+    // Nothing is new before the first run.
+    expect(run(d, 'tour', 'new').json.shown).toBe(false)
+
+    const done = run(d, 'tour', 'done').json
+    expect(done.welcomed).toBe(true)
+    expect(done.showsNext).toBe('nothing')
+    // A step for something this Mac lacks (Dia, a Chromium browser) is left for the day it applies.
+    expect(done.topics.flatMap((t: any) => t.steps).every((s: any) => s.state === (s.applies ? 'seen' : 'new'))).toBe(true)
+    expect(run(d, 'tour', 'new').json.shown).toBe(false)
+
+    // One step put back is What's New, and only that.
+    const back = run(d, 'tour', 'reset', '--step', 'link-rules').json
+    expect(back.new).toEqual(['link-rules'])
+    expect(back.showsNext).toBe('new')
+    expect(run(d, 'tour', 'new').json.shown).toBe(true)
+    expect(run(d, 'tour', 'done', '--topic', 'link-rules').json.new).toEqual([])
+
+    expect(run(d, 'tour', 'show', '--topic', 'feedback').json.shown).toBe(true)
+    // A bare word is refused, not dropped: `tour reset link-rules` must not forget everything.
+    for (const bad of [['show', '--topic', 'nope'], ['done', '--step', 'nope'], ['reset', '--step', 'welcome', '--topic', 'welcome'],
+      ['reset', 'link-rules'], ['done', 'sidebar'], ['show', 'sidebar']]) {
+      const r = run(d, 'tour', ...bad)
+      expect(r.code).not.toBe(0)
+    }
+    expect(run(d, 'tour', 'status').json.welcomed).toBe(true)
+    // All of it put back: the first run again.
+    const again = run(d, 'tour', 'reset').json
+    expect(again.welcomed).toBe(false)
+    expect(again.showsNext).toBe('welcome')
+  })
+
+  // The commands the tour's steps name are in the list an agent reads
+  // (scripts/gen-tour.py checks each step's command and options exist).
+  test('the tour, Sync and tab helper commands are listed for agents', () => {
+    const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
+    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup']) {
+      expect(llms).toContain(`betterlink ${c}`)
+    }
+  })
+
+  test('sync: a folder, what syncs, and off', () => {
+    const d = home()
+    expect(run(d, 'sync', 'get').json).toMatchObject({ on: false, folder: null })
+    const folder = mkdtempSync(join(tmpdir(), 'bl-sync-'))
+    const on = run(d, 'sync', 'set', '--folder', folder, '--global', 'off')
+    expect(on.code).toBe(0)
+    const now = run(d, 'sync', 'get').json
+    expect(now.on).toBe(true)
+    expect(realpathSync(now.folder)).toBe(realpathSync(folder))
+    expect(now.global).toBe(false)
+
+    // What of one Sidebar Profile syncs.
+    expect(run(d, 'sidebar', 'profiles', 'add', '--name', 'Work').code).toBe(0)
+    expect(run(d, 'sync', 'set', '--profile', 'Work', '--parts', 'favorites,name').code).toBe(0)
+    expect(run(d, 'sync', 'get').json.profiles).toEqual([expect.objectContaining({ name: 'Work', favorites: true, folders: false, appearance: true })])
+    expect(run(d, 'sync', 'set', '--profile', 'Work', '--parts', 'none').code).toBe(0)
+    expect(run(d, 'sync', 'get').json.profiles).toEqual([])
+
+    for (const bad of [['--folder', join(folder, 'missing')], ['--folder', folder, '--off', 'on'], ['--parts', 'favorites'], ['--profile', 'Work', '--parts', 'colour'], ['--profile', 'Work', '--parts', ','], []]) {
+      expect(run(d, 'sync', 'set', ...bad).code).not.toBe(0)
+    }
+    expect(run(d, 'sync', 'set', '--off', 'on').code).toBe(0)
+    expect(run(d, 'sync', 'get').json).toMatchObject({ on: false, folder: null })
+  })
+
+  // Read only: setting a helper up writes into the browser's own folder,
+  // which BETTERLINK_HOME does not move.
+  test('tab helpers: lists the browsers, and refuses one it does not know', () => {
+    const d = home()
+    const list = run(d, 'tabs', 'helpers').json.browsers
+    for (const b of list) expect(['setUp', 'notSetUp', 'pointsElsewhere']).toContain(b.helper)
+    expect(run(d, 'tabs', 'setup', '--browser', 'No Such Browser').code).not.toBe(0)
+    expect(run(d, 'tabs', 'setup', '--browser', 'Safari').code).not.toBe(0)
+    // With a temporary settings folder it refuses a real browser too, before writing anything.
+    for (const b of list) {
+      const r = run(d, 'tabs', 'setup', '--browser', b.browser)
+      expect(r.code).not.toBe(0)
+      expect(r.stdout + r.stderr).toContain('BETTERLINK_HOME')
+    }
+    expect(run(d, 'tabs', 'helpers').json.browsers).toEqual(list)
   })
 
   test('an app that is not there gives APP_NOT_FOUND and its hint', async () => {

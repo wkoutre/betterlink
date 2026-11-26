@@ -20,10 +20,11 @@ import Foundation
 ///    otherwise.
 /// 3. The focus counts only once it has held: the same window and the same
 ///    browser window focused at two looks `moment` apart (the caller looks
-///    again then, `settlesAt`), and never against a title that says no. Then
-///    it decides, between look-alikes too, and what it paired is kept through
-///    later look-alikes, for as long as it looks right or has not looked
-///    wrong for longer than `patience`.
+///    again then, `settlesAt`), and never against a title that says no (the
+///    title is waited on for `patience` at most). Then it decides, between
+///    look-alikes too, and what it paired is kept through later look-alikes,
+///    for as long as it looks right or has not looked wrong for longer than
+///    `patience`.
 /// 4. A word on the focus that hasn't held changes nothing. Without the
 ///    focus, a pairing needs title and frame to match, nothing else that is
 ///    free to match as well, and every other window of the browser at that
@@ -66,7 +67,8 @@ public struct WindowPairing: Sendable {
         /// reports (an Incognito window it isn't allowed in, or a window of a
         /// profile without the extension), or it can't be told from another.
         case unseen
-        /// Not yet: a word on the focus is being given its moment to hold.
+        /// Not yet: a word on the focus is being given its moment to hold, or
+        /// the title of the window it names is, for no longer than `patience`.
         case waiting
     }
 
@@ -95,7 +97,8 @@ public struct WindowPairing: Sendable {
     private struct Focus: Sendable { var window: Int; var hit: Hit; var since: Double }
     /// The focus as both sides had it at the last look, by process.
     private var focus: [Int: Focus] = [:]
-    /// When a word on the focus will have held: the caller looks again then.
+    /// When a word on the focus will have held, or what is waited on or kept
+    /// meanwhile runs out: the caller looks again then.
     public private(set) var settlesAt: Double?
 
     public init() {}
@@ -134,6 +137,24 @@ public struct WindowPairing: Sendable {
     public static func unlisted(_ server: [ServerWindow], followed: Set<UInt32>) -> [Int: [WindowBounds]] {
         let could = server.filter { $0.layer == 0 && $0.bounds.width >= smallest && $0.bounds.height >= smallest && !followed.contains($0.number) }
         return Dictionary(grouping: could, by: \.pid).mapValues { $0.map(\.bounds) }
+    }
+
+    /// Every browser window the extension reports now. When it differs from
+    /// the last, a window came or went on the browser's side: the caller
+    /// counts the windows again and checks which sidebars are on screen.
+    public static func reported(in sessions: [BrowserSession]) -> Set<Hit> {
+        Set(sessions.flatMap { s in s.store.windows.keys.map { Hit(session: s.id, windowId: $0) } })
+    }
+
+    /// The followed windows (by number) the window server no longer has: those
+    /// are closed, whatever Accessibility has or hasn't said. `server`: every
+    /// window of their processes, at any layer and on any Space, so one that
+    /// is minimized, hidden or on another Space is there; nil when the window
+    /// server gave no list, which says nothing.
+    public static func closed(_ followed: [UInt32], in server: [ServerWindow]?) -> [UInt32] {
+        guard let server else { return [] }
+        let alive = Set(server.map(\.number))
+        return followed.filter { !alive.contains($0) }
     }
 
     /// The pairings the focus made, for the trace.
@@ -238,7 +259,14 @@ public struct WindowPairing: Sendable {
             } else if e.titles(w) == false || same?.lapsedSince != nil {
                 // Never against a title that says no, and a pairing that
                 // looks wrong now is not made the focus's: once it looks right.
-                waiting = same == nil
+                // A title is waited on no longer than titles are ever behind:
+                // one that still says no then (a word on the focus that was
+                // missed, a browser that titles its windows otherwise) leaves
+                // a window that can't be seen, not one about to be.
+                if same == nil, now - since < Self.patience - 1e-9 {
+                    waiting = true
+                    settlesAt = min(settlesAt ?? .infinity, since + Self.patience)
+                }
             } else if now - since >= Self.moment - 1e-9 {
                 // It has held: this window is that one, whoever looks like it.
                 for (k, p) in pairs where p.hit == e.hit && k != w.id { pairs[k] = nil }

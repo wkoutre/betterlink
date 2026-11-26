@@ -447,6 +447,9 @@ final class AppModel: ObservableObject {
                 SidebarLibraryModel.shared.reload()
                 // `betterlink sidebar settings set` writes the sidebar's settings.
                 SidebarController.shared.reloadSettings()
+                // `betterlink tabs setup` and `betterlink sync set` write theirs too.
+                TabsModel.shared.registrationChanged()
+                SyncController.shared.reloadSettings()
                 self.refreshPermissions()
                 // `betterlink menu-bar set` writes the setting from another process.
                 let shown = MenuBarIcon.isShown(in: MenuBarIcon.defaults())
@@ -457,6 +460,8 @@ final class AppModel: ObservableObject {
                 if toast != self.showsLinkToast { self.showsLinkToast = toast }
                 let where_ = LinkToast.position(in: MenuBarIcon.defaults())
                 if where_ != self.linkToastPosition { self.linkToastPosition = where_ }
+                // `betterlink tour …` changed what was seen, or asked for the tour.
+                TourModel.shared.reload()
             }
         }
     }

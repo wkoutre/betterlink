@@ -45,7 +45,7 @@ final class WindowTracker: NSObject {
     /// button is up.
     var onSettle: ((Target) -> Void)?
     /// Another window has the focus, in its browser or of all, or a browser
-    /// has made a window (followed or not).
+    /// has made or lost a window (followed or not).
     var onFocus: (() -> Void)?
     /// What is on screen, or in which order, may have changed. `settled`: a
     /// moment later, when Spaces and windows have stopped moving.
@@ -181,6 +181,19 @@ final class WindowTracker: NSObject {
     /// window number, and whether the extension is connected for it.
     func said(_ words: [pid_t: [CGWindowID: WindowKinds.Word]], listening: (BrowserWatcher) -> Bool) {
         for w in watchers.values { w.said(words[w.pid] ?? [:], listening: listening(w)) }
+    }
+
+    /// The window server no longer has `w`: it is closed, whether or not
+    /// Accessibility has said so yet.
+    func closed(_ w: TrackedWindow) {
+        if let watcher = w.watcher { watcher.remove(w) } else { removed(w, closed: true) }
+    }
+
+    /// The window server's list of the processes `pids`: what was known of
+    /// their windows that are no longer in it is forgotten. A window that was
+    /// judged and never followed says nothing when it closes.
+    func forget(missingFrom alive: Set<UInt32>, of pids: Set<pid_t>) {
+        for w in watchers.values where pids.contains(w.pid) { w.forget(missingFrom: alive) }
     }
 
     /// `closed`: the window is gone, rather than no longer followed.

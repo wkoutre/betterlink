@@ -191,6 +191,8 @@ final class SidebarController: ObservableObject {
     /// The tab sync, while the sidebar is on.
     private var feeds: [AnyCancellable] = []
     private var sessions: [BrowserSession] = []
+    /// The browser windows the extension reported last (`WindowPairing.reported`).
+    private var reported: Set<WindowPairing.Hit> = []
     private var profiles: [String: SidebarLook.Profile] = [:]
     private var ledger = HoldLedger()
 
@@ -202,9 +204,20 @@ final class SidebarController: ObservableObject {
             // @Published says what is about to be set: use what the sink is given.
             feeds = [
                 TabsModel.shared.$sessions.sink { [weak self] s in
-                    self?.sessions = s
-                    self?.traceListed()
-                    self?.pair()
+                    guard let self else { return }
+                    self.sessions = s
+                    self.traceListed()
+                    // A window came or went on the browser's side, which it
+                    // says at once and whatever has the focus: the windows
+                    // are counted again (one the window server no longer has
+                    // is closed), and a sidebar whose window is no longer on
+                    // screen goes, even before Accessibility says it is gone.
+                    let reported = WindowPairing.reported(in: s)
+                    let cameOrWent = reported != self.reported
+                    if cameOrWent, DragTrace.enabled { DragTrace.log("windows: the extension reports \(reported.count), was \(self.reported.count)") }
+                    self.reported = reported
+                    self.pair(countingWindows: cameOrWent)
+                    if cameOrWent { self.tracker.orderMayHaveChanged() }
                 },
                 TabsModel.shared.$profiles.sink { [weak self] p in
                     self?.profiles = p.mapValues { SidebarLook.Profile(ref: $0.ref, name: $0.name, color: $0.color) }
@@ -290,9 +303,14 @@ final class SidebarController: ObservableObject {
     /// its space back.
     private func removed(_ w: TrackedWindow, closed: Bool) {
         guard let i = instances.removeValue(forKey: w.id) else {
-            if awaiting.removeValue(forKey: w.id) != nil { pair(countingWindows: true) }
+            // One that was only awaiting the browser's word: no sidebar to close.
+            if awaiting.removeValue(forKey: w.id) != nil {
+                DragTrace.log("removed: window \(w.number) of \(w.target.bundleId), \(closed ? "closed" : "no longer followed"), awaiting its word")
+                pair(countingWindows: true)
+            }
             return
         }
+        DragTrace.log("removed: window \(w.number) of \(w.target.bundleId), \(closed ? "closed" : "no longer followed")")
         i.close(closed: closed)
         takenOver.remove(w.id)
         if closed {
@@ -380,19 +398,37 @@ final class SidebarController: ObservableObject {
     ///
     /// `countingWindows`: reads the window server's list again first. Only on
     /// what can change it (a window made, closed, come to rest or focused, an
-    /// app coming forward), never when tab lists or titles arrive, however
-    /// often, and never on a timer.
+    /// app coming forward, the extension reporting one more or fewer), never
+    /// when tab lists or titles arrive, however often, and never on a timer.
+    /// A followed window the list no longer has is closed
+    /// (`WindowPairing.closed`): it is let go, which comes back here.
     private func pair(countingWindows: Bool = false) {
         guard let h = NSScreen.screens.first?.frame.height else { return }
         // Every window followed, those still awaiting the browser's word too:
         // the pairing is what gives it.
         let followed = (instances.values.map(\.window) + awaiting.values).sorted { $0.id < $1.id }
-        if countingWindows {
+        if countingWindows, followed.isEmpty {
+            server = []
+        } else if countingWindows {
             let began = CACurrentMediaTime()
-            server = followed.isEmpty ? [] : WindowServer.windows(of: Set(followed.map { Int($0.target.pid) }))
-            if DragTrace.enabled, !followed.isEmpty {
+            let pids = Set(followed.map(\.target.pid))
+            let read = WindowServer.windows(of: Set(pids.map { Int($0) }))
+            if DragTrace.enabled {
                 DragTrace.log(String(format: "windows: the window server's list read in %.2f ms, %d of the browsers' at the standard layer",
-                                     (CACurrentMediaTime() - began) * 1000, server.count))
+                                     (CACurrentMediaTime() - began) * 1000, read?.filter { $0.layer == 0 }.count ?? -1))
+            }
+            // One awaiting the browser's word closes like any other.
+            let gone = WindowPairing.closed(followed.map(\.number), in: read)
+            if let w = followed.first(where: { gone.contains($0.number) }) {
+                DragTrace.log("closed: the window server no longer has window \(w.number) of \(w.target.bundleId)")
+                tracker.closed(w)
+                return
+            }
+            if let read {
+                server = read
+                // A window that was judged and never followed says nothing
+                // when it closes: what was known of it goes with the list.
+                tracker.forget(missingFrom: Set(read.map(\.number)), of: pids)
             }
         }
         let windows = followed.map { w -> WindowPairing.Window in

@@ -157,9 +157,9 @@ enum WindowServer {
     /// Every window of the processes `pids`, on every Space and at every layer:
     /// all the window server tells without Screen Recording (no titles). A
     /// few milliseconds for a few hundred windows, so read on window and app
-    /// events only.
-    static func windows(of pids: Set<Int>) -> [WindowPairing.ServerWindow] {
-        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+    /// events only. Nil when the window server gives no list.
+    static func windows(of pids: Set<Int>) -> [WindowPairing.ServerWindow]? {
+        guard let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] else { return nil }
         return list.compactMap { info in
             guard let pid = info[kCGWindowOwnerPID as String] as? Int, pids.contains(pid), let n = number(info),
                   let layer = info[kCGWindowLayer as String] as? Int,

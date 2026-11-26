@@ -20,11 +20,12 @@ enum AgentCommand {
         "menu-bar.get", "menu-bar.set",
         "updates.get", "updates.set",
         "toast.get", "toast.set",
+        "sync.get", "sync.set",
     ]
 
     static func run(_ args: [String]) -> Int32 {
         guard let command = args.first else {
-            return emit(AgentResponseJSON.failure("Usage: Betterlink agent <command> ['<json>']. Commands: \((Agent.commands + appCommands + tabCommands).joined(separator: ", "))."))
+            return emit(AgentResponseJSON.failure("Usage: Betterlink agent <command> ['<json>']. Commands: \(allCommands.joined(separator: ", "))."))
         }
         var input: [String: Any] = [:]
         if args.count > 1 {
@@ -38,8 +39,19 @@ enum AgentCommand {
 
         if tabCommands.contains(command) {
             let out = runTabCommand(command, input)
-            if command == "sidebar.settings.set" && isOK(out) { notifyApp() }
+            if ["sidebar.settings.set", "tabs.helper.set"].contains(command) && isOK(out) { notifyApp() }
             return emit(out)
+        }
+        if TourAgent.commands.contains(command) {
+            let defaults = MenuBarIcon.defaults()
+            switch TourAgent.run(command, input: input, defaults: defaults, met: TourConditions.met(installed: installed)) {
+            case .success(let data):
+                defaults.synchronize()  // the running app reads it as soon as it is notified
+                if command != "tour.status" { notifyApp() }
+                return emit(AgentResponseJSON.success(data))
+            case .failure(let refusal):
+                return emit(AgentResponseJSON.failure(refusal.message))
+            }
         }
         if appCommands.contains(command) {
             let out = runAppCommand(command, input, folder: folder)
@@ -51,13 +63,15 @@ enum AgentCommand {
         let compiler = needsCompiler ? try? TypeScriptCompiler(typescriptJS: ts.appendingPathComponent("typescript.js"),
                                                                libDirectory: ts.appendingPathComponent("lib")) : nil
         guard Agent.commands.contains(command) else {
-            return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \((Agent.commands + appCommands + tabCommands).joined(separator: ", "))."))
+            return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \(allCommands.joined(separator: ", "))."))
         }
         let response = Agent.run(command, input: input, env: AgentEnvironment(folder: folder, installed: installed, compiler: compiler))
         let out = response.json()
         if changes(command) && response.ok { notifyApp() }
         return emit(out)
     }
+
+    static var allCommands: [String] { Agent.commands + appCommands + tabCommands + TourAgent.commands }
 
     private static func changes(_ command: String) -> Bool {
         !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check"].contains(command)
@@ -175,6 +189,10 @@ enum AgentCommand {
             d.synchronize()
             return AgentResponseJSON.success(["shown": LinkToast.isShown(in: d), "position": LinkToast.position(in: d).rawValue,
                                               "note": "This Mac only."])
+        case "sync.get":
+            return AgentResponseJSON.success(syncSettings(folder: folder))
+        case "sync.set":
+            return setSyncSettings(input, folder: folder)
         case "folder.get":
             return AgentResponseJSON.success(["path": folder.directory.path,
                                               "isStandard": folder.directory == SettingsFolder.defaultDirectory])
@@ -205,6 +223,80 @@ enum AgentCommand {
         default:
             return AgentResponseJSON.failure("Unknown command \(command).")
         }
+    }
+
+    // MARK: Sync
+
+    /// General › Sync on this Mac, from the keys SyncController uses.
+    private static func syncSettings(folder: SettingsFolder) -> [String: Any] {
+        let d = MenuBarIcon.defaults()
+        let selection = SyncDefaults.selection(in: d)
+        let names = Dictionary(((try? SidebarStore(folder: folder).load())?.profiles ?? []).map { ($0.id, $0.name) }, uniquingKeysWith: { a, _ in a })
+        return [
+            "on": SyncDefaults.folder(in: d) != nil,
+            "folder": SyncDefaults.folder(in: d)?.path ?? NSNull(),
+            "global": selection.global,
+            "profiles": selection.profiles.sorted { $0.key.uuidString < $1.key.uuidString }.map { entry -> [String: Any] in
+                ["id": entry.key.uuidString, "name": names[entry.key] ?? NSNull(),
+                 "favorites": entry.value.favorites, "folders": entry.value.folders, "appearance": entry.value.appearance]
+            },
+        ]
+    }
+
+    private static func setSyncSettings(_ input: [String: Any], folder: SettingsFolder) -> Data {
+        func bool(_ key: String) -> Bool?? {
+            guard let v = input[key] else { return .some(nil) }
+            guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+            return .some(n.boolValue)
+        }
+        guard let off = bool("off"), let global = bool("global") else {
+            return AgentResponseJSON.failure("off and global must be true or false.")
+        }
+        let d = MenuBarIcon.defaults()
+        var target: URL?
+        if let v = input["folder"] {
+            guard off != true else { return AgentResponseJSON.failure("Give folder or off, not both.") }
+            guard let path = v as? String, !path.isEmpty else { return AgentResponseJSON.failure("folder must be a folder's path.") }
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath, isDirectory: true).standardizedFileURL
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+                return AgentResponseJSON.failure("No folder at \(url.path). Make it first, inside a folder Dropbox, Google Drive or iCloud Drive keeps in sync.")
+            }
+            target = url
+        }
+        var selection = SyncDefaults.selection(in: d)
+        var changedSelection = false
+        if let global { selection.global = global; changedSelection = true }
+        if let v = input["profile"] {
+            guard let wanted = v as? String, !wanted.isEmpty else { return AgentResponseJSON.failure("profile must be a Sidebar Profile's name or id (sidebar list).") }
+            let profiles = (try? SidebarStore(folder: folder).load())?.profiles ?? []
+            let hits = profiles.filter { $0.id.uuidString.lowercased() == wanted.lowercased() || $0.name.lowercased() == wanted.lowercased() }
+            guard hits.count == 1, let profile = hits.first else {
+                return AgentResponseJSON.failure(hits.isEmpty ? "No Sidebar Profile \"\(wanted)\" (sidebar list)." : "More than one Sidebar Profile is named \"\(wanted)\"; give its id (sidebar list).")
+            }
+            guard let parts = input["parts"] as? [String] else {
+                return AgentResponseJSON.failure("With profile, give parts: a list of favorites, folders and name; an empty list keeps the profile on this Mac.")
+            }
+            let known = ["favorites", "folders", "name"]
+            if let bad = parts.first(where: { !known.contains($0) }) {
+                return AgentResponseJSON.failure("No part \"\(bad)\". Parts: \(known.joined(separator: ", ")).")
+            }
+            selection.profiles[profile.id] = parts.isEmpty ? nil
+                : SyncSelection.Parts(favorites: parts.contains("favorites"), folders: parts.contains("folders"), appearance: parts.contains("name"))
+            changedSelection = true
+        } else if input["parts"] != nil {
+            return AgentResponseJSON.failure("parts needs profile: the Sidebar Profile they belong to.")
+        }
+        if target == nil, off != true, !changedSelection {
+            return AgentResponseJSON.failure("Give any of folder, off, global, or profile with parts.")
+        }
+        if let target { SyncDefaults.setFolder(target, in: d) }
+        if off == true { SyncDefaults.setFolder(nil, in: d) }
+        if changedSelection { SyncDefaults.setSelection(selection, in: d) }
+        d.synchronize()  // the running app reads it as soon as it is notified
+        var out = syncSettings(folder: folder)
+        out["note"] = "This Mac only. A running betterlink starts syncing at once; otherwise it does when it next opens."
+        return AgentResponseJSON.success(out)
     }
 
     /// betterlink is the default browser only if it opens both http and https links.

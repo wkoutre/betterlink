@@ -42,7 +42,7 @@ SWIFT_TEST_FLAGS ?= -Xswiftc -F -Xswiftc $(CLT_FRAMEWORKS) -Xlinker -F -Xlinker 
 	-Xlinker -rpath -Xlinker $(CLT_FRAMEWORKS) -Xlinker -rpath -Xlinker $(DEVELOPER_DIR)/Library/Developer/usr/lib
 endif
 
-.PHONY: fetch tokens icon cli build test test-cli test-tabs check-idle install run clean
+.PHONY: fetch tokens tour icon cli build test test-cli test-tabs check-idle install run clean
 
 # The TypeScript compiler bundled for config.ts, checksum-pinned.
 fetch:
@@ -52,8 +52,15 @@ fetch:
 tokens:
 	python3 scripts/gen-tokens.py
 
+# Regenerates the tour's Swift registry from Tour/tour.json and checks that
+# the tour covers the app (docs/tour.md).
+tour:
+	python3 scripts/gen-tour.py
+
 test: fetch
 	python3 scripts/gen-tokens.py --check
+	python3 scripts/gen-tour.py --check
+	python3 scripts/check-tour-pr.py --self-test
 	$(SWIFTPM_LOCK) swift test $(SWIFT_JOBS) $(SWIFT_TEST_FLAGS)
 
 # The betterlink command (cli/), compiled with Bun into one executable that
