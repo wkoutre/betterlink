@@ -80,6 +80,7 @@ final class SidebarController: ObservableObject {
         memory.prune(alive: alive)
         chosen.prune(alive: alive)
         tracker.onAdded = { [weak self] w in self?.added(w) }
+        tracker.onKnown = { [weak self] w in self?.known(w) }
         tracker.onRemoved = { [weak self] w, closed in self?.removed(w, closed: closed) }
         tracker.onChange = { [weak self] t in self?.changed(t) }
         tracker.onSettle = { [weak self] t in self?.settled(t) }
@@ -260,7 +261,16 @@ final class SidebarController: ObservableObject {
 
     // MARK: - Windows
 
+    /// Windows followed for their title and place only, by id: they get no
+    /// sidebar until the browser's word, through the pairing, says they are
+    /// browser windows (BrowserWatcher).
+    private var awaiting: [Int: TrackedWindow] = [:]
+
     private func added(_ w: TrackedWindow) {
+        guard !w.awaitsWord else {
+            awaiting[w.id] = w
+            return pair(countingWindows: true)
+        }
         let t = w.target
         instances[w.id] = SidebarInstance(window: w, sidebar: self,
                                           hidden: chosen.hidden(window: w.number, pid: t.pid) ?? collapsed,
@@ -269,10 +279,20 @@ final class SidebarController: ObservableObject {
         arrange()
     }
 
+    /// A window that waited for the browser's word is a browser window.
+    private func known(_ w: TrackedWindow) {
+        awaiting[w.id] = nil
+        added(w)
+        takeOverFront()
+    }
+
     /// `closed`: the window is gone; else only no longer followed, and it gets
     /// its space back.
     private func removed(_ w: TrackedWindow, closed: Bool) {
-        guard let i = instances.removeValue(forKey: w.id) else { return }
+        guard let i = instances.removeValue(forKey: w.id) else {
+            if awaiting.removeValue(forKey: w.id) != nil { pair(countingWindows: true) }
+            return
+        }
         i.close(closed: closed)
         takenOver.remove(w.id)
         if closed {
@@ -286,7 +306,10 @@ final class SidebarController: ObservableObject {
     }
 
     private func changed(_ t: WindowTracker.Target) {
-        guard let i = instances[t.id] else { return }
+        guard let i = instances[t.id] else {
+            if awaiting[t.id] != nil { pair() }
+            return
+        }
         let was = i.reported
         i.reported = t
         if was.title != t.title { pair() }
@@ -300,7 +323,10 @@ final class SidebarController: ObservableObject {
     }
 
     private func settled(_ t: WindowTracker.Target) {
-        guard let i = instances[t.id] else { return }
+        guard let i = instances[t.id] else {
+            if awaiting[t.id] != nil { pair(countingWindows: true) }
+            return
+        }
         i.settle(t)
         pair(countingWindows: true) // by where it rests now
     }
@@ -358,31 +384,45 @@ final class SidebarController: ObservableObject {
     /// often, and never on a timer.
     private func pair(countingWindows: Bool = false) {
         guard let h = NSScreen.screens.first?.frame.height else { return }
+        // Every window followed, those still awaiting the browser's word too:
+        // the pairing is what gives it.
+        let followed = (instances.values.map(\.window) + awaiting.values).sorted { $0.id < $1.id }
         if countingWindows {
             let began = CACurrentMediaTime()
-            server = instances.isEmpty ? [] : WindowServer.windows(of: Set(instances.values.map { Int($0.window.target.pid) }))
-            if DragTrace.enabled, !instances.isEmpty {
+            server = followed.isEmpty ? [] : WindowServer.windows(of: Set(followed.map { Int($0.target.pid) }))
+            if DragTrace.enabled, !followed.isEmpty {
                 DragTrace.log(String(format: "windows: the window server's list read in %.2f ms, %d of the browsers' at the standard layer",
                                      (CACurrentMediaTime() - began) * 1000, server.count))
             }
         }
-        let windows = instances.values.sorted { $0.window.id < $1.window.id }.map { i -> WindowPairing.Window in
-            let t = i.window.target
+        let windows = followed.map { w -> WindowPairing.Window in
+            let t = w.target
             let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: h)
             return .init(id: t.id, pid: Int(t.pid), app: t.appName,
                          frame: WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height),
-                         title: t.title, focused: i.window.isFocused)
+                         title: t.title, focused: w.isFocused)
         }
-        // A popup or an app window the extension reports is never the window beside a sidebar.
+        // Popups and app windows the extension reports are handed over too:
+        // each accounts for its own window where the windows at a place are
+        // counted, and what a window is paired with is the browser's word for it.
         let before = pairing.byFocus, was = found
-        found = pairing.update(windows, others: WindowPairing.unlisted(server, followed: Set(instances.values.map(\.window.number))),
-                               in: sessions.map(\.normalWindowsOnly), now: CACurrentMediaTime())
+        found = pairing.update(windows, others: WindowPairing.unlisted(server, followed: Set(followed.map(\.number))),
+                               in: sessions, now: CACurrentMediaTime())
         if DragTrace.enabled {
-            for (id, f) in found where was[id] != f { DragTrace.log("pair: window \(instances[id]?.window.number ?? 0): \(f)") }
-            let after = pairing.byFocus, number = { [instances] (id: Int) in instances[id].map { String($0.window.number) } ?? "?" }
+            let numbers = Dictionary(followed.map { ($0.id, $0.number) }, uniquingKeysWith: { a, _ in a })
+            let number = { (id: Int) in numbers[id].map { String($0) } ?? "?" }
+            for (id, f) in found where was[id] != f { DragTrace.log("pair: window \(number(id)): \(f)") }
+            let after = pairing.byFocus
             for (id, hit) in after where before[id] != hit { DragTrace.log("pairing: window \(number(id)) is window \(hit.windowId) of \(hit.session) by the focus") }
             for (id, hit) in before where after[id] != hit { DragTrace.log("pairing: window \(number(id)) is no longer window \(hit.windowId) of \(hit.session) by the focus") }
         }
+        // The browser's own word for each window, and whether one can come.
+        var words: [pid_t: [CGWindowID: WindowKinds.Word]] = [:]
+        for w in followed {
+            guard let word = WindowWord.word(for: found[w.id] ?? .unseen, in: sessions) else { continue }
+            words[w.target.pid, default: [:]][w.number] = word == .normal ? .normal : .other
+        }
+        tracker.said(words) { [sessions] in !WindowPairing.candidates(pid: Int($0.pid), app: $0.name, in: sessions).isEmpty }
         refreshLooks()
         // A word on the focus counts once it has held: one more look then.
         pairAgain?.cancel()

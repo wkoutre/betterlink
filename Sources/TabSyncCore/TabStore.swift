@@ -11,8 +11,8 @@ public struct BrowserWindow: Equatable, Identifiable, Sendable {
     /// (`chrome.windows`). Nil from an extension older than 0.3.2.
     public var type: String?
 
-    /// A normal window, the only kind that has a sidebar. One the extension
-    /// gave no type for counts as normal.
+    /// A normal window, the only kind that has a sidebar (`WindowWord`). One
+    /// the extension gave no type for counts as normal.
     public var isNormal: Bool { type == nil || type == "normal" }
 }
 
@@ -78,18 +78,6 @@ public struct TabStore: Equatable, Sendable {
     }
 
     public var tabCount: Int { tabs.count }
-
-    /// The store with the browser's normal windows only: a popup or an app
-    /// window is left out, with its tabs.
-    public var normalWindowsOnly: TabStore {
-        var s = self
-        for (id, w) in windows where !w.isNormal {
-            for tab in w.tabIds { s.tabs[tab] = nil }
-            s.windows[id] = nil
-            s.windowOrder.removeAll { $0 == id }
-        }
-        return s
-    }
 
     // MARK: - internals
 

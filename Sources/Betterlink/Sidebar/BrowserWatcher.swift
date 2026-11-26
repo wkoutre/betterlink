@@ -14,6 +14,10 @@ final class TrackedWindow {
     private(set) weak var watcher: BrowserWatcher?
     var target: WindowTracker.Target
     var settleWork: DispatchWorkItem?
+    /// Followed for its title and place only, with no sidebar yet: whether it
+    /// is a browser window is for the browser to say, through the pairing
+    /// (`BrowserWatcher.said`).
+    fileprivate(set) var awaitsWord = false
 
     private static var lastId = 0
 
@@ -39,8 +43,8 @@ final class TrackedWindow {
         return true
     }
 
-    /// Whether it is its browser's focused main window.
-    var isFocused: Bool { watcher?.focused === self }
+    /// Whether it has its browser's focus now, for the pairing.
+    var isFocused: Bool { watcher?.hasFocus === self }
 }
 
 /// Watches one running browser's windows through one AXObserver: windows
@@ -64,8 +68,19 @@ final class BrowserWatcher {
     private var kinds = WindowKinds()
     /// The next look at each window not known yet, by window number.
     private var looks: [CGWindowID: DispatchWorkItem] = [:]
-    /// The browser's focused main window, whether or not it is in front.
+    /// The window with a sidebar that last had the browser's focus, whether
+    /// or not the browser is in front.
     private(set) var focused: TrackedWindow?
+    /// The followed window that has the browser's focus now: nil while a
+    /// standard window that isn't followed has it (a palette, an app window).
+    /// The browser then says its popup has the focus, and the window that
+    /// last had it must not pass for the one meant.
+    private(set) var hasFocus: TrackedWindow?
+    /// The windows awaiting the browser's word, by window number: since when,
+    /// and the end of the wait.
+    private var awaited: [CGWindowID: (since: CFTimeInterval, end: DispatchWorkItem)] = [:]
+    /// Whether `act` is to run once the pairing that spoke is done.
+    private var acting = false
 
     var isHidden: Bool { app.isHidden }
 
@@ -126,10 +141,13 @@ final class BrowserWatcher {
         }
         observer = nil
         focused = nil
+        hasFocus = nil
         for w in windows { w.settleWork?.cancel() }
         windows = []
         looks.values.forEach { $0.cancel() }
         looks = [:]
+        awaited.values.forEach { $0.end.cancel() }
+        awaited = [:]
     }
 
     // MARK: - Windows
@@ -154,15 +172,79 @@ final class BrowserWatcher {
     }
 
     /// Lets go of followed windows that turned out not to be browser windows:
-    /// followed while their browser had not been seen with tabs, and never
-    /// seen with any since. Called on the settled pass, never mid-event. They
-    /// are still open, so each gets its space back.
+    /// followed while nothing could tell, and since then called a popup or an
+    /// app window by the browser, or never seen with tabs once the browser
+    /// showed some. Called on the settled pass, never mid-event. They are
+    /// still open, so each gets its space back.
     func dropNotBrowser() {
         for w in windows where kinds.kind(of: w.number) == .notBrowser {
             DragTrace.log("kinds: \(bundleId) window \(w.number) is not a browser window after all: let go")
-            for n in Self.windowEvents { if let obs = observer { AXObserverRemoveNotification(obs, w.element, n as CFString) } }
-            remove(w, closed: false)
+            letGo(w)
         }
+    }
+
+    /// Stops following a window that is still open.
+    private func letGo(_ w: TrackedWindow) {
+        for n in Self.windowEvents { if let obs = observer { AXObserverRemoveNotification(obs, w.element, n as CFString) } }
+        remove(w, closed: false)
+    }
+
+    // MARK: - The browser's own word
+
+    /// The browser's own word for this browser's windows, as the pairing has
+    /// it now: what the extension calls the browser window each is paired
+    /// with. `listening`: the extension is connected for this browser, so a
+    /// word can come. Acted on after the pairing that says it is done.
+    func said(_ words: [CGWindowID: WindowKinds.Word], listening: Bool) {
+        let was = kinds
+        kinds.listening = listening
+        kinds.said(words)
+        guard kinds != was else { return }
+        for (n, word) in words {
+            guard let wait = awaited.removeValue(forKey: n) else { continue }
+            wait.end.cancel()
+            DragTrace.log(String(format: "kinds: %@ window %u waited %.0f ms for its word: %@", bundleId, n,
+                                 (CACurrentMediaTime() - wait.since) * 1000, word == .normal ? "normal" : "not normal"))
+        }
+        guard !acting else { return }
+        acting = true
+        DispatchQueue.main.async { [weak self] in
+            self?.acting = false
+            self?.act()
+        }
+    }
+
+    /// Acts on what each followed window is now known to be.
+    private func act() {
+        guard observer != nil else { return }
+        for w in windows { judge(w.element, w.number) }
+    }
+
+    /// A window only the browser's word can tell is followed without a
+    /// sidebar, and waits for that word no longer than `WindowKinds.wordWait`.
+    private func awaitWord(for w: TrackedWindow) {
+        let n = w.number
+        let end = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, let wait = self.awaited.removeValue(forKey: n) else { return }
+                self.kinds.waited(n)
+                DragTrace.log(String(format: "kinds: %@ window %u waited %.0f ms for its word: none came", self.bundleId, n,
+                                     (CACurrentMediaTime() - wait.since) * 1000))
+                self.act()
+            }
+        }
+        awaited[n] = (CACurrentMediaTime(), end)
+        DispatchQueue.main.asyncAfter(deadline: .now() + WindowKinds.wordWait, execute: end)
+    }
+
+    /// A window followed without a sidebar is a browser window: it gets one.
+    private func show(_ w: TrackedWindow) {
+        guard w.awaitsWord else { return }
+        w.awaitsWord = false
+        awaited.removeValue(forKey: w.number)?.end.cancel()
+        if hasFocus === w { focused = w }
+        tracker.onKnown?(w)
+        tracker.scheduleSettle(w)
     }
 
     /// Reads every window again, as far as the browser answers.
@@ -235,17 +317,24 @@ final class BrowserWatcher {
         for (n, r) in read {
             DragTrace.log("kinds: \(bundleId) window \(n): tab groups \(r.tabGroups), tabs \(r.tabs): \(kinds.kind(of: n))")
         }
-        if kinds.readable, !was { for w in windows { judge(w.element, w.number) } }
+        if kinds.readable != was { act() }
     }
 
-    /// Acts on what a window is now known to be: a browser window is followed,
-    /// and one that is not is left alone (if it was followed, it goes on the
-    /// settled pass). A window whose tabs haven't been seen gets its next look.
+    /// Acts on what a window is now known to be. A browser window is followed
+    /// and gets its sidebar. One that only the browser's word can tell is
+    /// followed without one, so the pairing can give that word. One that is
+    /// not a browser window is left alone: if it had a sidebar it goes on the
+    /// settled pass, and if it was only awaiting its word it is let go at
+    /// once. A window whose tabs haven't been seen gets its next look.
     private func judge(_ win: AXUIElement, _ n: CGWindowID) {
+        let w = tracked(win)
         switch kinds.kind(of: n) {
-        case .browser: follow(win, number: n)
-        case .unknown: break
-        case .notBrowser: if tracked(win) != nil { tracker.orderMayHaveChanged() }
+        case .browser:
+            if let w { show(w) } else { follow(win, number: n, awaitingWord: false) }
+        case .unknown:
+            if w == nil, kinds.awaitsWord(n) { follow(win, number: n, awaitingWord: true) }
+        case .notBrowser:
+            if let w { w.awaitsWord ? letGo(w) : tracker.orderMayHaveChanged() }
         }
         lookAgain(at: win, n)
     }
@@ -275,15 +364,17 @@ final class BrowserWatcher {
 
     private static let windowEvents = [kAXMovedNotification, kAXResizedNotification, kAXTitleChangedNotification, kAXUIElementDestroyedNotification]
 
-    private func follow(_ win: AXUIElement, number: CGWindowID) {
+    private func follow(_ win: AXUIElement, number: CGWindowID, awaitingWord: Bool) {
         guard tracked(win) == nil else { return }
         let w = TrackedWindow(element: win, number: number, watcher: self)
         guard w.read() else { return }
+        w.awaitsWord = awaitingWord
         windows.append(w)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         for n in Self.windowEvents {
             if let obs = observer { AXObserverAddNotification(obs, win, n as CFString, refcon) }
         }
+        if awaitingWord { awaitWord(for: w) }
         tracker.onAdded?(w)
         tracker.scheduleSettle(w)
     }
@@ -293,6 +384,8 @@ final class BrowserWatcher {
         w.settleWork?.cancel()
         windows.removeAll { $0 === w }
         if focused === w { focused = nil }
+        if hasFocus === w { hasFocus = nil }
+        awaited.removeValue(forKey: w.number)?.end.cancel()
         if closed { kinds.forget(w.number) }
         tracker.removed(w, closed: closed)
     }
@@ -300,17 +393,24 @@ final class BrowserWatcher {
     private func tracked(_ win: AXUIElement) -> TrackedWindow? { windows.first { CFEqual($0.element, win) } }
 
     private func updateFocus() {
-        var now: TrackedWindow?
+        var now: TrackedWindow?, elsewhere = false
         for attr in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] where now == nil {
             guard let win: AXUIElement = AXWindow.copy(element, attr) else { continue }
             consider([win], changed: false)
             now = tracked(win)
+            // A standard window that isn't followed: a palette, an app window.
+            if now == nil, let n = AXWindow.number(of: win), !kinds.isNew(n) { elsewhere = true }
         }
         // A popup or panel can have the focus with no main window reported:
-        // the last one keeps it.
-        guard let now, now !== focused else { return }
-        focused = now
-        DragTrace.log("focus: macOS says window \(now.number) of \(bundleId) has it")
+        // the last one keeps it. Not for the pairing while a standard window
+        // that isn't followed has it.
+        let has = now ?? (elsewhere ? nil : focused)
+        let shown = now.flatMap { $0.awaitsWord ? nil : $0 }
+        guard has !== hasFocus || (shown != nil && shown !== focused) else { return }
+        hasFocus = has
+        if let shown { focused = shown }
+        DragTrace.log(has.map { "focus: macOS says window \($0.number) of \(bundleId) has it" }
+                      ?? "focus: macOS says a window of \(bundleId) that isn't followed has it")
         tracker.focusChanged()
     }
 

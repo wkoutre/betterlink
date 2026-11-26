@@ -233,31 +233,6 @@ struct WindowTypeTests {
             #expect(!other.isNormal)
         }
     }
-
-    @Test func theNormalWindowsOnlyLeavesOutPopupsAndTheirTabs() {
-        let all = seeded(), normal = all.normalWindowsOnly
-        #expect(normal.windowOrder == [1, 3])
-        #expect(normal.windows.keys.sorted() == [1, 3])
-        #expect(normal.tabs.keys.sorted() == [10, 30])
-        #expect(normal.hasSnapshot && normal.lastSeq == all.lastSeq)
-        // The store itself still holds every window.
-        #expect(all.windowOrder == [1, 2, 3] && all.tabCount == 3)
-    }
-
-    /// A window on screen exactly where the extension reports a popup, with
-    /// its title: handed the normal windows only, the pairing has nothing to
-    /// give it, and the normal window keeps its own.
-    @Test func aPopupIsNeverTheBrowserWindowBesideASidebar() {
-        var session = BrowserSession(socketPath: "/a")
-        session.browserPid = 7
-        session.store = seeded()
-        let palette = WindowPairing.Window(id: 100, pid: 7, app: "Brave Browser", frame: WindowBounds(left: 900, top: 31, width: 400, height: 600), title: "Palette")
-        let inbox = WindowPairing.Window(id: 101, pid: 7, app: "Brave Browser", frame: WindowBounds(left: 0, top: 31, width: 748, height: 1259), title: "Inbox - Brave")
-        var p = WindowPairing()
-        let found = p.update([palette, inbox], others: [:], in: [session.normalWindowsOnly], now: 0)
-        #expect(found[100] == .unseen)
-        #expect(found[101] == .window(.init(session: "/a", windowId: 1)))
-    }
 }
 
 struct ProfileTests {
