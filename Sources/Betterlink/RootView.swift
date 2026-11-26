@@ -74,6 +74,8 @@ struct RootView: View {
                     Banner(text: err, style: .error) { withAnimation(.easeOut(duration: 0.15)) { model.clearLaunchError() } }
                         .padding(.horizontal, DS.Space.space8).padding(.top, DS.Space.space8)
                 }
+                // What's New, offered after an update; never a window of its own.
+                TourNewsBanner()
                 detail(for: page.wrappedValue ?? .rules)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -83,11 +85,14 @@ struct RootView: View {
         .onReceive(NotificationCenter.default.publisher(for: .betterlinkOpenPage)) { note in
             if let raw = note.object as? String, Page(rawValue: raw) != nil { page.wrappedValue = Page(rawValue: raw) }
         }
+        // The tour (first run, What's New, replay) sits over the pages, which
+        // stay as they are underneath.
+        .overlay { TourOverlay() }
         .ignoresSafeArea()
         .buttonStyle(.dsSecondary)
         .toggleStyle(.ds)
         .tint(DS.Palette.accent)
-        .frame(minWidth: 780, minHeight: 540)
+        .frame(minWidth: BetterlinkWindow.minSize.width, minHeight: BetterlinkWindow.minSize.height)
     }
 
     @ViewBuilder private func detail(for p: Page) -> some View {
@@ -216,9 +221,17 @@ private struct NavHeader: View {
 /// Opens betterlink's window on a page, from outside it (the sidebar).
 @MainActor
 enum BetterlinkWindow {
+    /// The smallest the window gets. A tour step's words fit it; a step with a
+    /// tall control scrolls (TourLayoutTests).
+    static let minSize = CGSize(width: 780, height: 540)
+    /// The size the window opens at. The tour's steps fit it without scrolling
+    /// (TourLayoutTests).
+    static let defaultSize = CGSize(width: 880, height: 640)
+
     static func open(_ page: RootView.Page) {
         MenuBarIcon.defaults().set(page.rawValue, forKey: "page")
-        (NSApp.delegate as? AppDelegate)?.showWindow()
+        // Someone asked for this page: not the moment for the first-run tour.
+        (NSApp.delegate as? AppDelegate)?.showWindow(offerTour: false)
         NotificationCenter.default.post(name: .betterlinkOpenPage, object: page.rawValue)
     }
 }
