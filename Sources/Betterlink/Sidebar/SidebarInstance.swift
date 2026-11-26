@@ -728,7 +728,7 @@ final class SidebarInstance: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
-    private func movePairToPanel() {
+    func movePairToPanel() {
         guard let panel, let placed = placedPanelFrame, !Self.same(panel.frame, placed), !hidden, isShown else { return }
         let t = window.target
         let rect = panel.frame
