@@ -12,7 +12,8 @@ import CoreGraphics
 /// A window that has not answered yet has not given the space yet, and one at
 /// its browser's minimum width gives no more. Mid-drag the two look the same
 /// (narrower than before, not as narrow as asked), so a drag learns no minimum
-/// width, and needs none.
+/// width, and needs none. The drag holds only while it lasts: a window that
+/// answers after it has ended has been resized, as if by hand.
 public struct EdgeDrag: Equatable, Sendable {
     /// The window, and how wide the sidebar was, when the drag began.
     public let window: CGRect
@@ -25,7 +26,9 @@ public struct EdgeDrag: Equatable, Sendable {
         self.window = window; self.width = width; self.side = side; self.covers = covers
     }
 
-    /// The window's edge away from the sidebar. It never moves.
+    /// The window's edge away from the sidebar, kept where it is for as long
+    /// as the drag lasts. An answer that comes after the drag has ended is a
+    /// resize by hand, and is not put back.
     public var farEdge: CGFloat { side == .left ? window.maxX : window.minX }
 
     /// The frame to ask the window for when the pointer wants the sidebar
@@ -59,6 +62,18 @@ public struct EdgeDrag: Equatable, Sendable {
         var at = real
         at.origin.x = side == .left ? farEdge - real.width : farEdge
         return abs(at.minX - real.minX) < 2 ? nil : at
+    }
+
+    /// How long a single step (the edge's adjustable action, which has no
+    /// button to come up) stays open for a window that has not answered,
+    /// before it ends with what the window has given.
+    public static let answerWait: TimeInterval = 0.3
+
+    /// Whether a window seen at `real` has answered `ask`: it has the width
+    /// asked. With nothing asked there is nothing to wait for.
+    public func answered(_ ask: CGRect?, by real: CGRect) -> Bool {
+        guard let ask else { return true }
+        return abs(real.width - ask.width) < 2
     }
 
     /// What the window has lent once the drag is over, seen at `real`. The

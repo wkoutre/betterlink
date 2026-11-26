@@ -53,7 +53,7 @@ final class SidebarInstance: ObservableObject {
     /// The window is no longer followed: its sidebar goes. One that closed
     /// has nothing to give back.
     func close(closed: Bool) {
-        endResize()
+        if closed { resizing = nil } else { endResize() } // a window that is gone is not read again
         outsideMove?.cancel()
         edgeTimer?.invalidate()
         edgeTimer = nil
@@ -293,6 +293,8 @@ final class SidebarInstance: ObservableObject {
     /// The window came to rest: make the pair fill the space the window was given.
     func settle(_ t: WindowTracker.Target) {
         rest = t.frame
+        // A resize by the edge still open ends with the loan read off the window.
+        guard resizing == nil else { return }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         let screen = screen(for: t.frame)
@@ -410,11 +412,16 @@ final class SidebarInstance: ObservableObject {
         /// Where it was last put back for that ask, so a browser that won't
         /// go there isn't told again every tick.
         var put: CGRect?
+        /// A single step, open until its window answers (nudge(by:)).
+        var waits = false
     }
     private var resizing: Resize?
+    /// Ends a single step whose window has not answered in time.
+    private var stepEnd: DispatchWorkItem?
 
     /// Starts resizing. False when there is no window at rest to resize against.
     func beginResize() -> Bool {
+        endResize() // a single step still waiting for its window ends here
         guard slideRun == nil, !hidden, isShown, let panel, panel.isVisible else { return false }
         let t = window.target
         let l = loan?.seen(at: t.frame, screen: screen(for: t.frame)).loan
@@ -488,7 +495,25 @@ final class SidebarInstance: ObservableObject {
         if w != width { width = w }
     }
 
+    /// One step without a pointer (the edge's adjustable action: VoiceOver,
+    /// the keyboard). There is no button to come up, so the resize stays open
+    /// until the window has answered (follow()), or `EdgeDrag.answerWait` has
+    /// passed, and then ends from the window's frame as a drag does.
+    func nudge(by delta: CGFloat) {
+        guard edgeTimer == nil, beginResize() else { return }
+        resize(by: delta)
+        guard let r = resizing else { return }
+        if r.drag.answered(r.asked, by: window.target.frame) { return endResize() }
+        resizing?.waits = true
+        let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.endResize() } }
+        stepEnd = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + EdgeDrag.answerWait, execute: work)
+    }
+
     func endResize() {
+        stepEnd?.cancel()
+        stepEnd = nil
+        resizing?.waits = false
         guard let r = resizing else { return }
         // Where the window is now, an answer still on its way included: the
         // width saved and the loan are what it really gave.
@@ -514,6 +539,12 @@ final class SidebarInstance: ObservableObject {
     /// that isn't showing too.
     func follow() {
         trackResize()
+        // A single step still open: the window goes back to its far edge, and
+        // its answer ends the step.
+        if let r = resizing, r.waits {
+            keepFarEdge()
+            if r.drag.answered(r.asked, by: window.target.frame) { endResize() }
+        }
         // A slide places the panel itself, frame by frame.
         guard slideRun == nil, panel?.isVisible == true else { return }
         placePanel(placement(beside: window.target.frame))

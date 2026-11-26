@@ -154,6 +154,34 @@ import Testing
         }
     }
 
+    /// From the review of the first version: one step from VoiceOver or the
+    /// keyboard ended at once, before a slow window had answered. The step was
+    /// lost, and the answer then counted as a resize by hand.
+    @Test func aSingleStepWaitsForTheWindowsAnswer() {
+        for side in SidebarSide.allCases {
+            let drag = start(side)
+            var b = Browser(frame: drag.window)
+            let was = edges(side, b.frame, 280)
+            let ask = drag.ask(delta: 10)
+            #expect(step(drag, 10, &b, answers: false) == 280, "\(side)")
+            // Not answered: the step stays open, no longer than the wait.
+            #expect(!drag.answered(ask, by: b.frame), "\(side)")
+            b.answer()
+            if let at = drag.kept(b.frame) { b.frame = at }
+            #expect(drag.answered(ask, by: b.frame), "\(side)")
+            #expect(drag.width(delta: 10, beside: b.frame) == 290 && edges(side, b.frame, 290) == was, "\(side)")
+            // A window at its minimum never answers: the wait ends the step, at the width it has.
+            var stuck = Browser(frame: drag.window, least: 1000)
+            #expect(step(drag, 10, &stuck) == 280 && !drag.answered(ask, by: stuck.frame), "\(side)")
+            // One that answers at once, or is asked nothing, is not waited for.
+            var quick = Browser(frame: drag.window)
+            #expect(step(drag, 10, &quick) == 290 && drag.answered(ask, by: quick.frame), "\(side)")
+            let covering = EdgeDrag(window: drag.window, width: 280, side: side, covers: true)
+            #expect(covering.answered(covering.ask(delta: 10), by: drag.window), "\(side)")
+        }
+        #expect(EdgeDrag.answerWait > 0 && EdgeDrag.answerWait <= 0.5)
+    }
+
     @Test func theLoanAtTheEndIsWhatTheWindowReallyLent() throws {
         for side in SidebarSide.allCases {
             // Snapped to the tile and narrowed by the sidebar's 280. Asked for
