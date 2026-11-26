@@ -112,8 +112,14 @@ public enum SyncModel {
                         case .link(let l):
                             out[nodeID(l.id)] = linkFields(l, profile: p.id, container: "items", parent: parent, position: pos[nodeID(l.id)]!)
                         case .folder(let f):
-                            out[nodeID(f.id)] = ["kind": .string("folder"), "profile": .string(p.id.uuidString), "container": .string("items"),
-                                                 "parent": .of(parent?.uuidString), "position": .string(pos[nodeID(f.id)]!), "title": .string(f.name)]
+                            let id = nodeID(f.id)
+                            out[id] = ["kind": .string("folder"), "profile": .string(p.id.uuidString), "container": .string("items"),
+                                       "parent": .of(parent?.uuidString), "position": .string(pos[id]!), "title": .string(f.name)]
+                            // No icon goes out as null only to clear one the state has: a folder
+                            // that never had one sends no field, so a Mac that has just updated
+                            // can't stamp "no icon" over one another Mac set meanwhile.
+                            if let icon = f.icon { out[id]!["icon"] = .string(icon.raw) }
+                            else if let had = state.value(id, "icon"), had != .null { out[id]!["icon"] = .null }
                             walk(f.items, parent: f.id)
                         }
                     }
@@ -242,8 +248,10 @@ public enum SyncModel {
                     .compactMap { k, f in link(k, f) }
             }
             if parts.folders {
-                let expanded = Dictionary(SidebarProfile.allFolders(in: p.items).map { ($0.id, $0.expanded) }, uniquingKeysWith: { a, _ in a })
-                p.items = tree(nodes.filter { $0.value["container"]?.value.string == "items" }, expanded: expanded, notes: &notes)
+                let local = SidebarProfile.allFolders(in: p.items)
+                let expanded = Dictionary(local.map { ($0.id, $0.expanded) }, uniquingKeysWith: { a, _ in a })
+                let icons = Dictionary(local.compactMap { f in f.icon.map { (f.id, $0) } }, uniquingKeysWith: { a, _ in a })
+                p.items = tree(nodes.filter { $0.value["container"]?.value.string == "items" }, expanded: expanded, icons: icons, notes: &notes)
             }
             if let i = lib.profiles.firstIndex(where: { $0.id == pid }) { lib.profiles[i] = p } else { lib.profiles.append(p) }
         }
@@ -258,7 +266,12 @@ public enum SyncModel {
     /// Folders and links from flat nodes: a missing or deleted parent puts a
     /// node at the top level (nothing lost); parent loops are broken the same
     /// way on every Mac, lowest id first.
-    static func tree(_ nodes: [String: [String: Stamped]], expanded: [UUID: Bool], notes: inout Notes) -> [SidebarItem] {
+    ///
+    /// A folder's icon is the synced one. A folder whose synced fields have no
+    /// icon at all (written before folder icons, or by a Mac without them)
+    /// keeps this Mac's (`icons`), which goes out with the next push.
+    static func tree(_ nodes: [String: [String: Stamped]], expanded: [UUID: Bool], icons: [UUID: FolderIcon] = [:],
+                     notes: inout Notes) -> [SidebarItem] {
         var parent: [UUID: UUID?] = [:]
         var fields: [UUID: [String: Stamped]] = [:]
         for (k, f) in nodes { if let u = uuid(k) { fields[u] = f } }
@@ -285,7 +298,9 @@ public enum SyncModel {
                 .sorted { ($0.value["position"]?.value.string ?? "", $0.key.uuidString) < ($1.value["position"]?.value.string ?? "", $1.key.uuidString) }
                 .compactMap { u, f -> SidebarItem? in
                     if f["kind"]?.value.string == "folder" {
-                        return .folder(SidebarFolder(id: u, name: f["title"]?.value.string ?? "Folder", expanded: expanded[u] ?? true, items: children(of: u)))
+                        let icon = f["icon"].map { $0.value.string.map(FolderIcon.init(raw:)) } ?? icons[u]
+                        return .folder(SidebarFolder(id: u, name: f["title"]?.value.string ?? "Folder", expanded: expanded[u] ?? true,
+                                                     items: children(of: u), icon: icon))
                     }
                     return link(nodeID(u), f).map { .link($0) }
                 }
