@@ -350,18 +350,21 @@ final class SidebarRig {
     var sidebarWidth: CGFloat { CGFloat(instance.width) }
 
     /// The shortcut: the slide to its end, then the window comes to rest.
-    func toggle() {
+    /// `within`: the person presses it again that many seconds later, whatever
+    /// is still going on (no rest).
+    func toggle(within: Double? = nil) {
         fake.sliding = true
         SidebarController.shared.toggle(instance)
         var frames = 0
-        while instance.sliding, frames < 2000 {
+        let limit = within.map { Int($0 * 120) } ?? 2000
+        while instance.sliding, frames < limit {
             time += 1.0 / 120
             instance.stepSlide()
             events()
             frames += 1
         }
         fake.sliding = false
-        rest()
+        if within == nil { rest() }
     }
 
     /// Each move the browser makes is an Accessibility event: the window is
@@ -853,6 +856,38 @@ struct GuardCase: CustomStringConvertible {
         }
         t += 10
         #expect(abs(c.frame.width - 1838) < 3 && c.frame.minX == 280, "C: \(c.frame)")
+    }
+
+    /// Live on the mini at 28f7a44: Brave (its least width 615) 800 wide
+    /// against the screen's right edge, the sidebar on the left at 280.
+    /// Asked for 520 it stops at 615, leaving 185, less than the sidebar's
+    /// least 200: the sidebar must stay closed and the window keep its frame.
+    /// It was left at 615 with the sidebar open, and stuck there through the
+    /// tester's next placements. Waited for, and hidden again at once.
+    @Test func braveTooNarrowForTheSidebar() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        // AX top-left x, w (y 31, height 1259) of each placement, as Cocoa frames.
+        let frames = [(1256.0, 800.0), (1276, 780), (1300, 756), (1356, 700), (1456, 600)].map {
+            CGRect(x: $0.0, y: 0, width: $0.1, height: 1259)
+        }
+        for within in [nil, 0.5] as [Double?] {
+            for b in [BrowserBehaviour(minWidth: 615), BrowserBehaviour(minWidth: 615, animation: 0.25)] {
+                let rig = SidebarRig(displays: [screen], frame: frames[0], side: .left, width: 280, behaviour: b)
+                for f in frames {
+                    let start = CGRect(x: f.minX, y: f.minY, width: max(f.width, 615), height: f.height)
+                    rig.personSets(start)
+                    rig.toggle()
+                    let what = "\(b), \(start), hidden again \(within.map { "after \($0) s" } ?? "once it rests")"
+                    if rig.open {
+                        rig.toggle(within: within)
+                        if within != nil { rig.rest() }
+                    }
+                    #expect(!rig.open, "\(what): still open")
+                    #expect(GuardFrames.same(rig.fake.frame, start), "\(what): window at \(rig.fake.frame)")
+                }
+            }
+        }
     }
 
     /// PR 72's placements: a window filling the screen or snapped to a half,
