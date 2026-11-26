@@ -755,12 +755,25 @@ final class SidebarInstance: ObservableObject {
     /// the keyboard). There is no button to come up, so the resize stays open
     /// until the window has answered (follow()), or `EdgeDrag.answerWait` has
     /// passed, and then ends as a drag does. A step taken while the last one
-    /// still waits (key repeat) adds to what is asked, and the wait starts again.
+    /// is still open, waiting or ending with a call out (key repeat,
+    /// VoiceOver's increments), adds to the width last asked, and the wait
+    /// starts again.
     func nudge(by step: CGFloat) {
-        guard edgeTimer == nil, resizing?.waits == true || beginResize(), let open = resizing else { return }
+        guard edgeTimer == nil else { return }
+        if var open = resizing {
+            // Still open (its window not answered yet, or ending while a call
+            // is out): the step adds to the width last asked, never to the
+            // window's width mid-call, and none is lost.
+            open.ending = false
+            open.checked = false
+            resizing = open
+        } else if !beginResize() {
+            return
+        }
+        guard let open = resizing else { return }
         resize(by: open.drag.stepped(open.delta, by: step))
         guard let r = resizing else { return }
-        if r.drag.answered(r.asked, by: onScreenFrame) { return dragEnded() }
+        if steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { return dragEnded() }
         resizing?.waits = true
         stepEnd?.cancel()
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.dragEnded() } }
@@ -825,7 +838,7 @@ final class SidebarInstance: ObservableObject {
         if let l = least, window.target.frame.width < l - 1 { least = window.target.frame.width }
         trackResize()
         // A single step still open: its answer ends the step.
-        if let r = resizing, r.waits, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }
+        if let r = resizing, r.waits, steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }
         // A slide places the panel itself, frame by frame. Mid-drag, beside
         // the window as it is on screen.
         guard slideRun == nil, panel?.isVisible == true else { return }

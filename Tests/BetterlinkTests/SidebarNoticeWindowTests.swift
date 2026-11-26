@@ -33,7 +33,7 @@ import TabSyncCore
 
     @Test func thePanelIsTheCapsulesSize() {
         for notice in [SidebarNotice.noRoom, .noSize] {
-            let size = SidebarNoticeWindow.size(of: SidebarNoticeWindow.host(notice.text))
+            let size = SidebarNoticeWindow.size(of: notice.text)
             // At most 320 pt of text, 16 pt either side of it, and the 8 pt clear margin.
             #expect(size.width <= 368 && size.width >= 200, "\(notice): \(size)")
             #expect(size.height <= 120 && size.height >= 30, "\(notice): \(size)")

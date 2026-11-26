@@ -48,7 +48,7 @@ final class SidebarNoticeWindow {
         let host = Self.host(text)
         let p = panel ?? makePanel()
         p.contentView = host
-        let final = SidebarNotice.frame(size: Self.size(of: host), window: window, visible: visible)
+        let final = SidebarNotice.frame(size: Self.size(of: text), window: window, visible: visible)
         p.setFrame(final, display: false)
         host.layoutSubtreeIfNeeded()
         return (p, final)
@@ -56,12 +56,20 @@ final class SidebarNoticeWindow {
 
     static func host(_ text: String) -> NSHostingView<SidebarNoticeView> {
         let host = NSHostingView(rootView: SidebarNoticeView(text: text))
+        // The panel is sized here, to the capsule, never by SwiftUI: its size
+        // constraints, worked out once at a width of nothing (a word to a
+        // line), grew the panel to 368 x 1048 pt on screen.
+        host.sizingOptions = []
         host.layoutSubtreeIfNeeded()
         return host
     }
 
-    /// The panel's size for the note: the capsule's.
-    static func size(of host: NSView) -> CGSize { host.fittingSize }
+    /// The panel's size for the note: the capsule's, its text wrapped at 320 pt.
+    static func size(of text: String) -> CGSize {
+        let measure = NSHostingController(rootView: SidebarNoticeView(text: text, pinned: false))
+        let s = measure.sizeThatFits(in: CGSize(width: 368, height: 2000))
+        return CGSize(width: s.width.rounded(.up), height: s.height.rounded(.up))
+    }
 
     private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
@@ -80,7 +88,17 @@ final class SidebarNoticeWindow {
 
 struct SidebarNoticeView: View {
     let text: String
+    /// At the top of whatever it is given (the panel); off when measured.
+    var pinned = true
     var body: some View {
+        if pinned {
+            capsule.frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        } else {
+            capsule
+        }
+    }
+
+    private var capsule: some View {
         Text(text)
             .font(DS.TextStyle.body)
             .foregroundStyle(DS.Palette.text)
