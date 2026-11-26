@@ -253,25 +253,20 @@ final class SidebarController: ObservableObject {
         arrange()
     }
 
-    /// Gives every window the sidebar narrowed its space back, if it is still
-    /// as narrowed. Called when the app quits. A browser that doesn't answer
-    /// for one window isn't asked about its others (they keep their records):
-    /// each would wait out its time while the app is quitting.
+    /// Gives every window the sidebar narrowed its space back. Called when
+    /// the app quits or the sidebar is turned off.
     func giveSpaceBack() { giveSpaceBack(of: Array(instances.values)) }
 
     /// Every window moved together (`AXWindow.placeNow`): the wait is the
-    /// slowest window's, bounded however many there are (review F3).
+    /// slowest window's, bounded however many there are and whatever their
+    /// browsers do (review F3). A window whose browser didn't answer keeps
+    /// its record, so it is recognised later instead of narrowed again.
     /// `clock` and `pause`: the time, and waiting (tests step their own).
     func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
                        pause: @escaping (Double) -> Void = AXWindow.sleep) {
-        var hung: Set<pid_t> = []
-        var moves: [AXWindow.Move] = []
-        for i in all where !hung.contains(i.window.target.pid) {
-            let (readable, move) = i.spaceBack()
-            if !readable, AXWindow.timedOut { hung.insert(i.window.target.pid) }
-            if let move { moves.append(move) }
-        }
-        AXWindow.placeNow(moves, clock: clock, pause: pause)
+        let moves = all.compactMap { $0.spaceBack() }
+        let missed = AXWindow.placeNow(moves, clock: clock, pause: pause)
+        for i in all where !missed.contains(ObjectIdentifier(i.window.handle)) { i.unpair() }
     }
 
     private func trustMayHaveChanged() {
@@ -392,13 +387,6 @@ final class SidebarController: ObservableObject {
     /// that window, as if hidden with the shortcut.
     func refused(_ i: SidebarInstance) {
         chosen.set(hidden: true, window: i.window.number, pid: i.window.target.pid)
-        saveChosen()
-    }
-
-    /// The window's refused sidebar opened after all (its browser made room
-    /// late): kept open for that window, as if shown with the shortcut.
-    func reopened(_ i: SidebarInstance) {
-        chosen.set(hidden: false, window: i.window.number, pid: i.window.target.pid)
         saveChosen()
     }
 

@@ -57,21 +57,6 @@ final class SidebarNoticeWindow {
         }
     }
 
-    /// The note is no longer true (the browser made room after all): it
-    /// fades now.
-    func withdraw() {
-        generation += 1
-        guard let p = panel, p.isVisible else { return }
-        let mine = generation
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.18
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
-            p.animator().alphaValue = 0
-        }, completionHandler: {
-            MainActor.assumeIsolated { if self.generation == mine { p.orderOut(nil) } }
-        })
-    }
-
     /// The panel with the note in it, at its place (not yet shown).
     func prepare(_ text: String, over window: CGRect, visible: CGRect) -> (NSPanel, CGRect) {
         let host = Self.host(text)

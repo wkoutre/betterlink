@@ -55,6 +55,10 @@ protocol WindowHandle: AnyObject {
     func shownBounds() -> CGRect?
     /// On a Space that is showing, not minimized, its app not hidden.
     var isOnScreen: Bool { get }
+    /// How long each call may wait for the browser to answer.
+    func limitWaiting(_ seconds: Double)
+    /// The last call got no answer in time: the browser is hung or busy.
+    var missed: Bool { get }
 }
 
 /// A browser window through Accessibility, and the window server by its number.
@@ -68,13 +72,19 @@ final class AXHandle: WindowHandle {
         self.number = number
     }
 
+    private(set) var missed = false
+
+    func limitWaiting(_ seconds: Double) { AXUIElementSetMessagingTimeout(element, Float(seconds)) }
+
     func position() -> CGPoint? {
+        defer { missed = AXWindow.timedOut }
         guard let v: AXValue = AXWindow.copy(element, kAXPositionAttribute) else { return nil }
         var p = CGPoint.zero
         return AXValueGetValue(v, .cgPoint, &p) ? p : nil
     }
 
     func size() -> CGSize? {
+        defer { missed = AXWindow.timedOut }
         guard let v: AXValue = AXWindow.copy(element, kAXSizeAttribute) else { return nil }
         var s = CGSize.zero
         return AXValueGetValue(v, .cgSize, &s) ? s : nil
@@ -82,12 +92,14 @@ final class AXHandle: WindowHandle {
 
     func setPosition(_ p: CGPoint) {
         var p = p
-        if let v = AXValueCreate(.cgPoint, &p) { AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, v) }
+        guard let v = AXValueCreate(.cgPoint, &p) else { return }
+        missed = AXUIElementSetAttributeValue(element, kAXPositionAttribute as CFString, v) == .cannotComplete
     }
 
     func setSize(_ s: CGSize) {
         var s = s
-        if let v = AXValueCreate(.cgSize, &s) { AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, v) }
+        guard let v = AXValueCreate(.cgSize, &s) else { return }
+        missed = AXUIElementSetAttributeValue(element, kAXSizeAttribute as CFString, v) == .cannotComplete
     }
 
     func shownBounds() -> CGRect? { WindowServer.bounds(number) }

@@ -7,43 +7,51 @@ import CoreGraphics
 /// call at a time, each waited for on screen before the next.
 ///
 /// On macOS 27 a size or position set through Accessibility is animated by
-/// the system: reading it back gives the target at once, and the next set
-/// cuts the one in flight where it has got to (measured on Nick's laptop,
-/// 27.2.1: size then position with no wait left Brave 1871 of 1776 wide; a
-/// position then size, at x 15 of 280). So nothing is sent while the window
-/// server's frame (what is on screen) is still changing from the last call,
-/// and a window is never moved before it has really taken its new size:
+/// the system, and the animation can begin late: reading it back gives the
+/// target at once, and the next set cuts the one in flight where it has got
+/// to (measured on Nick's laptop, 27.2.1: size then position with no wait
+/// left Brave 1871 of 1776 wide; a position then size, at x 15 of 280). So
+/// nothing is sent while the window server's frame (what is on screen) is
+/// still changing from the last call, and a window is never moved before it
+/// has really taken its new size. A call has landed when the window server's
+/// frame has reached what it asked, or has changed at least once and then
+/// held still for `still` (a narrower size of a show or hide: both, since a
+/// browser can take it and then widen itself back to its minimum). A window that hasn't moved at all since the call
+/// hasn't started on it yet: that is waited for, and only `deadline` ends
+/// the wait (a call that changes nothing within `patience` is sent once
+/// more meanwhile, since a call can be dropped).
 ///
-/// - Narrowing: the size first; once it has taken, the position that keeps
-///   the far edge (`keep`) where it was at the width it really took. A size
-///   it doesn't take, sent twice, leaves the window where it is.
+/// - Narrowing: the size first; once it has landed, the position that keeps
+///   the far edge (`keep`) where it was at the width it really took.
 /// - Widening: the position first (a window can't grow past its screen's
 ///   edge from where it is), then the size. A size it doesn't take moves it
 ///   back where it was, unless the steps are giving the window space back
-///   (`retreats` false): there a browser that answers late takes the size
-///   where it was put, and macOS would cut that size short at the screen's
-///   edge from where it was.
+///   (`retreats` false).
 /// - Then the frame is checked, and what is missing asked once more. A size
 ///   it took only part of and stopped at is its minimum (or a screen's
-///   edge): that is not asked again, since a browser that has shown it can't
-///   go narrower answers the same call the same way, and each ask that
-///   changes nothing is waited out (`timeout`).
+///   edge): that is not asked again.
 /// - `widest`: a size it stops short at, wider than this, ends the steps
 ///   there (`stoppedShort`), nothing more sent: opening, the sidebar would
 ///   have less than its least width, and the caller puts the window back at
 ///   once instead of moving it to keep its far edge first.
-/// - A change none of the calls can make is someone else's (the person, or
-///   another app): the steps end there (`interrupted`) and nothing more is
-///   sent, so their frame stands. A size keeps the window's top left; a
-///   position keeps its size and goes from where the window is toward where
-///   it was sent, all the way across (macOS doesn't stop a move sideways). A
-///   call still on its way from steps these took over from (`after`) can
-///   land too.
-/// - Calls waited out with nothing changed may still land after the steps
-///   are done (`mayStillLand`): a browser can answer late, by any amount.
-///   Giving space back (`retreats` false) to a frame the window is already
-///   at while such a call may still land, the frame is asked again, so it
-///   is the browser's last word.
+/// - With a `deadline`, a change the call in flight can't make is someone
+///   else's (the person, or another app): the steps end there
+///   (`interrupted`) and nothing more is sent, so their frame stands. A size
+///   keeps the window's top left; a position keeps its size and goes from
+///   where the window is toward where it was sent, all the way across
+///   (macOS doesn't stop a move sideways). Only that call is weighed: every
+///   call before it has landed (steps that take over from others wait for
+///   their call in flight first, as their own), so it is the only one of
+///   betterlink's that can be moving the window. Nothing is remembered past
+///   the steps.
+/// - `resends`: the steps' end, the final target sent whole once more, its
+///   size and its position, whatever the window looks like. Accessibility
+///   sets are done in order, so a call of betterlink's still on its way
+///   (one the cap cut off, or a late browser's) lands before these, and the
+///   window ends at the target. Each is waited for as any call, and sent
+///   again once when the window hasn't started on it within `patience`
+///   (a call can be dropped), or at once when the window already looks
+///   done (then its landing can't be seen); nothing ends them early.
 ///
 /// Pure: the caller reads the frame on screen and sends what `step` returns.
 public struct WindowSteps: Sendable {
@@ -62,14 +70,27 @@ public struct WindowSteps: Sendable {
     public let widest: CGFloat?
     /// Widening, a size it doesn't take moves it back where it was.
     public let retreats: Bool
+    /// When the steps end, whatever has landed (`capped`): a show or a hide,
+    /// all its calls, is given `cap`. Nil: a call that changes nothing
+    /// within `patience` is taken as not taken (a drag of the sidebar's edge,
+    /// whose next call comes anyway), and nothing is taken as someone else's.
+    public let deadline: Double?
+    /// The final target sent whole once more (see above).
+    public let resends: Bool
+    /// A change the call in flight can't make ends the steps (`interrupted`).
+    /// With a `deadline`, always; the final target sent once more, only when
+    /// nothing of betterlink's can still be on its way (not after a cap).
+    public let watches: Bool
     public private(set) var done = false
     /// Done because something else changed the window (see above).
     public private(set) var interrupted = false
     /// Done because the window stopped short wider than `widest`.
     public private(set) var stoppedShort = false
-    /// How long a call that changes nothing is waited for: `timeout`, or
-    /// less for a browser known to answer quickly (a drag of the sidebar's
-    /// edge, whose next call comes anyway).
+    /// Done because `deadline` came first.
+    public private(set) var capped = false
+    /// How long a call that changes nothing is waited for before it is sent
+    /// again (with a `deadline`) or taken as not taken: `timeout`, or less
+    /// for a browser known to answer quickly (a drag of the sidebar's edge).
     public var patience = WindowSteps.timeout
     /// The longest any call took to land (its last change), in seconds.
     public private(set) var slowest = 0.0
@@ -81,94 +102,68 @@ public struct WindowSteps: Sendable {
         case placed
     }
     private var phase = Phase.start
-    private var sent: (call: Call, at: Double, last: CGRect, changed: Double, from: CGRect)?
+    /// The call in flight: when it was sent, the frame at the last look, when
+    /// that last changed, the frame it was sent from, and whether the window
+    /// has changed since (a change in the very tick it was sent counts).
+    private var sent: (call: Call, at: Double, last: CGRect, changed: Double, from: CGRect, moved: Bool)?
     /// The call in flight was the steps' these took over from.
     private var inherited = false
+    /// `resends`: the call in flight was sent again once already.
+    private var resent = false
     /// That call, once landed: a size these would ask too is taken as theirs.
     private var adopt: (call: Call, from: CGRect, moved: Bool)?
     private var retried = false
     private var resentSize = false
-    /// Giving space back, the window already where it goes: asked again.
-    private var reasserted = false
-    /// Calls that may still land: the one in flight, those waited out with
-    /// nothing changed (a browser can answer late), and those of the steps
-    /// these took over from.
-    private var pending: [Call] = []
     /// Where it was put at a size it stopped short at: its minimum.
     private var short: CGRect?
+    /// `resends`: the calls still to send, and whether the last was one sent twice.
+    private var finals: [Call]?
+    private var echoed = false
 
     /// How long the window must stay still, once it has moved, for a call to
-    /// count as done short of what was asked (a minimum width, a screen's
-    /// edge), and the longest a call is waited for when nothing moves.
-    public static let still = 0.06
+    /// count as landed short of what was asked (a minimum width, a screen's
+    /// edge, a browser that overshoots and widens back), and how long a call
+    /// that changes nothing is waited for before it is sent again.
+    public static let still = 0.15
     public static let timeout = 0.6
+    /// The longest a show or a hide may take, every call of it included.
+    public static let cap = 3.0
 
-    /// `after`: the steps these replace, mid-way: what they sent may still land.
-    /// `late`: calls of steps already done that may still land (`mayStillLand`).
-    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, after earlier: WindowSteps? = nil,
-                late: [Call] = []) {
+    /// `after`: the steps these replace, mid-way: their call in flight is
+    /// waited for first.
+    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
+                resends: Bool = false, watches: Bool = false, after earlier: WindowSteps? = nil) {
         self.target = target
         self.keep = keep
         self.widest = widest
         self.retreats = retreats
-        pending = late
+        self.deadline = resends ? nil : deadline
+        self.resends = resends
+        self.watches = resends ? watches : deadline != nil
         // Its call in flight is waited for first, as one of these.
         if let earlier, !earlier.done {
-            pending += earlier.pending
             sent = earlier.sent
             inherited = sent != nil
         }
     }
 
-    /// The calls sent that may still land: waited out with nothing changed
-    /// (a browser can answer late), and those of the steps these took over from.
-    public var mayStillLand: [Call] { pending }
-
     private static func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1 }
     private static func between(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool { x >= min(a, b) - 1.5 && x <= max(a, b) + 1.5 }
 
-    /// Whether the window going from `p` to `seen` is what a call that may
-    /// still land can do: a size keeps the top left, at any size (a browser
-    /// takes what it can); a position keeps the size and goes toward where it
-    /// was sent. A browser that does two calls in one go changes both.
-    private func explains(_ p: CGRect, _ seen: CGRect) -> Bool { Self.explains(from: p, to: seen, by: pending) }
-
-    /// Whether `calls` landing can take a window at `p` to `seen` (see above):
-    /// its change is betterlink's, not someone else's.
-    public static func explains(from p: CGRect, to seen: CGRect, by calls: [Call]) -> Bool {
-        let samePlace = near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
-        let sameSize = near(p.width, seen.width) && near(p.height, seen.height)
-        let sized = calls.contains { if case .size = $0 { true } else { false } }
-        let placed = calls.contains {
-            guard case .position(let t) = $0 else { return false }
-            return between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
+    /// Whether the call in flight, `c`, can take a window at `p` to `seen`:
+    /// a size keeps the top left, at any size (a browser takes what it can);
+    /// a position keeps the size and goes toward where it was sent.
+    private static func can(_ c: Call, from p: CGRect, to seen: CGRect) -> Bool {
+        switch c {
+        case .size: return near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
+        case .position(let t):
+            return near(p.width, seen.width) && near(p.height, seen.height)
+                && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
         }
-        return (samePlace || placed) && (sameSize || sized)
     }
 
-    /// Whether one or two of `calls` done as sent (a position, a size, or a
-    /// position and a size) take a window at `p` exactly to `seen`: an older
-    /// call landing late, not a browser stopping at its own minimum, nor
-    /// someone else's change.
-    public static func lands(from p: CGRect, to seen: CGRect, by calls: [Call]) -> Bool {
-        var places = [p.origin]
-        var sizes = [p.size]
-        for c in calls {
-            switch c {
-            case .position(let f): places.append(CGPoint(x: f.minX, y: f.maxY))
-            case .size(let f): sizes.append(f.size)
-            }
-        }
-        let top = p.maxY
-        for (i, o) in places.enumerated() {
-            for (j, s) in sizes.enumerated() where i > 0 || j > 0 {
-                // A place keeps the top left (`o` from p: its top; from a call: the call's top).
-                let maxY = i == 0 ? top : o.y
-                let f = CGRect(x: o.x, y: maxY - s.height, width: s.width, height: s.height)
-                if abs(f.minX - seen.minX) < 2, abs(f.maxY - seen.maxY) < 2, abs(f.width - seen.width) < 2, abs(f.height - seen.height) < 2 { return true }
-            }
-        }
-        return false
+    private static func narrows(_ c: Call, _ from: CGRect) -> Bool {
+        if case .size(let f) = c { f.width < from.width - 1 } else { false }
     }
 
     private static func reached(_ c: Call, _ seen: CGRect) -> Bool {
@@ -182,49 +177,81 @@ public struct WindowSteps: Sendable {
     /// time; nil while waiting for the last one, or when done.
     public mutating func step(seen: CGRect, now: Double) -> Call? {
         if done { return nil }
+        if let deadline, now >= deadline {
+            capped = true
+            done = true
+            return nil
+        }
+        // Someone else's change is looked for only where a show or hide is carried out.
+        let checks = watches
+        let capped = deadline != nil
         if var s = sent {
             if seen != s.last {
-                guard explains(s.last, seen) else {
+                guard !checks || Self.can(s.call, from: s.last, to: seen) else {
                     interrupted = true
                     done = true
                     return nil
                 }
                 s.last = seen
                 s.changed = now
+                s.moved = true
                 sent = s
             }
-            // Still, once it has moved: stopped short. Not moved at all yet: waited for, up to the timeout.
-            let still = s.changed > s.at && now - s.changed >= Self.still
-            // Reached, and no longer changing: an animation is never cut short a point from its end.
-            let arrived = Self.reached(s.call, seen) && s.changed < now
-            guard arrived || still || now - s.at >= patience else { return nil }
+            // Still, once it has moved: landed short. Not moved at all yet: not started.
+            let still = s.moved && now - s.changed >= Self.still
+            // Reached, and no longer changing: an animation is never cut short a point from its end. A
+            // narrower size, carrying out a show or hide, only once it has held still too: a browser can
+            // take it and then widen itself back to its minimum.
+            let holds = capped && Self.narrows(s.call, s.from)
+            let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still)
+            if !arrived, !still {
+                guard !s.moved, now - s.at >= patience else { return nil }
+                // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
+                // or hide, waited for up to the deadline; the final target's, once; a drag's, or one the
+                // final target took over, let go (it lands before the final target's all the same).
+                if capped || (resends && !resent && !inherited) {
+                    resent = true
+                    s.at = now
+                    s.changed = now
+                    sent = s
+                    return s.call
+                }
+            }
             sent = nil
-            if s.changed > s.at { slowest = max(slowest, s.changed - s.at) }
+            if s.moved { slowest = max(slowest, s.changed - s.at) }
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
-            if case .position(let f) = s.call, s.changed > s.at, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {
+            if checks, case .position(let f) = s.call, s.moved, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {
                 interrupted = true
                 done = true
                 return nil
             }
             if inherited {
                 inherited = false
-                adopt = (s.call, s.from, s.changed > s.at)
+                adopt = (s.call, s.from, s.moved)
             }
-            // Landed, or stopped: it won't land again. Waited out with nothing changed: it still may.
-            if s.changed > s.at, let i = pending.lastIndex(of: s.call) { pending.remove(at: i) }
+        }
+        if resends {
+            if finals == nil {
+                finals = target.width < seen.width - 0.5 ? [.size(target), .position(target)] : [.position(target), .size(target)]
+            }
+            guard let next = finals?.first else {
+                done = true
+                return nil
+            }
+            finals?.removeFirst()
+            // There already: its landing can't be seen, so it is sent twice (a call can be dropped).
+            if !echoed, Self.reached(next, seen) {
+                echoed = true
+                finals?.insert(next, at: 0)
+            } else {
+                echoed = false
+            }
+            return send(next, seen, now)
         }
         switch phase {
         case .start:
             if SidebarGeometry.same(seen, target) {
-                // Giving space back, there already, but a call may still land (one in flight, or
-                // waited out): the frame is asked again, position then size, so a browser that
-                // does its calls in order, however late, ends where it goes.
-                if !retreats, !reasserted, !pending.isEmpty {
-                    reasserted = true
-                    phase = .movedFirst(from: seen)
-                    return send(.position(target), seen, now)
-                }
                 done = true
                 return nil
             }
@@ -301,8 +328,8 @@ public struct WindowSteps: Sendable {
     }
 
     private mutating func send(_ c: Call, _ seen: CGRect, _ now: Double) -> Call {
-        sent = (c, now, seen, now, seen)
-        pending.append(c)
+        sent = (c, now, seen, now, seen, false)
+        resent = false
         return c
     }
 }
