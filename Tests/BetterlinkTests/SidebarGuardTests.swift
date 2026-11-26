@@ -161,6 +161,9 @@ final class SidebarRig {
         while instance.sliding, frames < 1000 {
             time += 1.0 / 120
             instance.stepSlide()
+            // Each move the browser makes is an Accessibility event: the window is read again (BrowserWatcher.refresh).
+            watcher.refresh(window)
+            instance.follow()
             frames += 1
         }
         slideFrames = frames
