@@ -254,7 +254,7 @@ struct WindowTypeTests {
         let palette = WindowPairing.Window(id: 100, pid: 7, app: "Brave Browser", frame: WindowBounds(left: 900, top: 31, width: 400, height: 600), title: "Palette")
         let inbox = WindowPairing.Window(id: 101, pid: 7, app: "Brave Browser", frame: WindowBounds(left: 0, top: 31, width: 748, height: 1259), title: "Inbox - Brave")
         var p = WindowPairing()
-        let found = p.update([palette, inbox], in: [session.normalWindowsOnly], now: 0)
+        let found = p.update([palette, inbox], others: [:], in: [session.normalWindowsOnly], now: 0)
         #expect(found[100] == .unseen)
         #expect(found[101] == .window(.init(session: "/a", windowId: 1)))
     }

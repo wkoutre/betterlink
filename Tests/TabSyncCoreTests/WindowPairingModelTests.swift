@@ -6,18 +6,27 @@ import Testing
 /// with the truth known: some of a browser's real windows are never listed by
 /// Accessibility, some never get an entry from the extension, and every word
 /// (a window appearing, its title, its frame, the focus) reaches each side late
-/// and on its own, the browser's often in one batch.
+/// and on its own, the browser's often in one batch. The window server's list
+/// of the browser's windows is complete and current, without titles. In a
+/// quarter of the histories some of the browser's words on the focus are late
+/// by more than `WindowPairing.moment`, up to three seconds.
 ///
 /// At every look: an entry is beside at most one window, and no pairing has
-/// title and frame both against it. Whenever both sides have caught up and a
-/// moment has passed: no window holds an entry whose real window is another
-/// listed window, and a window that alone matches its own entry has it.
+/// title and frame both against it.
 ///
-/// One case is counted, not failed: a pairing first made while a title or
-/// frame of either party was still on its way, between two windows that look
-/// alike once everything has arrived. What the window looked like a moment
-/// ago matched another window's entry, and nothing seen since tells them
-/// apart (docs/tabs.md, Known gaps).
+/// Whenever both sides have caught up (every word delivered, then quiet for
+/// `patience` and a `moment`, the looks the pairing asked for taken): every
+/// window that holds an entry holds its own, and a window that alone matches
+/// its own entry, every window at its place reported, has it. Counted, not
+/// failed, because nothing seen can tell:
+///
+/// - late focus: a pairing the focus made within `patience` of a word of the
+///   browser's on the focus that was late by more than the `moment`, while
+///   the window still matches that entry by title and frame (the two look
+///   alike); and a pairing by what is left that such a one led to.
+/// - behind: a pairing first shown while a title, frame or arrival of either
+///   party was still on its way, between two listed windows that look alike
+///   once everything has arrived.
 struct WindowPairingModelTests {
     /// SplitMix64: the same sequence for a seed on every machine.
     struct Random {
@@ -47,7 +56,12 @@ struct WindowPairingModelTests {
     enum Kind { case appear, title, frame, focus, close }
     struct Word { var time: Int; var order: Int; var side: Side; var kind: Kind; var window: Int?; var seen: Seen? }
 
-    struct Outcome { var failures: [String] = []; var log: [String] = []; var looks = 0, caughtUp = 0, tolerated = 0 }
+    struct Outcome {
+        var failures: [String] = [], log: [String] = []
+        var looks = 0, caughtUp = 0, behind = 0, lateFocus = 0
+        /// Listed windows with an entry of their own at a caught-up look, and how many of them showed nothing.
+        var reported = 0, unseen = 0
+    }
 
     /// One history. Times are milliseconds.
     static func run(seed: UInt64, steps: Int = 40, logging: Bool = false) -> Outcome {
@@ -59,6 +73,10 @@ struct WindowPairingModelTests {
         var now = 0
         var pairing = WindowPairing()
         var shown: [Int: Int] = [:], madeBehind: Set<[Int]> = []
+        // Some of the browser's words on the focus are late in this history;
+        // until when a pairing by the focus may come from one; those that did.
+        let lateHistory = random.unit() < 0.25
+        var lateUntil = -1, byFocusShown: [Int: Int] = [:], madeLate: Set<[Int]> = []
 
         func note(_ line: @autoclosure () -> String) { if logging { out.log.append(String(format: "t=%.2f ", Double(now) / 1000) + line()) } }
 
@@ -100,7 +118,9 @@ struct WindowPairingModelTests {
                                left: theirs[id]!.left, top: 31, width: 748, height: 1259)
             }
             session.store.apply(snapshot)
-            let found = pairing.update(windows, in: [session], now: Double(now) / 1000)
+            // The window server's list is complete and current: the real windows Accessibility doesn't list.
+            let unlisted = real.keys.sorted().filter { ours[$0] == nil }.map { bounds(real[$0]!.left) }
+            let found = pairing.update(windows, others: [7: unlisted], in: [session], now: Double(now) / 1000)
             var held: [Int: Int] = [:]
             for (w, f) in found { if case .window(let hit) = f { held[w] = hit.windowId } }
             out.looks += 1
@@ -112,6 +132,11 @@ struct WindowPairingModelTests {
                 if queue.contains(where: { $0.kind != .focus && ($0.window == w || $0.window == e) }) { madeBehind.insert([w, e]) } else { madeBehind.remove([w, e]) }
             }
             shown = held
+            let byFocus = pairing.byFocus.mapValues(\.windowId)
+            for (w, e) in byFocus where byFocusShown[w] != e {
+                if now <= lateUntil { madeLate.insert([w, e]) } else { madeLate.remove([w, e]) }
+            }
+            byFocusShown = byFocus
             if Set(held.values).count != held.count { out.failures.append("an entry is beside two windows") }
             for (w, e) in held {
                 let a = against(ours[w]!, theirs[e]!)
@@ -123,19 +148,33 @@ struct WindowPairingModelTests {
         func caughtUp() {
             out.caughtUp += 1
             let held = look("caught up")
-            for (w, e) in held where e != w && ours[e] != nil {
-                if madeBehind.contains([w, e]), ours[w] == ours[e] {
-                    out.tolerated += 1
+            let byFocus = pairing.byFocus
+            let late = held.filter { $0.key != $0.value && byFocus[$0.key] != nil && madeLate.contains([$0.key, $0.value]) && ours[$0.key] == theirs[$0.value] }
+            for (w, e) in held where e != w {
+                if late[w] != nil {
+                    out.lateFocus += 1
+                    note("tolerated: window \(w) holds entry \(e) by a word on the focus that was late, and looks like it")
+                } else if !late.isEmpty, byFocus[w] == nil, ours[w] == theirs[e] {
+                    out.lateFocus += 1
+                    note("tolerated: window \(w) holds entry \(e), what was left beside a pairing by a late word on the focus")
+                } else if madeBehind.contains([w, e]), ours[e] != nil, ours[w] == ours[e] {
+                    out.behind += 1
                     note("tolerated: window \(w) holds entry \(e), paired while a word was on its way, and looks like window \(e)")
                 } else {
-                    out.failures.append("window \(w) holds entry \(e), whose own window is listed")
+                    out.failures.append("window \(w) holds entry \(e), another window's")
                 }
             }
-            // Where nothing else looks like it, a window has its own tabs.
             for (w, seen) in ours {
-                guard let own = theirs[w], seen == own, held[w] != w else { continue }
+                guard let own = theirs[w] else { continue }
+                out.reported += 1
+                if held[w] == nil { out.unseen += 1 }
+                // Where nothing else looks like it and every window at its
+                // place is reported, a window has its own tabs.
+                guard seen == own, held[w] != w else { continue }
                 let another = ours.contains { $0.key != w && $0.value == own } || theirs.contains { $0.key != w && $0.value == seen }
-                if !another { out.failures.append("window \(w) alone matches its entry and doesn't have it") }
+                let there = real.filter { $0.key != w && (ours[$0.key]?.left ?? $0.value.left) == own.left }.count
+                let reportedThere = theirs.filter { $0.key != w && $0.value.left == own.left }.count
+                if !another, there <= reportedThere { out.failures.append("window \(w) alone matches its entry, every window at its place reported, and doesn't have it") }
             }
         }
 
@@ -164,7 +203,10 @@ struct WindowPairingModelTests {
                 // The words on the focus are the quick ones: both in well under the moment.
                 let to: Int? = ids.isEmpty || random.below(ids.count + 1) == ids.count ? nil : random.pick(ids)
                 send(.ours, .focus, to, lag: random.between(0, 50))
-                send(.theirs, .focus, to, lag: random.between(0, 200))
+                // Now and then, in some histories, the browser's is late by more than the moment.
+                let late = lateHistory && random.unit() < 0.3
+                if late { lateUntil = now + 3000 + Int(WindowPairing.patience * 1000) }
+                send(.theirs, .focus, to, lag: late ? random.between(moment, 3000) : random.between(0, 200))
                 note("focus on \(to.map(String.init) ?? "nothing")")
             } else if r < 0.93, !ids.isEmpty {
                 let id = random.pick(ids)
@@ -180,7 +222,7 @@ struct WindowPairingModelTests {
                 note("window \(id) closes")
             }
             // Time passes: often not enough for the words to arrive.
-            let until = now + random.pick([20, 100, 400, 1000, 3500])
+            let until = now + random.pick([20, 100, 400, 1000, 4000, 4000])
             var turns = 0
             while turns < 1000 {
                 turns += 1
@@ -216,7 +258,7 @@ struct WindowPairingModelTests {
             }
             let quietSince = now
             now = until
-            if queue.isEmpty, until - quietSince >= moment, pairing.settlesAt == nil { caughtUp() }
+            if queue.isEmpty, until - quietSince >= moment + Int(WindowPairing.patience * 1000), pairing.settlesAt == nil { caughtUp() }
         }
         return out
     }
@@ -228,21 +270,27 @@ struct WindowPairingModelTests {
     static let histories = ProcessInfo.processInfo.environment["PAIRING_MODEL_HISTORIES"].flatMap(Int.init) ?? 1000
 
     @Test func randomHistoriesKeepThePromises() {
-        var looks = 0, caughtUp = 0, tolerated = 0
+        var total = Outcome(), failed = 0
         for i in 0..<Self.histories {
             let out = Self.run(seed: Self.seed + UInt64(i))
-            looks += out.looks; caughtUp += out.caughtUp; tolerated += out.tolerated
+            total.looks += out.looks; total.caughtUp += out.caughtUp; total.behind += out.behind; total.lateFocus += out.lateFocus
+            total.reported += out.reported; total.unseen += out.unseen
             // PAIRING_MODEL_PRINT=1 prints the histories with a tolerated case.
-            if out.tolerated > 0, ProcessInfo.processInfo.environment["PAIRING_MODEL_PRINT"] != nil {
+            if out.behind + out.lateFocus > 0, ProcessInfo.processInfo.environment["PAIRING_MODEL_PRINT"] != nil {
                 print("tolerated in history \(i) (seed \(Self.seed + UInt64(i))):\n" + Self.run(seed: Self.seed + UInt64(i), logging: true).log.joined(separator: "\n"))
             }
             guard !out.failures.isEmpty else { continue }
+            failed += 1
+            guard failed == 1 else { continue } // one failing history is enough to read
             let again = Self.run(seed: Self.seed + UInt64(i), logging: true)
             Issue.record("history \(i) (seed \(Self.seed + UInt64(i))): \(again.failures)\n\(again.log.joined(separator: "\n"))")
-            return // one failing history is enough to read
         }
-        print("WindowPairing model: \(Self.histories) histories from seed \(Self.seed), \(looks) looks, \(caughtUp) checks with both sides caught up, \(tolerated) tolerated")
-        // The tolerated case must stay the rarity it is, or the model has gone soft.
-        #expect(tolerated <= max(1, Self.histories / 500))
+        print("WindowPairing model: \(Self.histories) histories from seed \(Self.seed), \(failed) failed, \(total.looks) looks, "
+            + "\(total.caughtUp) checks with both sides caught up; tolerated: \(total.lateFocus) late focus, \(total.behind) behind; "
+            + "of \(total.reported) listed windows with an entry at those checks, \(total.unseen) showed nothing "
+            + String(format: "(%.1f%%)", 100 * Double(total.unseen) / Double(max(total.reported, 1))))
+        // What is tolerated must stay the rarity it is, or the model has gone soft.
+        #expect(total.behind <= max(1, Self.histories / 500))
+        #expect(total.lateFocus <= max(2, total.caughtUp / 200))
     }
 }

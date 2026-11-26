@@ -23,9 +23,11 @@ struct WindowPairingTests {
     }
     private func hit(_ s: String, _ w: Int) -> WindowPairing.Found { .window(.init(session: s, windowId: w)) }
 
-    /// One look at `time` (seconds).
-    private func look(_ p: inout WindowPairing, _ time: Double, _ windows: [WindowPairing.Window], _ entries: [SnapshotWindow]) -> [Int: WindowPairing.Found] {
-        p.update(windows, in: [session("/a", entries)], now: time)
+    /// One look at `time` (seconds). `others`: where the browser's windows that
+    /// Accessibility doesn't list are (on a Space that isn't showing).
+    private func look(_ p: inout WindowPairing, _ time: Double, _ windows: [WindowPairing.Window], others: [Double] = [],
+                      _ entries: [SnapshotWindow]) -> [Int: WindowPairing.Found] {
+        p.update(windows, others: [7: others.map { WindowBounds(left: $0, top: 31, width: 748, height: 1259) }], in: [session("/a", entries)], now: time)
     }
 
     // MARK: - By frame and title
@@ -34,7 +36,7 @@ struct WindowPairingTests {
         let work = session("/work", [theirs(1, "Tracker")]), personal = session("/personal", [theirs(9, "Inbox", at: 1800, focused: true)])
         var p = WindowPairing()
         let found = p.update([ours(100, "Tracker - Google Chrome - Work"), ours(101, "Inbox - Google Chrome", at: 1801, focused: true)],
-                             in: [work, personal], now: 0)
+                             others: [:], in: [work, personal], now: 0)
         #expect(found == [100: hit("/work", 1), 101: hit("/personal", 9)])
     }
 
@@ -110,11 +112,12 @@ struct WindowPairingTests {
         #expect(p.settlesAt == nil)
     }
 
-    @Test func theFocusPairsAWindowWhoseTitleHasNotArrived() {
+    @Test func theFocusPairsAWindowOnceItsTitleNoLongerSaysNo() {
         var p = WindowPairing()
-        let windows = [ours(100, "Docs", focused: true)], entries = [theirs(1, "Loading", focused: true), theirs(2, "Other")]
-        #expect(look(&p, 0, windows, entries) == [100: .waiting])
-        #expect(look(&p, 0.3, windows, entries) == [100: hit("/a", 1)])
+        let windows = [ours(100, "Docs", focused: true)]
+        #expect(look(&p, 0, windows, [theirs(1, "Loading", focused: true), theirs(2, "Other")]) == [100: .waiting])
+        #expect(look(&p, 0.3, windows, [theirs(1, "Loading", focused: true), theirs(2, "Other")]) == [100: .waiting])
+        #expect(look(&p, 0.4, windows, [theirs(1, "Docs", focused: true), theirs(2, "Other")]) == [100: hit("/a", 1)])
     }
 
     @Test func theFocusIsNotTakenWhenBothTitleAndFrameSayOtherwise() {
@@ -194,8 +197,10 @@ struct WindowPairingTests {
     @Test func anIncognitoWindowTheExtensionCannotSeeShowsNoOtherWindowsTabs() {
         var p = WindowPairing()
         #expect(look(&p, 0, [ours(100, "Secret - Google Chrome (Incognito)")], [theirs(1, "Inbox")]) == [100: .unseen])
-        // On top of the regular window, untitled so far: that one is taken.
-        #expect(look(&p, 1, [ours(100, ""), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: hit("/a", 1)])
+        // On top of the regular window, untitled so far: either could be the
+        // one the browser reports, until its title is there.
+        #expect(look(&p, 1, [ours(100, ""), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: .unseen])
+        #expect(look(&p, 2, [ours(100, "Secret - Google Chrome (Incognito)"), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: hit("/a", 1)])
     }
 
     @Test func aPageStillLoadingIsMatchedByItsFrameAlone() {
@@ -238,17 +243,17 @@ struct WindowPairingTests {
     @Test func twoBrowsersWithTheSameWindowIdsStayApart() {
         var p = WindowPairing()
         let chrome = session("/chrome", [theirs(1, "Inbox")]), brave = session("/brave", pid: 8, [theirs(1, "Inbox")])
-        #expect(p.update([ours(100, "Inbox"), ours(200, "Inbox", pid: 8)], in: [chrome, brave], now: 0) == [100: hit("/chrome", 1), 200: hit("/brave", 1)])
+        #expect(p.update([ours(100, "Inbox"), ours(200, "Inbox", pid: 8)], others: [:], in: [chrome, brave], now: 0) == [100: hit("/chrome", 1), 200: hit("/brave", 1)])
     }
 
     @Test func aSessionWhoseProcessIsNotKnownIsFoundByTheBrowsersName() {
         var p = WindowPairing()
-        #expect(p.update([ours(100, "Inbox")], in: [session("/a", pid: 0, [theirs(1, "Inbox")])], now: 0) == [100: hit("/a", 1)])
+        #expect(p.update([ours(100, "Inbox")], others: [:], in: [session("/a", pid: 0, [theirs(1, "Inbox")])], now: 0) == [100: hit("/a", 1)])
     }
 
     @Test func aBrowserWithNoExtensionConnectedIsNotConnected() {
         var p = WindowPairing()
-        #expect(p.update([ours(100, "Inbox")], in: [], now: 0) == [100: .notConnected])
+        #expect(p.update([ours(100, "Inbox")], others: [:], in: [], now: 0) == [100: .notConnected])
     }
 
     // MARK: - The second review's cases (2, 4)
@@ -307,5 +312,135 @@ struct WindowPairingTests {
             }
             #expect(found == [100: hit("/a", 1), 101: hit("/a", 2)])
         }
+    }
+
+    // MARK: - Every window of the browser, listed or not (the window server's list)
+
+    /// A window of a profile without the extension, alone at its frame as far
+    /// as Accessibility goes. Profile A's only window is at the same frame on
+    /// a Space that isn't showing: the window server has it.
+    @Test func aWindowIsNotPairedWhileAnUnlistedWindowOfTheBrowserCouldBeTheOne() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Inbox - Google Chrome - Personal")], others: [0], [theirs(1, "Inbox")]) == [100: .unseen])
+        // Paired first, the other window opening afterwards: let go.
+        var q = WindowPairing()
+        #expect(look(&q, 0, [ours(100, "Inbox")], [theirs(1, "Inbox")]) == [100: hit("/a", 1)])
+        #expect(look(&q, 1, [ours(100, "Inbox")], others: [0], [theirs(1, "Inbox")]) == [100: .unseen])
+        // Somewhere else, it is no rival.
+        var r = WindowPairing()
+        #expect(look(&r, 0, [ours(100, "Inbox")], others: [900], [theirs(1, "Inbox")]) == [100: hit("/a", 1)])
+    }
+
+    /// The focused window 100 and window 101 (no extension) share a frame and
+    /// a title; the browser reports windows 1 (focused) and 2, and 2 is on a
+    /// Space that isn't showing. What is left is not 101's.
+    @Test func whatIsLeftIsNotConcludedWhileAnUnlistedWindowIsThere() {
+        var p = WindowPairing()
+        let windows = [ours(100, "New Tab", focused: true), ours(101, "New Tab")], entries = [theirs(1, "New Tab", focused: true), theirs(2, "New Tab")]
+        _ = look(&p, 0, windows, others: [0], entries)
+        #expect(look(&p, 0.31, windows, others: [0], entries) == [100: hit("/a", 1), 101: .unseen])
+        // With every window of the browser listed and reported, it is.
+        var q = WindowPairing()
+        _ = look(&q, 0, windows, entries)
+        #expect(look(&q, 0.31, windows, entries) == [100: hit("/a", 1), 101: hit("/a", 2)])
+    }
+
+    /// Windows on other Spaces that the browser reports cast no doubt: at that
+    /// place there are as many browser windows reported as windows.
+    @Test func unlistedWindowsTheBrowserReportsBlankNothing() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Inbox")], others: [0, 0], [theirs(1, "Inbox"), theirs(2, "Docs"), theirs(3, "Mail")]) == [100: hit("/a", 1)])
+        // One more window there than the browser reports: one of them isn't its.
+        #expect(look(&p, 1, [ours(100, "Inbox")], others: [0, 0, 0], [theirs(1, "Inbox"), theirs(2, "Docs"), theirs(3, "Mail")]) == [100: .unseen])
+    }
+
+    /// A window of another profile at the same place, on another page, is
+    /// plainly not the one; but then the browser window that could be its own
+    /// accounts for no unlisted window.
+    @Test func aWindowOnAnotherPageIsNoRivalAndItsEntryCoversNoOther() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Inbox"), ours(102, "Secret")], [theirs(1, "Inbox")]) == [100: hit("/a", 1), 102: .unseen])
+        let entries = [theirs(1, "Inbox"), theirs(2, "Secret")]
+        var q = WindowPairing()
+        #expect(look(&q, 0, [ours(100, "Inbox"), ours(102, "Secret")], others: [0], entries) == [100: .unseen, 102: .unseen])
+        #expect(look(&q, 1, [ours(100, "Inbox"), ours(102, "Secret")], entries) == [100: hit("/a", 1), 102: hit("/a", 2)])
+    }
+
+    /// A window that has moved on, while its browser window's frame is still
+    /// to be reported: the unlisted window at the old place has its own.
+    @Test func aMoveNextToAnUnlistedWindowBlanksNothing() {
+        var p = WindowPairing()
+        let entries = [theirs(1, "Inbox"), theirs(2, "Docs")]
+        #expect(look(&p, 0, [ours(100, "Inbox")], others: [0], entries) == [100: hit("/a", 1)])
+        #expect(look(&p, 1, [ours(100, "Inbox", at: 280)], others: [0], entries) == [100: hit("/a", 1)])
+        #expect(look(&p, 2, [ours(100, "Inbox", at: 280)], others: [0], [theirs(1, "Inbox", at: 280), theirs(2, "Docs")]) == [100: hit("/a", 1)])
+    }
+
+    // MARK: - A word on the focus that is late by more than the moment
+
+    /// 101 is window 1; 102 has no entry and looks like it. The focus moves
+    /// from 101 to 102, and the browser's word that window 1 lost it is more
+    /// than a moment late: 102 is paired by the focus. That is wrong for as
+    /// long as they look alike, and no longer than `patience` once they don't.
+    @Test func aPairingTheFocusMadeFromALateWordDoesNotOutliveItsLook() {
+        var p = WindowPairing()
+        let onOne = [theirs(1, "New Tab", focused: true)]
+        _ = look(&p, 0, [ours(101, "New Tab", focused: true), ours(102, "New Tab")], onOne)
+        #expect(look(&p, 0.3, [ours(101, "New Tab", focused: true), ours(102, "New Tab")], onOne) == [101: hit("/a", 1), 102: .unseen])
+        let moved = [ours(101, "New Tab"), ours(102, "New Tab", focused: true)]
+        _ = look(&p, 1, moved, onOne)
+        _ = look(&p, 1.4, moved, onOne) // the late word still not in: 102 has entry 1 now
+        _ = look(&p, 2, moved, [theirs(1, "New Tab")])
+        // Window 1 goes to another page; 102 stays where it was.
+        let apart = [ours(101, "Docs"), ours(102, "New Tab", focused: true)]
+        _ = look(&p, 3, apart, [theirs(1, "Docs")])
+        #expect(p.settlesAt.map { $0 <= 3 + WindowPairing.patience } ?? true)
+        #expect(look(&p, 3 + WindowPairing.patience, apart, [theirs(1, "Docs")])[102] != hit("/a", 1))
+        #expect(look(&p, 10, apart, [theirs(1, "Docs")])[102] != hit("/a", 1))
+    }
+
+    /// The window's new title is here at once, the browser's a look or two
+    /// later (two seconds, with another app in front): what the focus paired
+    /// stays, look-alike beside it or not.
+    @Test func aNewTitleDoesNotBlankWhatTheFocusPaired() {
+        var p = WindowPairing()
+        let windows = [ours(101, "New Tab", focused: true), ours(102, "New Tab")]
+        _ = look(&p, 0, windows, [theirs(1, "New Tab", focused: true)])
+        _ = look(&p, 0.3, windows, [theirs(1, "New Tab", focused: true)])
+        let paired = [101: hit("/a", 1), 102: WindowPairing.Found.unseen]
+        let navigated = [ours(101, "Docs", focused: true), ours(102, "New Tab")]
+        #expect(look(&p, 1, navigated, [theirs(1, "New Tab", focused: true)]) == paired)
+        #expect(look(&p, 2, navigated, [theirs(1, "New Tab")]) == paired) // another app in front, a second look
+        #expect(look(&p, 3, navigated, [theirs(1, "Docs")]) == paired)
+        #expect(look(&p, 9, navigated, [theirs(1, "Docs")]) == paired)
+    }
+
+    /// The focus never pairs against a title that says no.
+    @Test func theFocusDoesNotOverrideATitleThatSaysNo() {
+        var p = WindowPairing()
+        let windows = [ours(100, "Secret - Google Chrome (Incognito)", focused: true)], entries = [theirs(1, "Inbox", focused: true)]
+        _ = look(&p, 0, windows, entries)
+        #expect(look(&p, 0.3, windows, entries)[100] != hit("/a", 1))
+        #expect(look(&p, 5, windows, entries)[100] != hit("/a", 1))
+    }
+
+    // MARK: - The window server's list
+
+    /// Read from a Mac with Chrome running one window (2026-11-25): the list
+    /// also holds strips the height of the menu bar, bubbles, 1 pt and 64 pt
+    /// helper windows at the standard layer, and windows at other layers.
+    @Test func onlyWindowsThatCouldBeABrowserWindowCountAsUnlisted() {
+        func w(_ number: UInt32, _ layer: Int, _ x: Double, _ y: Double, _ width: Double, _ height: Double, pid: Int = 61068) -> WindowPairing.ServerWindow {
+            .init(number: number, pid: pid, layer: layer, bounds: WindowBounds(left: x, top: y, width: width, height: height))
+        }
+        let chrome = [w(48506, 0, 0, 0, 2056, 30), w(48505, 0, 0, 0, 2056, 30), w(47295, 0, 207, 16, 1089, 89), w(47136, 0, 1016, 63, 403, 84),
+                      w(45745, 1000, 344, 208, 116, 56), w(45728, 0, 0, 0, 1, 1), w(45727, 0, 0, 31, 2056, 1259), w(38736, 103, 1609, 436, 49, 18),
+                      w(38738, 0, 0, 790, 64, 64), w(48131, 0, 0, 31, 2056, 1259, pid: 96713), w(48510, 0, 0, 0, 2056, 30, pid: 96713)]
+        let main = WindowBounds(left: 0, top: 31, width: 2056, height: 1259)
+        // Its one window followed: nothing else of Chrome's could be a browser window.
+        #expect(WindowPairing.unlisted(chrome, followed: [45727]) == [96713: [main]])
+        #expect(WindowPairing.unlisted(chrome, followed: []) == [61068: [main], 96713: [main]])
+        // A small window that isn't a strip counts: too many only blanks a sidebar.
+        #expect(WindowPairing.unlisted([w(1, 0, 10, 10, 320, 240)], followed: []) == [61068: [WindowBounds(left: 10, top: 10, width: 320, height: 240)]])
     }
 }

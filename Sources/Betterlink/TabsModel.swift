@@ -44,6 +44,9 @@ final class TabsModel: ObservableObject {
             } else if m.type == "event", m.kind == "tabRemoved", m.isWindowClosing != true, let tab = m.tabId {
                 DispatchQueue.main.async { SidebarHoldsModel.shared.closed(tab: tab, socketPath: path) }
             }
+            if m.type == "event", m.kind == "windowFocused" {
+                DragTrace.log("focus: the extension says window \(m.windowId ?? -1) has it (\(path))")
+            }
             // Whether the change that follows is only what a tab shows.
             if !PublishPacer.isContent(m) { self?.urgent.withLock { $0 = true } }
         }, onChange: { [weak self] s in

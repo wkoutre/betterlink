@@ -154,6 +154,20 @@ enum WindowServer {
         return Set(list.compactMap(number))
     }
 
+    /// Every window of the processes `pids`, on every Space and at every layer:
+    /// all the window server tells without Screen Recording (no titles). A
+    /// few milliseconds for a few hundred windows, so read on window and app
+    /// events only.
+    static func windows(of pids: Set<Int>) -> [WindowPairing.ServerWindow] {
+        let list = CGWindowListCopyWindowInfo([.optionAll], kCGNullWindowID) as? [[String: Any]] ?? []
+        return list.compactMap { info in
+            guard let pid = info[kCGWindowOwnerPID as String] as? Int, pids.contains(pid), let n = number(info),
+                  let layer = info[kCGWindowLayer as String] as? Int,
+                  let b = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { return nil }
+            return .init(number: n, pid: pid, layer: layer, bounds: WindowBounds(left: b.minX, top: b.minY, width: b.width, height: b.height))
+        }
+    }
+
     /// Window `n`'s frame right now (what is on screen), Cocoa coordinates.
     /// Cheap enough to call every frame.
     static func frame(_ n: UInt32) -> CGRect? {
