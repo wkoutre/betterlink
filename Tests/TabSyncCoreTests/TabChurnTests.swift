@@ -31,19 +31,27 @@ import Testing
             seq += 1
             return Self.updated(seq: seq, tab: 100 + i % Self.tabs, title: text)
         }
-        host.send([title(0, "first")])
+        let title0 = title(0, "first")
+        host.send([title0])
         try wait(hub) { $0.first?.store.tabs[100]?.title == "first" }
         #expect(handed.value == settled + 1)
 
-        // Ten seconds of churn: 1120 more titles, nothing more handed on.
-        host.send((1...1120).map { title($0, "change \($0)") })
-        try wait(hub) { $0.first?.store.lastSeq == seq }
+        // Ten seconds of churn: 1120 more titles, nothing more handed on, and
+        // none of them read until the app collects: then only each tab's
+        // newest, whatever it decodes to the same lists as reading them all.
+        let churn = (1...1120).map { title($0, "change \($0)") }
+        let decodedBefore = hub.decodeCount, linesBefore = hub.lineCount
+        host.send(churn)
+        try wait(hub) { _ in hub.lineCount == linesBefore + churn.count }
         #expect(handed.value == settled + 1, "\(handed.value - settled) handed on for 1121 title changes")
+        #expect(hub.decodeCount == decodedBefore, "\(hub.decodeCount - decodedBefore) of 1120 held titles decoded before the publish")
 
         // The app publishes: it takes the newest lists, and the next title is
         // handed on again.
         let collected = hub.collect()
+        #expect(hub.decodeCount - decodedBefore <= Self.tabs, "\(hub.decodeCount - decodedBefore) decodes for 1120 titles across \(Self.tabs) tabs")
         #expect(collected.first?.store.tabs[100 + 1120 % Self.tabs]?.title == "change 1120")
+        #expect(collected.first?.store == reference(sent: [Self.snapshot(), title0] + churn))
         host.send([title(7, "after the publish")])
         try wait(hub) { $0.first?.store.lastSeq == seq }
         #expect(handed.value == settled + 2)
@@ -91,6 +99,13 @@ import Testing
 
     static func updated(seq: Int, tab id: Int, title: String, url: String? = nil) -> String {
         #"{"type":"event","kind":"tabUpdated","seq":\#(seq),"t":1,"tab":\#(tab(id, index: id - 100, title: title, url: url)),"changes":["\#(url == nil ? "title" : "url")"]}"#
+    }
+
+    /// The tab lists from reading every line in order, as the extension sent them.
+    func reference(sent lines: [String]) -> TabStore {
+        var store = TabStore()
+        for l in lines { store.apply(try! JSONDecoder().decode(Inbound.self, from: Data(l.utf8))) }
+        return store
     }
 
     /// Waits for the hub to have taken in what was sent. What it hands on is

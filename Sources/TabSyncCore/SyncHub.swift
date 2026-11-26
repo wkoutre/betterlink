@@ -82,6 +82,12 @@ public final class SyncHub: @unchecked Sendable {
     }
 
     private let dec = JSONDecoder()
+    /// How many lines were decoded, for the tab churn guard (TabChurnTests).
+    private var decodes = 0
+    var decodeCount: Int { q.sync { decodes } }
+    /// How many lines came in, read or held.
+    private var lines = 0
+    var lineCount: Int { q.sync { lines } }
 
     public func start() {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
@@ -162,8 +168,10 @@ public final class SyncHub: @unchecked Sendable {
         // Taken out while it changes, so its tabs are changed in place rather
         // than copied for every message.
         guard var s = sessions.removeValue(forKey: path) else { return }
+        self.lines += lines.count
         var decoded = false, atOnce = false
         for line in lines {
+            decodes += 1
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
             decoded = true
             onLine?(path, m)
