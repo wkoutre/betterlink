@@ -37,6 +37,8 @@ struct SidebarView: View {
     @State private var cursor: SidebarRowID?
     @FocusState private var listFocused: Bool
     @FocusState private var newTabFocused: Bool
+    /// Gives the New Tab field the keyboard back after a drag swapped it out.
+    @State private var dragFocus = DragFocus()
     @State private var downKeyMonitor: Any?
     @State private var confirmProfileDelete: SidebarProfile?
     @State private var draftName = ""
@@ -144,6 +146,15 @@ struct SidebarView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .overlay(alignment: sidebar.placedSide == .right ? .leading : .trailing) { ResizeHandle(sidebar: sidebar) }
+        // The drag is over, dropped or not: the New Tab field has the keyboard
+        // again if it had it when the drag began.
+        .onChange(of: dragging) { _, now in
+            guard now == nil else { return }
+            let owed = dragFocus.ended(hasKeyboard: newTabHasKeyboard)
+            DragTrace.log("drag: ended, New Tab owed the keyboard \(owed) (\(newTabTrace))")
+            // Not set here: the field may not be back yet (its onAppear sets it).
+            if owed { retryNewTabFocus("drag ended") }
+        }
         // Undo for the last delete, at the bottom for a few seconds.
         .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
         // A folder with things in it asks first (review F6), then offers Undo too.
@@ -293,10 +304,25 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
                 .strokeBorder(pal.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
             .contentShape(Rectangle())
-            .dropDestination(for: String.self) { keys, _ in
-                dragging = nil
-                return apply(keys, at: spot, p, open)
-            }
+            .onDrop(of: [SidebarDrag.type], isTargeted: nil) { drop($0, at: spot, p, open) }
+    }
+
+    /// A drop on a zone or on the Favorites' empty space. The keys arrive
+    /// later, so whether it is taken is decided from what this sidebar is
+    /// dragging: a drop that would move nothing (a folder onto the Favorites)
+    /// is refused, and slides back. Not known here: a tab whose page is already
+    /// a Favorite counts as taken and saves nothing, and a row dragged from
+    /// another window's sidebar is taken as it was before.
+    private func drop(_ providers: [NSItemProvider], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
+        guard dragging == nil || allowed(spot, p) else {
+            dragging = nil
+            return false
+        }
+        SidebarDrag.keys(from: providers) { keys in
+            dragging = nil
+            apply(keys, at: spot, p, open)
+        }
+        return true
     }
 
     private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
@@ -333,10 +359,7 @@ struct SidebarView: View {
         .animation(Motion.quick(reduceMotion), value: p.favorites.map(\.id))
         .animation(Motion.quick(reduceMotion), value: open.map(\.url))
         // Dropped on the grid's empty space: the end of the Favorites.
-        .dropDestination(for: String.self) { keys, _ in
-            dragging = nil
-            return apply(keys, at: .favorites(p.favorites.count), p, open)
-        }
+        .onDrop(of: [SidebarDrag.type], isTargeted: nil) { drop($0, at: .favorites(p.favorites.count), p, open) }
     }
 
     // MARK: - Folders
@@ -533,6 +556,10 @@ struct SidebarView: View {
 
     /// Starts a drag of `key`, remembering it for the drop targets.
     private func drag(_ key: String) -> NSItemProvider {
+        let had = newTabHasKeyboard
+        let caret = had ? newTabEditor.map { NSMaxRange($0.selectedRange()) } : nil
+        DragTrace.log("drag: began \(key.prefix { $0 != ":" }), New Tab had the keyboard \(had), caret \(caret.map(String.init) ?? "none") (\(newTabTrace))")
+        dragFocus.began(focused: had, caret: caret)
         animate { dragging = key }
         dragCount += 1
         let mine = dragCount
@@ -543,7 +570,7 @@ struct SidebarView: View {
             try? await Task.sleep(for: .milliseconds(300))
             if dragCount == mine, dragging != nil { animate { dragging = nil } }
         }
-        return NSItemProvider(object: key as NSString)
+        return SidebarDrag.provider(for: key)
     }
 
     /// Where `zone` of the row for `id` puts what is dropped there.
@@ -566,7 +593,7 @@ struct SidebarView: View {
         }
     }
 
-    /// Dropped strings, in order: a tab is saved there, a favorite, saved link
+    /// Dropped keys, in order: a tab is saved there, a favorite, saved link
     /// or folder moves there.
     @discardableResult
     private func apply(_ keys: [String], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
@@ -661,9 +688,21 @@ struct SidebarView: View {
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($newTabFocused)
+                // Back from being a drop zone (DropSwap): the keyboard it had
+                // before the drag, now that it is there to take it.
+                .onAppear {
+                    let owed = dragFocus.fieldAppeared()
+                    DragTrace.log("new tab: appeared, owed the keyboard \(owed) (\(newTabTrace))")
+                    if owed { giveNewTabTheKeyboard("field appeared"); retryNewTabFocus("field appeared") }
+                }
                 // Down from the field is the way into the rows. The field
                 // editor takes the arrows before onKeyPress, so watch for it.
-                .onChange(of: newTabFocused) { _, on in watchDownKey(on) }
+                .onChange(of: newTabFocused) { _, on in
+                    DragTrace.log("new tab: focused \(on)")
+                    watchDownKey(on)
+                    // Back after a drag: its caret too, once the field editor is in.
+                    if on, dragFocus.owes { DispatchQueue.main.async { giveNewTabTheKeyboard("focused") } }
+                }
                 .onDisappear { watchDownKey(false) }
                 .onSubmit {
                     guard !newURL.isEmpty else { return }
@@ -674,6 +713,69 @@ struct SidebarView: View {
         }
         .padding(.horizontal, DS.Space.space2)
         .frame(minHeight: DS.Size.sizeRow)
+    }
+
+    /// The New Tab field really has the keyboard: it is being edited in its
+    /// panel, and the panel is the key window. (The focus state alone also
+    /// holds a focus that was set and did not take.)
+    private var newTabHasKeyboard: Bool {
+        guard newTabFocused, let panel = sidebar.panel, panel.isKeyWindow else { return false }
+        return newTabEditor != nil
+    }
+
+    /// The field editor of the field being edited in this panel.
+    private var newTabEditor: NSTextView? {
+        (sidebar.panel?.firstResponder as? NSTextView).flatMap { $0.isFieldEditor ? $0 : nil }
+    }
+
+    /// For trace.log (BETTERLINK_TRACE=1).
+    private var newTabTrace: String {
+        let panel = sidebar.panel
+        return "focused \(newTabFocused), panel key \(panel?.isKeyWindow ?? false), first responder \(panel?.firstResponder.map { String(describing: type(of: $0)) } ?? "none")"
+    }
+
+    /// Gives the New Tab field the keyboard it had when a drag began
+    /// (DragFocus). `last`: the last try, whatever comes of it.
+    private func giveNewTabTheKeyboard(_ when: String, last: Bool = false) {
+        guard dragFocus.owes else { return }
+        let before = newTabTrace
+        var did = "has the keyboard"
+        if newTabHasKeyboard, let editor = newTabEditor {
+            // The text as it was, so typing goes on (DragFocus.caret). Only
+            // here, never when the field is clicked into: nothing is owed then.
+            let now = editor.selectedRange(), length = editor.string.utf16.count
+            let caret = dragFocus.caret(selected: now.location..<NSMaxRange(now), length: length)
+            if let caret {
+                editor.setSelectedRange(NSRange(location: caret, length: 0))
+                DragTrace.log("new tab: caret put back at \(caret) of \(length)")
+            }
+            // Selected otherwise: looked at again until the last try.
+            if caret != nil || last { dragFocus.settle() }
+        } else {
+            did = last ? "gave up" : "focus on its way"
+            // It had the keyboard, so its panel was the key window: again now
+            // (the panel never activates betterlink, so nothing else changes).
+            if let panel = sidebar.panel, !panel.isKeyWindow { panel.makeKey(); did = "panel made key" }
+            if !newTabFocused {
+                newTabFocused = true
+                did = "focus set"
+            } else if last, !newTabHasKeyboard {
+                // Set, and it did not take: SwiftUI moves the focus only on a change.
+                newTabFocused = false
+                DispatchQueue.main.async { newTabFocused = true }
+                did = "focus set again"
+            }
+            if last { dragFocus.settle() }
+        }
+        DragTrace.log("new tab: keyboard, \(when): \(did) (\(before))")
+    }
+
+    /// Looks again a turn of the run loop later, and once more when the swap
+    /// back has settled: SwiftUI takes a focus only once the field is in the
+    /// window, which can be after it is first seen.
+    private func retryNewTabFocus(_ when: String) {
+        DispatchQueue.main.async { giveNewTabTheKeyboard("\(when), next turn") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { giveNewTabTheKeyboard("\(when), settled", last: true) }
     }
 
     private func watchDownKey(_ on: Bool) {
@@ -876,6 +978,16 @@ struct SidebarView: View {
 
     typealias Match = SidebarLook.Match
 }
+
+#if DEBUG
+extension SidebarView {
+    /// For the layout test: the sidebar as it is while `key` is dragged.
+    init(dragging key: String?) {
+        self.init()
+        _dragging = State(initialValue: key)
+    }
+}
+#endif
 
 private struct SidebarTabRow: View {
     let tab: BrowserTab
