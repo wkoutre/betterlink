@@ -264,7 +264,7 @@ final class SidebarController: ObservableObject {
         instances[w.id] = SidebarInstance(window: w, sidebar: self,
                                           hidden: chosen.hidden(window: w.number, pid: t.pid) ?? collapsed,
                                           width: chosen.width(window: w.number, pid: t.pid) ?? width)
-        pair()
+        pair(countingWindows: true)
         arrange()
     }
 
@@ -280,7 +280,7 @@ final class SidebarController: ObservableObject {
             saveMemory()
             saveChosen()
         }
-        pair()
+        pair(countingWindows: true)
         arrange()
     }
 
@@ -301,11 +301,11 @@ final class SidebarController: ObservableObject {
     private func settled(_ t: WindowTracker.Target) {
         guard let i = instances[t.id] else { return }
         i.settle(t)
-        pair() // by where it rests now
+        pair(countingWindows: true) // by where it rests now
     }
 
     private func focusChanged() {
-        pair()
+        pair(countingWindows: true)
         takeOverFront()
         updateHotKey()
     }
@@ -342,21 +342,44 @@ final class SidebarController: ObservableObject {
     private var pairing = WindowPairing()
     private var found: [Int: WindowPairing.Found] = [:]
     private var pairAgain: DispatchWorkItem?
+    /// The browsers' windows as the window server last listed them, on every
+    /// Space: what a pairing counts the windows at a place against.
+    private var server: [WindowPairing.ServerWindow] = []
 
     /// Works out again which of the browsers' own windows each window is
     /// (WindowPairing), then what each sidebar shows: whenever either side
     /// says something new (the tab lists, a window's title, its resting
     /// place, the focus, a window coming or going).
-    private func pair() {
+    ///
+    /// `countingWindows`: reads the window server's list again first. Only on
+    /// what can change it (a window made, closed, come to rest or focused, an
+    /// app coming forward), never when tab lists or titles arrive, however
+    /// often, and never on a timer.
+    private func pair(countingWindows: Bool = false) {
         guard let h = NSScreen.screens.first?.frame.height else { return }
+        if countingWindows {
+            let began = CACurrentMediaTime()
+            server = instances.isEmpty ? [] : WindowServer.windows(of: Set(instances.values.map { Int($0.window.target.pid) }))
+            if DragTrace.enabled, !instances.isEmpty {
+                DragTrace.log(String(format: "windows: the window server's list read in %.2f ms, %d of the browsers' at the standard layer",
+                                     (CACurrentMediaTime() - began) * 1000, server.count))
+            }
+        }
         let windows = instances.values.sorted { $0.window.id < $1.window.id }.map { i -> WindowPairing.Window in
             let t = i.window.target
-            let ax = SidebarGeometry.ax(fromCocoa: i.rest, mainScreenHeight: h)
+            let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: h)
             return .init(id: t.id, pid: Int(t.pid), app: t.appName,
                          frame: WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height),
                          title: t.title, focused: i.window.isFocused)
         }
-        found = pairing.update(windows, in: sessions, now: CACurrentMediaTime())
+        let before = pairing.byFocus
+        found = pairing.update(windows, others: WindowPairing.unlisted(server, followed: Set(instances.values.map(\.window.number))),
+                               in: sessions, now: CACurrentMediaTime())
+        if DragTrace.enabled {
+            let after = pairing.byFocus, number = { [instances] (id: Int) in instances[id].map { String($0.window.number) } ?? "?" }
+            for (id, hit) in after where before[id] != hit { DragTrace.log("pairing: window \(number(id)) is window \(hit.windowId) of \(hit.session) by the focus") }
+            for (id, hit) in before where after[id] != hit { DragTrace.log("pairing: window \(number(id)) is no longer window \(hit.windowId) of \(hit.session) by the focus") }
+        }
         refreshLooks()
         // A word on the focus counts once it has held: one more look then.
         pairAgain?.cancel()

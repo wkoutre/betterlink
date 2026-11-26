@@ -24,9 +24,6 @@ final class SidebarInstance: ObservableObject {
     private(set) var panel: SidebarPanel?
     /// On screen now, beside its window (SidebarPresence).
     private(set) var isShown = false
-    /// Where the window last came to rest: what it is matched to the browser's
-    /// own windows by, so a drag doesn't match it again at every step.
-    private(set) var rest: CGRect
     /// The window as last reported, to tell what changed.
     var reported: WindowTracker.Target
 
@@ -46,7 +43,6 @@ final class SidebarInstance: ObservableObject {
         self.sidebar = sidebar
         self.hidden = hidden
         self.width = width
-        rest = window.target.frame
         reported = window.target
     }
 
@@ -296,7 +292,6 @@ final class SidebarInstance: ObservableObject {
 
     /// The window came to rest: make the pair fill the space the window was given.
     func settle(_ t: WindowTracker.Target) {
-        rest = t.frame
         // A resize by the edge still open ends with the loan read off the window.
         guard resizing == nil else { return }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
