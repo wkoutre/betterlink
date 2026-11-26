@@ -14,7 +14,7 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 | Idle, no browser in front | app under 0.1% of a core, under 1 wakeup a second |
 | Quiet browser in front | the same |
 | Several quiet browser windows, each with its sidebar | the same |
-| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | four windows: app under 1% and 3 wakeups a second with one background tab changing its title twice a second; under 4% and 3 wakeups a second with 56 tabs changing twice a second. The aim for 56 tabs is under 2%, as with the sidebar hidden, and is not met yet. Two 30 s runs with Finder in front, on two builds of the sidebar per window (the later at 5102a53): one tab 0.67% and 3.3 wakeups a second, then 0.61% and 1.1; 56 tabs 3.35% and 2.6, then 3.76% and 1.5 (one sidebar, before a sidebar per window: 0.33% and 1.79%) |
+| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | four windows: app under 0.5% and 1 wakeup a second with one background tab changing its title twice a second; under 2% and 2 wakeups a second with 56 tabs changing twice a second. 30 s runs with Finder in front, Chrome for Testing, on the Mac mini: one tab 0.66% before this change (at c2978e5), 0.31% after (at 536c6f2); 56 tabs 3.04% and 1.0 wakeups a second before, 1.41% and 1.2 after (the tab host helper 0.19 to 0.30%) |
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
