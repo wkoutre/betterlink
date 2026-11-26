@@ -894,6 +894,16 @@ struct SidebarView: View {
     typealias Match = SidebarLook.Match
 }
 
+#if DEBUG
+extension SidebarView {
+    /// For the layout test: the sidebar as it is while `key` is dragged.
+    init(dragging key: String?) {
+        self.init()
+        _dragging = State(initialValue: key)
+    }
+}
+#endif
+
 private struct SidebarTabRow: View {
     let tab: BrowserTab
     /// Whether the installed extension can mute: the speaker is a button then.
