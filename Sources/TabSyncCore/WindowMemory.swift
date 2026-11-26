@@ -27,6 +27,12 @@ public struct WindowMemory: Codable, Equatable, Sendable {
 
     public mutating func forget(window: UInt32) { entries.removeAll { $0.window == window } }
 
+    /// With no browser in front the menu item acts on every window: they count
+    /// as hidden when every window's sidebar is hidden, however that came about
+    /// (the shortcut hides one at a time), and with no windows as the setting
+    /// says.
+    public static func allHidden(_ hidden: [Bool], setting: Bool) -> Bool { hidden.isEmpty ? setting : !hidden.contains(false) }
+
     /// Drops the records of windows that no longer exist.
     public mutating func prune(alive: Set<UInt32>) { entries.removeAll { !alive.contains($0.window) } }
 
