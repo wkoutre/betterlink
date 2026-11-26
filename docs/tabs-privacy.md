@@ -4,7 +4,7 @@ betterlink Tabs is the browser extension that connects a Chromium browser to the
 
 ## What it reads
 
-- For each open tab and window in the browser profile it is installed in: the tab's title, address, position, whether it is pinned, muted, playing sound or active, and the window's position on screen.
+- For each open tab and window in the browser profile it is installed in: the tab's title, address, position, whether it is pinned, muted, playing sound or active, the window's position on screen, and what kind of window it is (normal, popup or app).
 - Each page's icon, from the browser's own icon cache.
 - A random id it makes once and keeps in its own extension storage, so betterlink can tell which browser profile it is talking to.
 

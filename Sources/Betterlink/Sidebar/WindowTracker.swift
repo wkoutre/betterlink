@@ -1,10 +1,12 @@
 import AppKit
 import ApplicationServices
+import BetterlinkCore
 import TabSyncCore
 
-/// Follows every main window of every running attached browser, in front or
-/// not: which there are, and each one's frame, title and state, the moment they
-/// change. Event-driven throughout:
+/// Follows every browser window of every running attached browser (which of
+/// a browser's windows those are: BrowserWatcher), in front or not: which
+/// there are, and each one's frame, title and state, the moment they change.
+/// Event-driven throughout:
 ///
 /// - NSWorkspace tells us when apps launch, quit or come to the front, and when
 ///   another Space shows.
@@ -32,7 +34,11 @@ final class WindowTracker: NSObject {
         var appHidden: Bool
     }
 
+    /// A window is followed: with a sidebar to come, or (`awaitsWord`) only
+    /// for its title and place until the browser's word says what it is.
     var onAdded: ((TrackedWindow) -> Void)?
+    /// A window followed without a sidebar is a browser window after all.
+    var onKnown: ((TrackedWindow) -> Void)?
     /// `closed`: the window is gone, rather than no longer followed.
     var onRemoved: ((TrackedWindow, _ closed: Bool) -> Void)?
     var onChange: ((Target) -> Void)?
@@ -172,16 +178,30 @@ final class WindowTracker: NSObject {
 
     func focusChanged() { onFocus?() }
 
+    /// Hands every browser the pairing's word for its windows, by process and
+    /// window number, and whether the extension is connected for it.
+    func said(_ words: [pid_t: [CGWindowID: WindowKinds.Word]], listening: (BrowserWatcher) -> Bool) {
+        for w in watchers.values { w.said(words[w.pid] ?? [:], listening: listening(w)) }
+    }
+
     /// The window server no longer has `w`: it is closed, whether or not
     /// Accessibility has said so yet.
     func closed(_ w: TrackedWindow) {
-        if let watcher = w.watcher { watcher.remove(w) } else { removed(w) }
+        if let watcher = w.watcher { watcher.remove(w) } else { removed(w, closed: true) }
     }
 
-    func removed(_ w: TrackedWindow) {
+    /// The window server's list of the processes `pids`: what was known of
+    /// their windows that are no longer in it is forgotten. A window that was
+    /// judged and never followed says nothing when it closes.
+    func forget(missingFrom alive: Set<UInt32>, of pids: Set<pid_t>) {
+        for w in watchers.values where pids.contains(w.pid) { w.forget(missingFrom: alive) }
+    }
+
+    /// `closed`: the window is gone, rather than no longer followed.
+    func removed(_ w: TrackedWindow, closed: Bool) {
         if drag?.window === w { stopDrag() }
         waitingForMouseUp.removeAll { $0 === w }
-        onRemoved?(w, true)
+        onRemoved?(w, closed)
     }
 
     /// Reported at once, and again when windows and Spaces have stopped moving
@@ -189,7 +209,15 @@ final class WindowTracker: NSObject {
     func orderMayHaveChanged() {
         onScreen?(false)
         settledWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.onScreen?(true) }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // A window seen not to be a browser window after all goes now,
+                // with everything at rest.
+                self.watchers.values.forEach { $0.dropNotBrowser() }
+                self.onScreen?(true)
+            }
+        }
         settledWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }

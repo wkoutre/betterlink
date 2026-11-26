@@ -1,5 +1,6 @@
 import AppKit
 import ApplicationServices
+import BetterlinkCore
 import TabSyncCore
 
 /// Reading and moving another app's windows through Accessibility. Frames are
@@ -92,8 +93,10 @@ enum AXWindow {
         AXUIElementSetAttributeValue(win, kAXMainAttribute as CFString, kCFBooleanTrue)
     }
 
-    /// Whether the window is a main browser window. A save panel, an
-    /// extension's popup, a menu or a dialog isn't one.
+    /// Whether the window is a standard one with a title bar's buttons. A save
+    /// panel, a menu or a dialog isn't. A browser window is, and so are an
+    /// extension's palette, an app window and DevTools on its own: which of
+    /// those it is, is read from what it holds (`tabs(in:)`, `WindowKinds`).
     static func isMain(_ w: AXUIElement) -> Bool {
         let role: String? = copy(w, kAXRoleAttribute), subrole: String? = copy(w, kAXSubroleAttribute)
         guard role == (kAXWindowRole as String), subrole == (kAXStandardWindowSubrole as String) else { return false }
@@ -101,6 +104,31 @@ enum AXWindow {
         let fullScreen: AXUIElement? = copy(w, kAXFullScreenButtonAttribute)
         return minimize != nil && fullScreen != nil
     }
+
+    /// One look at what a window holds, for `WindowKinds`: its tab groups and
+    /// whether one has a tab in it, by the walk the tab takeover reads the
+    /// window with (`ChromeWalk`). Stops at the first tab. Nil when the window
+    /// can't be read now: it is gone, or its browser didn't answer in time
+    /// (`timedOut`).
+    static func tabs(in win: AXUIElement) -> WindowKinds.Reading? {
+        var reading = WindowKinds.Reading(tabGroups: 0, tabs: 0)
+        let walk = ChromeWalk()
+        let began = CACurrentMediaTime()
+        let read = walk.run(win) { role, _, children in
+            guard role == kAXTabGroupRole as String else { return true }
+            reading.tabGroups += 1
+            guard walk.firstTab(in: children) != nil else { return true }
+            reading.tabs = 1
+            return false
+        }
+        timedOut = !walk.answered
+        lastWalk = (walk.calls, (CACurrentMediaTime() - began) * 1000)
+        return read ? reading : nil
+    }
+
+    /// What the last `tabs(in:)` cost: round trips to the browser, and
+    /// milliseconds on the main thread. For the trace.
+    private(set) static var lastWalk = (calls: 0, ms: 0.0)
 
     /// The window's window-server number. Accessibility has no public way to
     /// tell it, and the frame can't: two windows of one browser often share
