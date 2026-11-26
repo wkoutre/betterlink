@@ -25,7 +25,7 @@ struct DropTarget: Equatable {
 }
 
 /// One row's drop handling: reports where the drag is as it moves (so the
-/// sidebar can draw the line), and hands over the dragged strings on drop.
+/// sidebar can draw the line), and hands over the dragged keys on drop.
 struct SidebarRowDrop: DropDelegate {
     let id: UUID
     let size: CGSize
@@ -40,7 +40,7 @@ struct SidebarRowDrop: DropDelegate {
                    : .at(info.location.y, extent: size.height, canHold: canHold)
     }
 
-    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [.plainText]) }
+    func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [SidebarDrag.type]) }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
         let z = zone(info)
@@ -59,20 +59,9 @@ struct SidebarRowDrop: DropDelegate {
         let z = zone(info)
         target = nil
         guard allowed(z) else { return false }
-        let providers = info.itemProviders(for: [.plainText])
+        let providers = info.itemProviders(for: [SidebarDrag.type])
         guard !providers.isEmpty else { return false }
-        // Each in its provider's slot: several dropped at once keep their order (review F3).
-        var keys = [String?](repeating: nil, count: providers.count)
-        let group = DispatchGroup()
-        let lock = NSLock()
-        for (i, p) in providers.enumerated() {
-            group.enter()
-            _ = p.loadObject(ofClass: NSString.self) { s, _ in
-                if let s = s as? String { lock.lock(); keys[i] = s; lock.unlock() }
-                group.leave()
-            }
-        }
-        group.notify(queue: .main) { perform(keys.compactMap { $0 }, z) }
+        SidebarDrag.keys(from: providers) { perform($0, z) }
         return true
     }
 }
@@ -120,8 +109,8 @@ struct DropRowModifier: ViewModifier {
     func body(content: Content) -> some View {
         content
             .onGeometryChange(for: CGSize.self) { $0.size } action: { measured($0) }
-            .onDrop(of: [.plainText], delegate: SidebarRowDrop(id: id, size: size, horizontal: horizontal,
-                                                              canHold: canHold, target: $target, allowed: allowed, perform: perform))
+            .onDrop(of: [SidebarDrag.type], delegate: SidebarRowDrop(id: id, size: size, horizontal: horizontal,
+                                                                    canHold: canHold, target: $target, allowed: allowed, perform: perform))
             .overlay { DropMarker(zone: target?.id == id ? target?.zone : nil, horizontal: horizontal, color: color) }
     }
 }
@@ -140,5 +129,38 @@ struct DropSwap<Zone: View, Line: View>: View {
             if showing { zone.transition(.opacity) } else { line.transition(.opacity) }
         }
         .frame(maxWidth: .infinity, minHeight: height, maxHeight: height)
+    }
+}
+
+extension SidebarDrag {
+    /// The drag's type, for the drop targets.
+    static let type = UTType(exportedAs: typeIdentifier)
+
+    /// What a drag of `key` hands over: the key under the sidebar's own type,
+    /// for this process alone. Dropped on a web page or another app, there is
+    /// nothing to take.
+    static func provider(for key: String) -> NSItemProvider {
+        let provider = NSItemProvider()
+        provider.registerDataRepresentation(forTypeIdentifier: typeIdentifier, visibility: .ownProcess) { done in
+            done(data(for: key), nil)
+            return nil
+        }
+        return provider
+    }
+
+    /// The keys dropped, each in its provider's slot: several dropped at once
+    /// keep their order (review F3). Calls back on the main queue.
+    static func keys(from providers: [NSItemProvider], then: @escaping ([String]) -> Void) {
+        var keys = [String?](repeating: nil, count: providers.count)
+        let group = DispatchGroup()
+        let lock = NSLock()
+        for (i, p) in providers.enumerated() {
+            group.enter()
+            _ = p.loadDataRepresentation(forTypeIdentifier: typeIdentifier) { data, _ in
+                if let k = data.flatMap(key(from:)) { lock.lock(); keys[i] = k; lock.unlock() }
+                group.leave()
+            }
+        }
+        group.notify(queue: .main) { then(keys.compactMap { $0 }) }
     }
 }
