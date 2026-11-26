@@ -532,11 +532,25 @@ const tour = Cli.create('tour', {
     },
   })
 
+// The changelog this copy of betterlink was built with (the Changelog page
+// shows the same). Read-only: it comes from git history at build time.
+const changelog = Cli.create('changelog', {
+  description: 'What changed in each release of betterlink, newest first, as built into this copy',
+})
+  .command('list', {
+    description: 'Releases with their date and changes, newest first',
+    options: z.object({
+      since: z.string().optional().describe('Only releases newer than this version, e.g. 0.3.20'),
+      limit: z.number().int().positive().optional().describe('At most this many releases'),
+    }),
+    run: (c) => core('changelog.list', c.options),
+  })
+
 export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
     'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders, saved links, imports and settings; ' +
-    "and open tabs in browsers with the Tabs extension; Sync between Macs; and the tour (the first-run flow and What's New). " +
+    "and open tabs in browsers with the Tabs extension; Sync between Macs; the tour (the first-run flow and What's New); and read the changelog. " +
     '(The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).
   version: process.env.BETTERLINK_VERSION ?? 'dev',
@@ -566,5 +580,6 @@ export const cli = Cli.create('betterlink', {
   .command(tabs)
   .command(sync)
   .command(tour)
+  .command(changelog)
 
 if (import.meta.main) cli.serve()

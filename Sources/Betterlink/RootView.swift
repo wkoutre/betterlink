@@ -13,7 +13,10 @@ struct RootView: View {
         case rules, profiles, permissions, agents
         /// The sidebar beside the browser. Saved as "tabs", its page's first name.
         case sidebar = "tabs"
-        case config, general, log, about
+        case config, general, log
+        /// Every release and what it changed (ChangelogPage).
+        case changelog
+        case about
         var id: String { rawValue }
         var title: String {
             switch self {
@@ -25,6 +28,7 @@ struct RootView: View {
             case .config: "config.ts"
             case .general: "General"
             case .log: "Log"
+            case .changelog: "Changelog"
             case .about: "About"
             }
         }
@@ -37,7 +41,7 @@ struct RootView: View {
             case .agents: DS.Palette.tileViolet
             case .sidebar: DS.Palette.tileTeal
             case .config: DS.Palette.tileInk
-            case .general, .log: DS.Palette.tileNeutral
+            case .general, .log, .changelog: DS.Palette.tileNeutral
             case .about: DS.Palette.accentText
             }
         }
@@ -51,6 +55,7 @@ struct RootView: View {
             case .config: "chevron.left.forwardslash.chevron.right"
             case .general: "gearshape.fill"
             case .log: "list.bullet"
+            case .changelog: "clock.arrow.circlepath"
             case .about: "info"
             }
         }
@@ -105,6 +110,7 @@ struct RootView: View {
         case .config: ConfigPage()
         case .general: GeneralPage()
         case .log: LogPage()
+        case .changelog: ChangelogPage()
         case .about: AboutPage()
         }
     }
@@ -138,7 +144,7 @@ private struct NavColumn: View {
                 group(nil, [.rules, .profiles, .permissions, .agents])
                 group("Preview", [.sidebar])
                 group("Advanced", [.config, .general] + (model.showLog ? [.log] : []))
-                group(nil, [.about])
+                group(nil, [.changelog, .about])
             }
             .padding(.horizontal, DS.Space.space3)
             // Clear the window's traffic lights.

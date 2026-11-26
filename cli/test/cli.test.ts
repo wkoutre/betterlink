@@ -296,9 +296,35 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
   // (scripts/gen-tour.py checks each step's command and options exist).
   test('the tour, Sync and tab helper commands are listed for agents', () => {
     const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
-    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup']) {
+    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup', 'changelog list']) {
       expect(llms).toContain(`betterlink ${c}`)
     }
+  })
+
+  // The changelog built into the app (scripts/gen-changelog.py), the same
+  // list the Changelog page shows. A clone without tags builds an empty one.
+  test('changelog: the releases this copy was built with, newest first', () => {
+    const d = home()
+    const all = run(d, 'changelog', 'list')
+    expect(all.code).toBe(0)
+    expect(typeof all.json.installed).toBe('string')
+    const versions: string[] = all.json.releases.map((r: any) => r.version)
+    const key = (v: string) => v.split('.').map(Number)
+    const newer = (a: string, b: string) => {
+      const [x, y] = [key(a), key(b)]
+      for (let i = 0; i < 3; i++) if (x[i] !== y[i]) return x[i] > y[i]
+      return false
+    }
+    for (let i = 1; i < versions.length; i++) expect(newer(versions[i - 1], versions[i])).toBe(true)
+    for (const r of all.json.releases) {
+      expect(r.date).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+      for (const c of r.changes) expect(typeof c.text).toBe('string')
+    }
+    if (versions.length >= 2) {
+      expect(run(d, 'changelog', 'list', '--limit', '1').json.releases.map((r: any) => r.version)).toEqual([versions[0]])
+      expect(run(d, 'changelog', 'list', '--since', versions[1]).json.releases.map((r: any) => r.version)).toEqual([versions[0]])
+    }
+    expect(run(d, 'changelog', 'list', '--since', 'soon').code).not.toBe(0)
   })
 
   test('sync: a folder, what syncs, and off', () => {
