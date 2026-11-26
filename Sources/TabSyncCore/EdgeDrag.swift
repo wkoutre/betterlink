@@ -78,8 +78,11 @@ public struct EdgeDrag: Equatable, Sendable {
 
     /// The delta after one more single step of `step` points on a resize
     /// that stands at `delta`: steps taken before the window has answered add
-    /// up. Counted from what is asked now, so steps past a limit don't pile up
-    /// beyond it and one step back is felt at once.
+    /// up. Counted from what is asked now, so steps past the sidebar's limits
+    /// or the least width a window is asked for (`minWindowWidth`) don't pile
+    /// up beyond them and one step back is felt at once. A browser's own,
+    /// larger minimum isn't known here: steps past it add up until the wait
+    /// ends, and the next step starts from the window as it is.
     public func stepped(_ delta: CGFloat, by step: CGFloat, minWindowWidth: CGFloat = 500) -> CGFloat {
         func within(_ d: CGFloat) -> CGFloat {
             SidebarGeometry.resized(window: window, width: width, to: width + d, side: side,
