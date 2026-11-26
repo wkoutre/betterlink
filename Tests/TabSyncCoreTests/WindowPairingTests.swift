@@ -36,7 +36,7 @@ struct WindowPairingTests {
         let work = session("/work", [theirs(1, "Tracker")]), personal = session("/personal", [theirs(9, "Inbox", at: 1800, focused: true)])
         var p = WindowPairing()
         let found = p.update([ours(100, "Tracker - Google Chrome - Work"), ours(101, "Inbox - Google Chrome", at: 1801, focused: true)],
-                             in: [work, personal], now: 0)
+                             others: [:], in: [work, personal], now: 0)
         #expect(found == [100: hit("/work", 1), 101: hit("/personal", 9)])
     }
 
@@ -197,8 +197,10 @@ struct WindowPairingTests {
     @Test func anIncognitoWindowTheExtensionCannotSeeShowsNoOtherWindowsTabs() {
         var p = WindowPairing()
         #expect(look(&p, 0, [ours(100, "Secret - Google Chrome (Incognito)")], [theirs(1, "Inbox")]) == [100: .unseen])
-        // On top of the regular window, untitled so far: that one is taken.
-        #expect(look(&p, 1, [ours(100, ""), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: hit("/a", 1)])
+        // On top of the regular window, untitled so far: either could be the
+        // one the browser reports, until its title is there.
+        #expect(look(&p, 1, [ours(100, ""), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: .unseen])
+        #expect(look(&p, 2, [ours(100, "Secret - Google Chrome (Incognito)"), ours(101, "Inbox - Google Chrome")], [theirs(1, "Inbox")]) == [100: .unseen, 101: hit("/a", 1)])
     }
 
     @Test func aPageStillLoadingIsMatchedByItsFrameAlone() {
@@ -241,17 +243,17 @@ struct WindowPairingTests {
     @Test func twoBrowsersWithTheSameWindowIdsStayApart() {
         var p = WindowPairing()
         let chrome = session("/chrome", [theirs(1, "Inbox")]), brave = session("/brave", pid: 8, [theirs(1, "Inbox")])
-        #expect(p.update([ours(100, "Inbox"), ours(200, "Inbox", pid: 8)], in: [chrome, brave], now: 0) == [100: hit("/chrome", 1), 200: hit("/brave", 1)])
+        #expect(p.update([ours(100, "Inbox"), ours(200, "Inbox", pid: 8)], others: [:], in: [chrome, brave], now: 0) == [100: hit("/chrome", 1), 200: hit("/brave", 1)])
     }
 
     @Test func aSessionWhoseProcessIsNotKnownIsFoundByTheBrowsersName() {
         var p = WindowPairing()
-        #expect(p.update([ours(100, "Inbox")], in: [session("/a", pid: 0, [theirs(1, "Inbox")])], now: 0) == [100: hit("/a", 1)])
+        #expect(p.update([ours(100, "Inbox")], others: [:], in: [session("/a", pid: 0, [theirs(1, "Inbox")])], now: 0) == [100: hit("/a", 1)])
     }
 
     @Test func aBrowserWithNoExtensionConnectedIsNotConnected() {
         var p = WindowPairing()
-        #expect(p.update([ours(100, "Inbox")], in: [], now: 0) == [100: .notConnected])
+        #expect(p.update([ours(100, "Inbox")], others: [:], in: [], now: 0) == [100: .notConnected])
     }
 
     // MARK: - The second review's cases (2, 4)
@@ -350,6 +352,18 @@ struct WindowPairingTests {
         #expect(look(&p, 0, [ours(100, "Inbox")], others: [0, 0], [theirs(1, "Inbox"), theirs(2, "Docs"), theirs(3, "Mail")]) == [100: hit("/a", 1)])
         // One more window there than the browser reports: one of them isn't its.
         #expect(look(&p, 1, [ours(100, "Inbox")], others: [0, 0, 0], [theirs(1, "Inbox"), theirs(2, "Docs"), theirs(3, "Mail")]) == [100: .unseen])
+    }
+
+    /// A window of another profile at the same place, on another page, is
+    /// plainly not the one; but then the browser window that could be its own
+    /// accounts for no unlisted window.
+    @Test func aWindowOnAnotherPageIsNoRivalAndItsEntryCoversNoOther() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Inbox"), ours(102, "Secret")], [theirs(1, "Inbox")]) == [100: hit("/a", 1), 102: .unseen])
+        let entries = [theirs(1, "Inbox"), theirs(2, "Secret")]
+        var q = WindowPairing()
+        #expect(look(&q, 0, [ours(100, "Inbox"), ours(102, "Secret")], others: [0], entries) == [100: .unseen, 102: .unseen])
+        #expect(look(&q, 1, [ours(100, "Inbox"), ours(102, "Secret")], entries) == [100: hit("/a", 1), 102: hit("/a", 2)])
     }
 
     /// A window that has moved on, while its browser window's frame is still

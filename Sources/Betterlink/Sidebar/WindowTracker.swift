@@ -38,7 +38,8 @@ final class WindowTracker: NSObject {
     /// A window has come to rest: no move or resize for a moment and the mouse
     /// button is up.
     var onSettle: ((Target) -> Void)?
-    /// Another window has the focus, in its browser or of all.
+    /// Another window has the focus, in its browser or of all, or a browser
+    /// has made a window (followed or not).
     var onFocus: (() -> Void)?
     /// What is on screen, or in which order, may have changed. `settled`: a
     /// moment later, when Spaces and windows have stopped moving.
