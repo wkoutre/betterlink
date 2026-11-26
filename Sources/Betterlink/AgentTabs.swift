@@ -243,6 +243,9 @@ extension AgentCommand {
     // MARK: Sidebar settings
 
     /// The Sidebar page's settings, from the same keys SidebarController uses.
+    /// `shown` and `width` are what a window gets when nothing was chosen for
+    /// it: a window hidden with the shortcut, or with its edge dragged, has
+    /// its own, which only the app knows.
     static func sidebarSettings() -> [String: Any] {
         let d = MenuBarIcon.defaults()
         let w = d.double(forKey: "sidebar.width")

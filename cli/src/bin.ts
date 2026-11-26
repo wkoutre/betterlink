@@ -301,7 +301,7 @@ const sidebarProfiles = Cli.create('profiles', {
   })
 
 const sidebarSettings = Cli.create('settings', { description: 'The sidebar on this Mac: on or off, shown or hidden, side, width, browsers' })
-  .command('get', { description: 'Show the sidebar settings', run: () => core('sidebar.settings.get') })
+  .command('get', { description: 'Show the sidebar settings. shown and width are what a window gets when nothing was chosen for it; a window hidden with the shortcut, or with its edge dragged, has its own', run: () => core('sidebar.settings.get') })
   .command('set', {
     description: 'Change the sidebar settings; the running app applies them at once',
     options: z.object({
