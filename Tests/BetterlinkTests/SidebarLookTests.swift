@@ -55,6 +55,8 @@ import Testing
         #expect(look(.notConnected, nil) == .notConnected)
         #expect(look(.unseen, session([window(1, "Inbox")])) == .unseen)
         #expect(look(.unseen, session([], snapshot: false)) == .connecting)
+        // Which window it is is being settled: nothing is said for that moment.
+        #expect(look(.waiting, session([window(1, "Inbox")])) == .connecting)
         // The browser window closed between the pairing and now.
         #expect(look(.window(.init(session: "/gone", windowId: 1)), session([window(1, "Inbox")])) == .unseen)
     }

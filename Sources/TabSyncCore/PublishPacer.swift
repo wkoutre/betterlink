@@ -2,7 +2,8 @@ import Foundation
 
 /// When to hand a new tab list on. A change to which tabs there are, or which
 /// is in front, goes at once. A tab's contents (its title, its icon) go at once
-/// too when things are quiet, and at most once per `interval` while they churn:
+/// too when things are quiet, and at most once per `interval` (see
+/// `interval(sidebarOnScreen:browserInFront:)`) while they churn:
 /// a page that changes its title all day must not redraw the sidebar all day.
 public struct PublishPacer: Equatable, Sendable {
     public enum Decision: Equatable, Sendable {
@@ -32,6 +33,15 @@ public struct PublishPacer: Equatable, Sendable {
     public mutating func published(now: Double) {
         last = now
         due = nil
+    }
+
+    /// How often, at most, what tabs show is handed on while it keeps changing:
+    /// 10 times a second only while someone can be watching it change, with a
+    /// sidebar on screen and an attached browser in front. Sidebars stay on
+    /// screen beside their windows while another app is in front, which is
+    /// most of the day: then, as with none on screen, every 2 seconds.
+    public static func interval(sidebarOnScreen: Bool, browserInFront: Bool) -> Double {
+        sidebarOnScreen && browserInFront ? 0.1 : 2
     }
 
     /// Events that change only what a tab shows.

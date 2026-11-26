@@ -8,9 +8,20 @@ import TabSyncCore
 enum AXWindow {
     static func copy<T>(_ el: AXUIElement, _ attr: String) -> T? {
         var v: CFTypeRef?
-        guard AXUIElementCopyAttributeValue(el, attr as CFString, &v) == .success, let v else { return nil }
+        let answer = AXUIElementCopyAttributeValue(el, attr as CFString, &v)
+        timedOut = answer == .cannotComplete
+        guard answer == .success, let v else { return nil }
         return v as? T
     }
+
+    /// Whether the last `copy` got no answer in time: its app is hung or busy.
+    private(set) static var timedOut = false
+
+    /// How long one call to a browser may wait. The default is several
+    /// seconds, on the main thread, for each call a hung browser doesn't
+    /// answer. Set on every element kept or asked more than once: per the
+    /// header it holds for that object only, not for others equal to it.
+    static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, 1) }
 
     static func frame(of win: AXUIElement) -> CGRect? {
         guard let pv: AXValue = copy(win, kAXPositionAttribute), let sv: AXValue = copy(win, kAXSizeAttribute),
@@ -82,7 +93,8 @@ enum AXWindow {
     /// The window's window-server number. Accessibility has no public way to
     /// tell it, and the frame can't: two windows of one browser often share
     /// one, and then the wrong window's sidebar would be moved and ordered.
-    /// Nil should macOS ever drop the function: that window gets no sidebar.
+    /// Nil should macOS ever drop the function: then no window gets a sidebar
+    /// (`numbersWindows`; the Sidebar page and `sidebar settings get` say so).
     static func number(of win: AXUIElement) -> CGWindowID? {
         var n = CGWindowID(0)
         guard let get = getWindow, get(win, &n) == .success, n != 0 else { return nil }
@@ -90,8 +102,11 @@ enum AXWindow {
     }
 
     private typealias GetWindow = @convention(c) (AXUIElement, UnsafeMutablePointer<CGWindowID>) -> AXError
-    private static let getWindow: GetWindow? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow")
+    nonisolated private static let getWindow: GetWindow? = dlsym(UnsafeMutableRawPointer(bitPattern: -2), "_AXUIElementGetWindow")
         .map { unsafeBitCast($0, to: GetWindow.self) }
+
+    /// Whether this macOS still has the function `number(of:)` needs.
+    nonisolated static var numbersWindows: Bool { getWindow != nil }
 }
 
 /// What the window server knows about every app's windows: numbers, frames and
