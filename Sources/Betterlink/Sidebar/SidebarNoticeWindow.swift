@@ -18,12 +18,9 @@ final class SidebarNoticeWindow {
     func show(_ text: String, over window: CGRect) {
         generation += 1
         let mine = generation
-        let host = Self.host(text)
-        let p = panel ?? makePanel()
-        p.contentView = host
         let display = NSScreen.screens.max { $0.frame.intersection(window).area < $1.frame.intersection(window).area }
         guard let visible = display?.visibleFrame else { return }
-        let final = SidebarNotice.frame(size: Self.size(of: host), window: window, visible: visible)
+        let (p, final) = prepare(text, over: window, visible: visible)
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         p.setFrame(final.offsetBy(dx: 0, dy: still ? 0 : 6), display: false)
         p.alphaValue = 0
@@ -46,7 +43,18 @@ final class SidebarNoticeWindow {
         }
     }
 
-    static func host(_ text: String) -> NSHostingView<some View> {
+    /// The panel with the note in it, at its place (not yet shown).
+    func prepare(_ text: String, over window: CGRect, visible: CGRect) -> (NSPanel, CGRect) {
+        let host = Self.host(text)
+        let p = panel ?? makePanel()
+        p.contentView = host
+        let final = SidebarNotice.frame(size: Self.size(of: host), window: window, visible: visible)
+        p.setFrame(final, display: false)
+        host.layoutSubtreeIfNeeded()
+        return (p, final)
+    }
+
+    static func host(_ text: String) -> NSHostingView<SidebarNoticeView> {
         let host = NSHostingView(rootView: SidebarNoticeView(text: text))
         host.layoutSubtreeIfNeeded()
         return host
@@ -70,7 +78,7 @@ final class SidebarNoticeWindow {
     }
 }
 
-private struct SidebarNoticeView: View {
+struct SidebarNoticeView: View {
     let text: String
     var body: some View {
         Text(text)
