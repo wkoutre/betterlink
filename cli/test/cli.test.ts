@@ -254,10 +254,13 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(fresh.welcomed).toBe(false)
     expect(fresh.showsNext).toBe('welcome')
     expect(fresh.new).toEqual([])
-    // Every step says how an agent does what it does, or why it can't.
+    // A step that does something says how an agent does the same (a step
+    // that only explains has neither a command nor a reason for none).
     const steps = fresh.topics.flatMap((t: any) => t.steps)
-    expect(steps.length).toBeGreaterThan(10)
-    for (const s of steps) expect(typeof (s.command ?? s.noCommand)).toBe('string')
+    const commands = steps.map((s: any) => s.command).filter(Boolean)
+    expect(commands.length).toBeGreaterThan(10)
+    for (const c of commands) expect(c).toStartWith('betterlink ')
+    for (const s of steps) expect(s.state).toBe('new')
     // Nothing is new before the first run.
     expect(run(d, 'tour', 'new').json.shown).toBe(false)
 
