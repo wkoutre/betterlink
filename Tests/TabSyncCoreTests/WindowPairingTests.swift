@@ -462,4 +462,33 @@ struct WindowPairingTests {
         // A small window that isn't a strip counts: too many only blanks a sidebar.
         #expect(WindowPairing.unlisted([w(1, 0, 10, 10, 320, 240)], followed: []) == [61068: [WindowBounds(left: 10, top: 10, width: 320, height: 240)]])
     }
+
+    // MARK: - Windows coming and going
+
+    /// What tells the caller that a window came or went on the browser's
+    /// side: the set of windows the extension reports, not their tabs.
+    @Test func theWindowsTheExtensionReportsChangeOnlyWhenOneComesOrGoes() {
+        let two = WindowPairing.reported(in: [session("/a", [theirs(1, "Inbox"), theirs(2, "Docs", at: 900)]), session("/b", [theirs(1, "Mail")])])
+        #expect(two == [.init(session: "/a", windowId: 1), .init(session: "/a", windowId: 2), .init(session: "/b", windowId: 1)])
+        // Another page, another place, the focus: the same windows.
+        #expect(WindowPairing.reported(in: [session("/a", [theirs(1, "News", at: 40, focused: true), theirs(2, "Docs", at: 900)]), session("/b", [theirs(1, "Mail")])]) == two)
+        // One closed, and a profile's copy of the extension gone.
+        #expect(WindowPairing.reported(in: [session("/a", [theirs(1, "Inbox")]), session("/b", [theirs(1, "Mail")])]) != two)
+        #expect(WindowPairing.reported(in: [session("/a", [theirs(1, "Inbox"), theirs(2, "Docs", at: 900)])]) != two)
+        #expect(WindowPairing.reported(in: []) == [])
+    }
+
+    /// A followed window the window server no longer lists is closed. One
+    /// that is minimized, hidden or on another Space is still listed, and no
+    /// list at all says nothing.
+    @Test func aFollowedWindowTheWindowServerNoLongerHasIsClosed() {
+        func w(_ number: UInt32, layer: Int = 0, width: Double = 900) -> WindowPairing.ServerWindow {
+            .init(number: number, pid: 7, layer: layer, bounds: WindowBounds(left: 0, top: 31, width: width, height: 650))
+        }
+        #expect(WindowPairing.closed([51401, 51417], in: [w(51401), w(51417), w(3, width: 30)]) == [])
+        #expect(WindowPairing.closed([51401, 51417], in: [w(51401), w(3, width: 30)]) == [51417])
+        #expect(WindowPairing.closed([51401, 51417], in: []) == [51401, 51417])
+        #expect(WindowPairing.closed([51401, 51417], in: nil) == [])
+        #expect(WindowPairing.closed([], in: [w(1)]) == [])
+    }
 }

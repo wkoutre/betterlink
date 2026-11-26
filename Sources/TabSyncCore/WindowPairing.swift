@@ -139,6 +139,24 @@ public struct WindowPairing: Sendable {
         return Dictionary(grouping: could, by: \.pid).mapValues { $0.map(\.bounds) }
     }
 
+    /// Every browser window the extension reports now. When it differs from
+    /// the last, a window came or went on the browser's side: the caller
+    /// counts the windows again and checks which sidebars are on screen.
+    public static func reported(in sessions: [BrowserSession]) -> Set<Hit> {
+        Set(sessions.flatMap { s in s.store.windows.keys.map { Hit(session: s.id, windowId: $0) } })
+    }
+
+    /// The followed windows (by number) the window server no longer has: those
+    /// are closed, whatever Accessibility has or hasn't said. `server`: every
+    /// window of their processes, at any layer and on any Space, so one that
+    /// is minimized, hidden or on another Space is there; nil when the window
+    /// server gave no list, which says nothing.
+    public static func closed(_ followed: [UInt32], in server: [ServerWindow]?) -> [UInt32] {
+        guard let server else { return [] }
+        let alive = Set(server.map(\.number))
+        return followed.filter { !alive.contains($0) }
+    }
+
     /// The pairings the focus made, for the trace.
     public var byFocus: [Int: Hit] { pairs.filter(\.value.byFocus).mapValues(\.hit) }
 
