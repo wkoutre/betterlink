@@ -424,6 +424,25 @@ struct WindowPairingTests {
         #expect(look(&p, 5, windows, entries)[100] != hit("/a", 1))
     }
 
+    /// The browser's word on the focus is stale or was missed (it still says
+    /// window 1, at the same place), or the browser titles its windows some
+    /// other way: the focused window's title keeps saying no. It is waited on
+    /// for `patience`, with the look that ends the wait asked for, and after
+    /// that it is a window that can't be seen, not one still connecting.
+    @Test func aFocusedWindowWhoseTitleKeepsSayingNoIsNotWaitedOnForEver() {
+        var p = WindowPairing()
+        let windows = [ours(100, "Secret - Google Chrome", focused: true)], entries = [theirs(1, "Inbox", focused: true)]
+        #expect(look(&p, 0, windows, entries) == [100: .waiting])
+        #expect(p.settlesAt == WindowPairing.patience)
+        #expect(look(&p, 2.9, windows, entries) == [100: .waiting])
+        #expect(p.settlesAt == WindowPairing.patience)
+        #expect(look(&p, WindowPairing.patience, windows, entries) == [100: .unseen])
+        #expect(p.settlesAt == nil)
+        #expect(look(&p, 60, windows, entries) == [100: .unseen])
+        // The title comes round: the focus, long held, pairs them at that look.
+        #expect(look(&p, 61, [ours(100, "Inbox - Google Chrome", focused: true)], entries) == [100: hit("/a", 1)])
+    }
+
     // MARK: - The window server's list
 
     /// Read from a Mac with Chrome running one window (2026-11-25): the list
