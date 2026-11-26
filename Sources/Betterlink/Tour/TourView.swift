@@ -308,7 +308,9 @@ private struct TourTopicCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title).font(DS.TextStyle.bodyStrong).foregroundStyle(DS.Palette.text).lineLimit(1)
                     Text(topic.summary).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                        .lineLimit(2).multilineTextAlignment(.leading)
+                        // Always two lines tall, so every card in the grid
+                        // is the same height whatever its summary's length.
+                        .lineLimit(2, reservesSpace: true).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
                 Image(systemName: opened ? "checkmark" : "chevron.right")
@@ -320,6 +322,7 @@ private struct TourTopicCard: View {
                     .accessibilityLabel(opened ? "Seen" : "")
             }
             .padding(.horizontal, DS.Space.space3)
+            .padding(.vertical, DS.Space.space2)
             .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
                 .fill(hovering ? DS.Palette.hover : DS.Palette.panel))
