@@ -195,6 +195,24 @@ private nonisolated(unsafe) var made: String?
         #expect(told == 1)
     }
 
+    /// After new titles alone the view keeps the tab list it last drew, and a
+    /// lazy row built later (scrolled to) is made from that list: its title
+    /// is the newest the sidebar was shown, not the one in that old list.
+    @Test func aRowBuiltAfterNewTitlesShowsTheNewTitle() throws {
+        try show(profile(favorites: 0))
+        let drawn = (0..<8).map {
+            BrowserTab(id: 300 + $0, windowId: 1, index: $0, title: "Page \($0)", url: "https://page\($0).example/", active: $0 == 0)
+        }
+        instance.show(look(drawn))
+        // Only the first row was built before the titles changed.
+        #expect(instance.title(of: drawn[0]).text == "Page 0")
+        let renamed = drawn.map { t -> BrowserTab in var t = t; t.title = "Renamed \(t.id)"; return t }
+        instance.show(look(renamed))
+        #expect(instance.title(of: drawn[0]).text == "Renamed 300")
+        // Built now, from the list the view last drew.
+        #expect(instance.title(of: drawn[5]).text == "Renamed 305")
+    }
+
     private func look(_ tabs: [BrowserTab]) -> SidebarLook {
         var session = BrowserSession(socketPath: "/layout-test")
         var snapshot = Inbound(type: "snapshot")
