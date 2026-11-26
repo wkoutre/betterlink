@@ -39,7 +39,8 @@ struct FolderIconTests {
         for icon: FolderIcon in [.emoji("🚀"), .emoji("👩‍👩‍👧"), .symbol("star.fill"), .unknown("image:abc")] {
             var p = SidebarProfile(name: "Primary")
             let id = p.addFolder("Docs")
-            #expect(p.setIcon(id, to: icon))
+            let set = p.setIcon(id, to: icon)
+            #expect(set)
             let lib = SidebarLibrary(profiles: [p])
             let back = try JSONDecoder().decode(SidebarLibrary.self, from: JSONEncoder().encode(lib))
             #expect(back == lib)
@@ -61,12 +62,17 @@ struct FolderIconTests {
         let inner = p.addFolder("Inner", in: outer)
         let link = SavedLink(title: "A", url: "https://a.example")
         p.addLink(link, in: inner)
-        #expect(p.setIcon(inner, to: .emoji("📚")))
+        // setIcon mutates, so its answer is taken before #expect sees it.
+        var changed = p.setIcon(inner, to: .emoji("📚"))
+        #expect(changed)
         #expect(p.folder(inner)?.icon == .emoji("📚"))
         #expect(p.folder(outer)?.icon == nil)
-        #expect(!p.setIcon(link.id, to: .emoji("📚")))   // a link has a site icon, not this
-        #expect(!p.setIcon(UUID(), to: .emoji("📚")))
-        #expect(p.setIcon(inner, to: nil))
+        changed = p.setIcon(link.id, to: .emoji("📚"))   // a link has a site icon, not this
+        #expect(!changed)
+        changed = p.setIcon(UUID(), to: .emoji("📚"))
+        #expect(!changed)
+        changed = p.setIcon(inner, to: nil)
+        #expect(changed)
         #expect(p.folder(inner)?.icon == nil)
     }
 
