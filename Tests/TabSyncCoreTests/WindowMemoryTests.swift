@@ -3,6 +3,14 @@ import Testing
 @testable import TabSyncCore
 
 struct WindowMemoryTests {
+    @Test func everyWindowHiddenOneByOneReadsAsHiddenWhateverTheSetting() {
+        #expect(WindowMemory.allHidden([true, true], setting: false))
+        #expect(!WindowMemory.allHidden([true, false], setting: true))
+        #expect(!WindowMemory.allHidden([false, false], setting: true))
+        #expect(WindowMemory.allHidden([], setting: true))
+        #expect(!WindowMemory.allHidden([], setting: false))
+    }
+
     @Test func eachWindowHasItsOwn() {
         var m = WindowMemory()
         m.set(hidden: true, window: 1, pid: 7)
