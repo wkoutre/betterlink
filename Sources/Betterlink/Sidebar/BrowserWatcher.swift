@@ -171,7 +171,9 @@ final class BrowserWatcher {
         return w
     }
 
-    private func remove(_ w: TrackedWindow) {
+    /// The window is gone: Accessibility said so, or the window server no
+    /// longer has it.
+    func remove(_ w: TrackedWindow) {
         w.settleWork?.cancel()
         windows.removeAll { $0 === w }
         if focused === w { focused = nil }
@@ -222,7 +224,17 @@ final class BrowserWatcher {
             // A window is often announced before it has its title bar's buttons.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.scan() }
         case kAXUIElementDestroyedNotification:
-            if let w = tracked(el) { remove(w) }
+            // Only a followed window's is asked for. A browser can be late
+            // with it (the window server's list is what says a window is
+            // gone meanwhile), and if this isn't one known by that name, the
+            // count finds which is gone.
+            if let w = tracked(el) {
+                DragTrace.log("closed: macOS says window \(w.number) of \(bundleId) is gone")
+                remove(w)
+            } else {
+                DragTrace.log("closed: macOS says a window of \(bundleId) is gone, none followed by that name")
+                tracker.focusChanged()
+            }
         case kAXApplicationHiddenNotification, kAXApplicationShownNotification:
             refresh()
             // A window first seen while its browser was hidden settles now.

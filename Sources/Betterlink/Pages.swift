@@ -604,6 +604,7 @@ struct AboutPage: View {
                 }
                 .padding(.vertical, DS.Space.space2)
             }
+            TourAboutSection()
             DSSection("Privacy") {
                 Text("betterlink has no network code. It sees the links you open, keeps them in memory only, and sends nothing anywhere.")
                     .fixedSize(horizontal: false, vertical: true)
