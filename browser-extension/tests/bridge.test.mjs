@@ -265,6 +265,17 @@ test("a tab of a window the app was never sent brings the window's type right be
   assert.equal(out.filter((m) => m.kind === "windowCreated" && m.windowId === 9).length, 0);
 });
 
+test("a window sent because a tab named it is reported gone too, whatever its type", async () => {
+  const { chrome, out, b } = setup();
+  await b.snapshot();
+  chrome.windows.opened({ id: 7, type: "devtools", focused: false, incognito: false, left: 5, top: 6, width: 700, height: 500 });
+  chrome.tabs.onCreated.fire({ id: 71, windowId: 7, index: 0 });
+  await new Promise((r) => setTimeout(r, 0));
+  out.length = 0;
+  chrome.windows.onRemoved.fire(7);
+  assert.deepEqual(out.map((m) => [m.kind, m.windowId]), [["windowRemoved", 7]]);
+});
+
 test("move, mute, duplicate, reload and newWindow drive the real tab API", async () => {
   const { chrome, out, b } = setup();
   await b.handle({ type: "cmd", id: "m1", op: "move", tabId: 10, index: 3 });

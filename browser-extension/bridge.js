@@ -153,10 +153,12 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
       told.add(w.id);
       emit("windowCreated", windowBody(w));
     }, windowFilter],
+    // Every type: a window sent because a tab named it (DevTools) is reported
+    // gone as well.
     [chrome.windows.onRemoved, (windowId) => {
       told.delete(windowId);
       emit("windowRemoved", { windowId });
-    }, windowFilter],
+    }, { windowTypes: EVERY_WINDOW_TYPE }],
     [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId }), windowFilter],
   ];
   // Where each window is on screen, so the app can tell which browser profile
