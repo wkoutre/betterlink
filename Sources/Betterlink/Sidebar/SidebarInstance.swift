@@ -701,6 +701,9 @@ final class SidebarInstance: ObservableObject {
         DispatchQueue.main.asyncAfter(deadline: .now() + EdgeDrag.answerWait, execute: work)
     }
 
+    /// The button is up: the drag ends.
+    func dragEnded() { endResize() }
+
     func endResize() {
         stepEnd?.cancel()
         stepEnd = nil

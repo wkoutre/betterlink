@@ -544,12 +544,43 @@ final class SidebarRig {
         rest()
     }
 
-    /// The person drags the edge between the sidebar and the browser.
+    private func tick() {
+        time += 1.0 / 120
+        instance.stepSlide()
+        events()
+    }
+
+    /// The person drags the edge between the sidebar and the browser: the
+    /// pointer moves there over 0.2 s (a move every 1/60 s), the button comes
+    /// up, and the app finishes; then the window rests. Sampled from the
+    /// button up, for the time bound.
     func personDragsEdge(by delta: CGFloat) {
         guard instance.beginResize() else { return }
-        instance.resize(by: delta)
-        events()
-        instance.endResize()
+        let began = fake.frame.width
+        fake.sliding = true
+        let moves = 12
+        for k in 1...moves {
+            instance.resize(by: delta * CGFloat(k) / CGFloat(moves))
+            tick()
+            tick()
+        }
+        callsBefore = fake.setCalls
+        widthAtPress = began
+        presses = 1
+        personPut = nil
+        samples = []
+        lastEvent = time
+        lastBusy = time
+        instance.dragEnded()
+        sample()
+        var frames = 0
+        while instance.sliding, frames < 2000 {
+            tick()
+            lastBusy = time
+            sample()
+            frames += 1
+        }
+        fake.sliding = false
         rest()
     }
 
@@ -699,6 +730,10 @@ struct RuleCheck {
     /// (the drag keeps its outer edges) no further off screen than it was.
     mutating func adjusted(from pair: CGRect, _ step: String) {
         besideTheBrowser(step)
+        // The drag keeps the pair's outer edges (EdgeDrag): what the browser gives, the sidebar takes.
+        if rig.open, !Self.near(rig.pair.minX, pair.minX) || !Self.near(rig.pair.maxX, pair.maxX) {
+            problems.append("\(step): the pair's outer edges moved from \(pair.minX)...\(pair.maxX) to \(rig.pair.minX)...\(rig.pair.maxX) (browser \(rig.fake.frame), sidebar \(rig.sidebarWidth))")
+        }
         let allowed = offScreen(pair, displays) + 2
         if offScreen(rig.pair, displays) > allowed {
             problems.append("\(step): the pair pushed off screen to \(rig.pair) (was \(pair))")
@@ -901,13 +936,6 @@ struct GuardCase: CustomStringConvertible {
         }
         var b = BrowserBehaviour.random(&r)
         b.minWidth = min(b.minWidth, w.width) // a window is never narrower than its browser lets it be
-        if b.timing != .atOnce || b.widensBack || b.animation > 0 || b.sizeLag > 0 {
-            // A browser that has stopped answering is left alone by a drag of the edge (BrowserWatcher.isStalled),
-            // which the fake can't make it; and one that answers (or widens itself back) after the drag has ended has been resized
-            // as by hand, which is not put back (docs/tabs.md, Width). Nor macOS 27's animated sets: a drag of the
-            // edge still asks the browser at each move of the pointer (not yet one call at a time). No drags for them.
-            actions = actions.map { $0.filter { if case .dragEdge = $0 { false } else { true } } }
-        }
         var c = GuardCase(displays: displays, window: w, side: r.bool() ? .left : .right, width: Double(r.int(200...440)),
                           behaviour: b, reduceMotion: r.bool(0.15), actions: actions)
         c.during = (0..<2).map { _ in (show: r.bool(0.3) ? during(&r) : [], hide: r.bool(0.3) ? during(&r) : []) }
@@ -974,6 +1002,7 @@ struct GuardCase: CustomStringConvertible {
                     case .dragEdge(let delta):
                         let pair = rig.pair
                         rig.personDragsEdge(by: delta)
+                        check.timely(step)
                         check.adjusted(from: pair, step)
                     case .moveSidebar(let dx):
                         rig.personMovesSidebar(by: dx)
