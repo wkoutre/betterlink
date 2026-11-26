@@ -341,9 +341,12 @@ final class SidebarController: ObservableObject {
 
     private var pairing = WindowPairing()
     private var found: [Int: WindowPairing.Found] = [:]
+    private var pairAgain: DispatchWorkItem?
 
     /// Works out again which of the browsers' own windows each window is
-    /// (WindowPairing), then what each sidebar shows.
+    /// (WindowPairing), then what each sidebar shows: whenever either side
+    /// says something new (the tab lists, a window's title, its resting
+    /// place, the focus, a window coming or going).
     private func pair() {
         guard let h = NSScreen.screens.first?.frame.height else { return }
         let windows = instances.values.sorted { $0.window.id < $1.window.id }.map { i -> WindowPairing.Window in
@@ -353,8 +356,15 @@ final class SidebarController: ObservableObject {
                          frame: WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height),
                          title: t.title, focused: i.window.isFocused)
         }
-        found = pairing.update(windows, in: sessions)
+        found = pairing.update(windows, in: sessions, now: CACurrentMediaTime())
         refreshLooks()
+        // A word on the focus counts once it has held: one more look then.
+        pairAgain?.cancel()
+        pairAgain = pairing.settlesAt.map { at in
+            let work = DispatchWorkItem { [weak self] in self?.pair() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, at - CACurrentMediaTime()) + 0.01, execute: work)
+            return work
+        }
     }
 
     /// Only the sidebars on screen, and each only when what it shows differs:

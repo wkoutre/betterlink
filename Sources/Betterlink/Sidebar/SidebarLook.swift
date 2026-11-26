@@ -11,7 +11,8 @@ enum SidebarLook: Equatable {
     /// The browser is connected, but this window isn't one the extension
     /// reports (Incognito without permission, a profile without it).
     case unseen
-    /// Connected, with the first list of tabs still on its way.
+    /// Connected, with the first list of tabs still on its way, or which
+    /// window this is being settled (a moment).
     case connecting
     case notConnected
 
@@ -80,6 +81,8 @@ enum SidebarLook: Equatable {
                                  holds: ledger.holds(for: SidebarHoldsModel.key(s))))
         case .notConnected:
             return .notConnected
+        case .waiting:
+            return .connecting
         case .unseen:
             return candidates.contains { !$0.store.hasSnapshot } ? .connecting : .unseen
         }

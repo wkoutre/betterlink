@@ -124,7 +124,10 @@ struct WindowPairingModelTests {
             out.caughtUp += 1
             let held = look("caught up")
             for (w, e) in held where e != w && ours[e] != nil {
-                if madeBehind.contains([w, e]), ours[w] == ours[e] { out.tolerated += 1 } else {
+                if madeBehind.contains([w, e]), ours[w] == ours[e] {
+                    out.tolerated += 1
+                    note("tolerated: window \(w) holds entry \(e), paired while a word was on its way, and looks like window \(e)")
+                } else {
                     out.failures.append("window \(w) holds entry \(e), whose own window is listed")
                 }
             }
@@ -218,15 +221,21 @@ struct WindowPairingModelTests {
         return out
     }
 
-    /// The seed of the first history; history `i` runs on `seed + i`.
-    static let seed: UInt64 = 20_261_125
-    static let histories = 4000
+    /// The seed of the first history; history `i` runs on `seed + i`. A
+    /// thousand histories take under two seconds; for a longer run set
+    /// PAIRING_MODEL_HISTORIES (and PAIRING_MODEL_SEED for other histories).
+    static let seed = ProcessInfo.processInfo.environment["PAIRING_MODEL_SEED"].flatMap(UInt64.init) ?? 20_261_125
+    static let histories = ProcessInfo.processInfo.environment["PAIRING_MODEL_HISTORIES"].flatMap(Int.init) ?? 1000
 
     @Test func randomHistoriesKeepThePromises() {
         var looks = 0, caughtUp = 0, tolerated = 0
         for i in 0..<Self.histories {
             let out = Self.run(seed: Self.seed + UInt64(i))
             looks += out.looks; caughtUp += out.caughtUp; tolerated += out.tolerated
+            // PAIRING_MODEL_PRINT=1 prints the histories with a tolerated case.
+            if out.tolerated > 0, ProcessInfo.processInfo.environment["PAIRING_MODEL_PRINT"] != nil {
+                print("tolerated in history \(i) (seed \(Self.seed + UInt64(i))):\n" + Self.run(seed: Self.seed + UInt64(i), logging: true).log.joined(separator: "\n"))
+            }
             guard !out.failures.isEmpty else { continue }
             let again = Self.run(seed: Self.seed + UInt64(i), logging: true)
             Issue.record("history \(i) (seed \(Self.seed + UInt64(i))): \(again.failures)\n\(again.log.joined(separator: "\n"))")
@@ -234,6 +243,6 @@ struct WindowPairingModelTests {
         }
         print("WindowPairing model: \(Self.histories) histories from seed \(Self.seed), \(looks) looks, \(caughtUp) checks with both sides caught up, \(tolerated) tolerated")
         // The tolerated case must stay the rarity it is, or the model has gone soft.
-        #expect(tolerated <= Self.histories / 500)
+        #expect(tolerated <= max(1, Self.histories / 500))
     }
 }
