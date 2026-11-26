@@ -86,8 +86,8 @@ test-tabs:
 # while nothing happens (scripts/check-idle.sh). Opens the app's window for
 # half a minute. With the sidebar on too, beside a browser the script starts:
 #   CHECK_IDLE_SIDEBAR="/Applications/Google Chrome.app" make check-idle
-# The sidebar attaches to every window of that browser: name one you have no
-# windows open in.
+# The sidebar attaches to every window of that browser, so the script refuses
+# to start while it is already running: name one you don't have open.
 check-idle: build
 	./scripts/check-idle.sh
 

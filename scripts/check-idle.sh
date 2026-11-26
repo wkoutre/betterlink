@@ -6,8 +6,9 @@
 # Sync is on, with a folder of its own. The sidebar is on only when
 # CHECK_IDLE_SIDEBAR names a Chromium browser's app (CI does): the script then
 # starts that browser with a profile of its own and the sidebar attaches to it.
-# It attaches to EVERY window of that browser, so on your own Mac name one you
-# have no windows open in.
+# It attaches to EVERY window of that browser, resizes them and switches their
+# tabs to vertical, so the script refuses to start while that browser is
+# already running: on your own Mac name one you don't have open.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 app="${1:-dist/betterlink.app}"
@@ -40,6 +41,17 @@ if [ -n "$browser" ]; then
   plist="$browser/Contents/Info.plist"
   bundle="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$plist")"
   binary="$browser/Contents/MacOS/$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "$plist")"
+  # Only a Chromium browser takes --user-data-dir: another would open with
+  # your own profile.
+  ls -d "$browser/Contents/Frameworks/"*" Framework.framework" > /dev/null 2>&1 \
+    || { echo "$browser is not a Chromium browser."; exit 1; }
+  # Its windows already open would get sidebars too, and be resized.
+  # (Read whole before grep: a grep that stops early fails the pipe.)
+  running="$(ps -axo comm=; lsappinfo list 2> /dev/null || true)"
+  if grep -Fxq "$binary" <<< "$running" || grep -Fq "bundleID=\"$bundle\"" <<< "$running"; then
+    echo "$bundle is already running: name a browser you don't have open."
+    exit 1
+  fi
   defaults write "$suite" sidebar.enabled -bool true
   defaults write "$suite" sidebar.browsers -array "$bundle" # this browser only
   "$binary" --user-data-dir="$work/profile" --no-first-run --no-default-browser-check --use-mock-keychain \
