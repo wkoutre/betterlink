@@ -92,7 +92,11 @@ final class SidebarInstance: ObservableObject {
     }
     private var slideRun: SlideRun?
 
-    private var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    /// Reduce Motion, and the slide's clock. Tests set their own and step the
+    /// slide frame by frame (`stepSlide`), as the timer does.
+    var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    var clock: () -> CFTimeInterval = CACurrentMediaTime
+    var sliding: Bool { slideRun != nil }
 
     /// Hides: the sidebar's inner edge and the window's edge slide toward the
     /// outer edge together; at the end the window fills the tile.
@@ -100,7 +104,7 @@ final class SidebarInstance: ObservableObject {
         endResize() // hiding mid-drag: the drag ends here
         hidden = true
         if var run = slideRun { // turning back mid-show
-            run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+            run.slide.hide(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
             return
         }
@@ -114,7 +118,7 @@ final class SidebarInstance: ObservableObject {
         // What the window lent comes back, wherever it has been since.
         let back = loan?.givenBack(from: t.frame, screen: screen(for: t.frame)) ?? t.frame
         var run = SlideRun(slide: SidebarSlide(shown: true), side: attached, outer: outer, hiddenWindow: back, shownWindow: t.frame)
-        run.slide.hide(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+        run.slide.hide(at: clock(), reduceMotion: reducesMotion())
         start(run)
     }
 
@@ -123,7 +127,7 @@ final class SidebarInstance: ObservableObject {
     private func slideIn() {
         hidden = false
         if var run = slideRun { // turning back mid-hide
-            run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+            run.slide.show(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
             return
         }
@@ -152,7 +156,7 @@ final class SidebarInstance: ObservableObject {
         panel.showNow(at: place(panel))
         isShown = true
         var run = SlideRun(slide: SidebarSlide(shown: false), side: attached, outer: outer, hiddenWindow: t.frame, shownWindow: shown)
-        run.slide.show(at: CACurrentMediaTime(), reduceMotion: reduceMotion)
+        run.slide.show(at: clock(), reduceMotion: reducesMotion())
         start(run)
         layout() // the list is on screen, and kept to the moment, from the first frame of the slide
     }
@@ -171,18 +175,18 @@ final class SidebarInstance: ObservableObject {
     /// One frame: the window to its frame for this moment, then the sidebar
     /// revealed up to where the window really is, so the seam stays tight
     /// even when the browser lags behind.
-    private func stepSlide() {
+    func stepSlide() {
         guard var run = slideRun, let panel else { return }
-        let now = CACurrentMediaTime()
+        let now = clock()
         let p = run.slide.progress(at: now)
         let f = SidebarSlide.frames(hiddenWindow: run.hiddenWindow, shownWindow: run.shownWindow,
                                     outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: p)
         var seam = f.innerEdge
         if run.fitted {
             // Hiding widens the window; showing narrows it.
-            AXWindow.slide(window.element, to: f.window, moveOrigin: run.side == .left,
+            AXWindow.slide(window.handle, to: f.window, moveOrigin: run.side == .left,
                            growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
-            if let real = WindowServer.frame(window.number) {
+            if let real = AXWindow.shownFrame(of: window.handle) {
                 let edge = run.side == .left ? real.minX : real.maxX
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
                 seam = SidebarSlide.seam(windowEdge: edge, innerEdge: f.innerEdge,
@@ -214,12 +218,12 @@ final class SidebarInstance: ObservableObject {
             loan = nil
             // A browser that answered late or not at all is asked once more:
             // the window must end up with what it lent.
-            if run.fitted, let now = AXWindow.frame(of: window.element), !Self.same(now, run.hiddenWindow) {
+            if run.fitted, let now = AXWindow.frame(of: window.handle), !Self.same(now, run.hiddenWindow) {
                 tracker.setFrame(run.hiddenWindow, of: window)
             }
         } else {
             panel?.reveal = nil
-            if run.fitted, let now = AXWindow.frame(of: window.element) { slidIn(run, at: now) }
+            if run.fitted, let now = AXWindow.frame(of: window.handle) { slidIn(run, at: now) }
         }
         layout()
     }
@@ -273,7 +277,7 @@ final class SidebarInstance: ObservableObject {
         // A window that can't be read now (a hung browser) keeps its record,
         // so it is recognised later instead of narrowed again.
         guard let l = loan else { return true }
-        guard let now = AXWindow.frame(of: window.element) else { return false }
+        guard let now = AXWindow.frame(of: window.handle) else { return false }
         let back = l.givenBack(from: now, screen: screen(for: now))
         if !Self.same(back, now) { tracker.setFrame(back, of: window) }
         loan = nil
@@ -286,8 +290,7 @@ final class SidebarInstance: ObservableObject {
     private static func same(_ a: CGRect, _ b: CGRect) -> Bool { WidthLoan.same(a, b) }
 
     private func screen(for frame: CGRect) -> CGRect {
-        (NSScreen.screens.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area }
-            ?? NSScreen.main)?.visibleFrame ?? frame
+        Displays.visibleFrame(for: frame) ?? frame
     }
 
     /// The window came to rest: make the pair fill the space the window was given.
@@ -474,7 +477,7 @@ final class SidebarInstance: ObservableObject {
         if let ask {
             // One step that keeps the far edge whatever width the browser
             // takes: a window at its minimum is not moved off its tile.
-            AXWindow.slide(window.element, to: ask, moveOrigin: r.drag.side == .left,
+            AXWindow.slide(window.handle, to: ask, moveOrigin: r.drag.side == .left,
                            growing: ask.width > window.target.frame.width)
             window.watcher?.refresh(window)
         }
@@ -702,8 +705,4 @@ final class SidebarInstance: ObservableObject {
         // nothing from this non-activating panel: let the keyboard go by hand.
         if let panel, panel.isKeyWindow { panel.reenter(at: place(panel)) }
     }
-}
-
-private extension CGRect {
-    var area: CGFloat { isNull ? 0 : width * height }
 }

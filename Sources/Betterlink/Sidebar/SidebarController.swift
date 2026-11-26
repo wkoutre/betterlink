@@ -167,6 +167,11 @@ final class SidebarController: ObservableObject {
     func toggle() {
         guard enabled else { return }
         guard let i = front else { return setCollapsed(!allHidden) }
+        toggle(i)
+    }
+
+    /// Hides or shows one window's sidebar, and keeps that choice for the window.
+    func toggle(_ i: SidebarInstance) {
         i.toggle()
         chosen.set(hidden: i.hidden, window: i.window.number, pid: i.window.target.pid)
         saveChosen()
@@ -376,7 +381,7 @@ final class SidebarController: ObservableObject {
     /// A followed window the list no longer has is closed
     /// (`WindowPairing.closed`): it is let go, which comes back here.
     private func pair(countingWindows: Bool = false) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
+        guard let h = Displays.primaryHeight else { return }
         if countingWindows, instances.isEmpty {
             server = []
         } else if countingWindows {
@@ -430,7 +435,7 @@ final class SidebarController: ObservableObject {
 
     // MARK: - On screen
 
-    func isOnScreen(_ w: TrackedWindow) -> Bool { WindowServer.onScreen().contains(w.number) }
+    func isOnScreen(_ w: TrackedWindow) -> Bool { w.handle.isOnScreen }
 
     /// Puts every sidebar in its place: beside its window and next to it among
     /// the other windows, or out of sight. `settled`: a moment after the event,

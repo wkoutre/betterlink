@@ -9,6 +9,8 @@ final class TrackedWindow {
     let element: AXUIElement
     /// Its window-server number.
     let number: CGWindowID
+    /// What reads and moves it (Accessibility; a fake browser in tests).
+    let handle: WindowHandle
     /// Nil once its browser is no longer followed.
     private(set) weak var watcher: BrowserWatcher?
     var target: WindowTracker.Target
@@ -16,11 +18,12 @@ final class TrackedWindow {
 
     private static var lastId = 0
 
-    init(element: AXUIElement, number: CGWindowID, watcher: BrowserWatcher) {
+    init(element: AXUIElement, number: CGWindowID, watcher: BrowserWatcher, handle: WindowHandle? = nil) {
         Self.lastId += 1
         id = Self.lastId
         self.element = element
         self.number = number
+        self.handle = handle ?? AXHandle(element: element, number: number)
         self.watcher = watcher
         target = .init(id: id, pid: watcher.pid, bundleId: watcher.bundleId, appName: watcher.name,
                        title: "", frame: .zero, fullScreen: false, minimized: false, appHidden: false)
@@ -29,7 +32,7 @@ final class TrackedWindow {
     /// Reads the window again. False when it can't be read now.
     @discardableResult
     func read() -> Bool {
-        guard let frame = AXWindow.frame(of: element) else { return false }
+        guard let frame = AXWindow.frame(of: handle) else { return false }
         target.frame = frame
         target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
         target.fullScreen = AXWindow.copy(element, "AXFullScreen") ?? false

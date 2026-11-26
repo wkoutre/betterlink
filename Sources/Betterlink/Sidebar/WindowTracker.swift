@@ -197,7 +197,7 @@ final class WindowTracker: NSObject {
 
     /// Moves or resizes a window, and reports where it really went.
     func setFrame(_ frame: CGRect, of w: TrackedWindow) {
-        AXWindow.setFrame(frame, of: w.element)
+        AXWindow.setFrame(frame, of: w.handle)
         w.watcher?.refresh(w)
     }
 

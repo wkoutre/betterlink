@@ -17,7 +17,26 @@ final class SidebarPanel: NSPanel {
             let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
             DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
         }
-        super.orderOut(sender)
+        away()
+    }
+
+    /// Tests: ordered in and out without the window server, so no panel shows
+    /// on the Mac that runs them (SidebarGuardTests). Everything else, its
+    /// frame included, is the real panel's.
+    static var headless = false
+    private var headlessVisible = false
+
+    override var isVisible: Bool { Self.headless ? headlessVisible : super.isVisible }
+
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        guard Self.headless else { return super.order(place, relativeTo: otherWin) }
+        headlessVisible = place != .out
+    }
+
+    /// Off the screen at once.
+    private func away() {
+        headlessVisible = false
+        if !Self.headless { super.orderOut(nil) }
     }
 
     /// The corner of a macOS 26 browser window: a continuous curve, measured on
@@ -204,14 +223,14 @@ final class SidebarPanel: NSPanel {
     /// active app's window that way (it keeps it until it is ordered out), and
     /// a panel on another Space comes to the one showing.
     func reenter(at place: Place) {
-        super.orderOut(nil)
+        away()
         order(at: place)
     }
 
     /// Hides at once, at the end of a slide.
     func hideNow() {
         fadeTimer?.invalidate(); fadeTimer = nil
-        super.orderOut(nil)
+        away()
         fade = Fade(shown: false)
         alphaValue = 1
     }
@@ -251,7 +270,7 @@ final class SidebarPanel: NSPanel {
         fadeTimer?.invalidate(); fadeTimer = nil
         if fade.phase == .hidden {
             DragTrace.log("fade done: orderOut")
-            super.orderOut(nil)
+            away()
             alphaValue = 1
         }
     }

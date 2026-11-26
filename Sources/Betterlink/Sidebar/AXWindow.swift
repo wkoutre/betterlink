@@ -23,24 +23,26 @@ enum AXWindow {
     /// header it holds for that object only, not for others equal to it.
     static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, 1) }
 
-    static func frame(of win: AXUIElement) -> CGRect? {
-        guard let pv: AXValue = copy(win, kAXPositionAttribute), let sv: AXValue = copy(win, kAXSizeAttribute),
-              let mainHeight = NSScreen.screens.first?.frame.height else { return nil }
-        var p = CGPoint.zero, s = CGSize.zero
-        guard AXValueGetValue(pv, .cgPoint, &p), AXValueGetValue(sv, .cgSize, &s) else { return nil }
+    static func frame(of win: WindowHandle) -> CGRect? {
+        guard let p = win.position(), let s = win.size(), let mainHeight = Displays.primaryHeight else { return nil }
         return SidebarGeometry.cocoa(fromAX: CGRect(origin: p, size: s), mainScreenHeight: mainHeight)
     }
 
-    static func setFrame(_ frame: CGRect, of win: AXUIElement) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
+    /// Window's frame as the window server shows it now, Cocoa coordinates.
+    /// Cheap enough to call every frame.
+    static func shownFrame(of win: WindowHandle) -> CGRect? {
+        guard let b = win.shownBounds(), let h = Displays.primaryHeight else { return nil }
+        return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
+    }
+
+    static func setFrame(_ frame: CGRect, of win: WindowHandle) {
+        guard let h = Displays.primaryHeight else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
-        var origin = ax.origin, size = ax.size
-        guard let p = AXValueCreate(.cgPoint, &origin), let s = AXValueCreate(.cgSize, &size) else { return }
         // Size, position, size: macOS limits each step to what fits on screen
         // at that moment, so a move that needs the new size comes after it.
-        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
-        AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p)
-        AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s)
+        win.setSize(ax.size)
+        win.setPosition(ax.origin)
+        win.setSize(ax.size)
     }
 
     /// One step of a slide: the size, and the position too when the window's
@@ -48,19 +50,17 @@ enum AXWindow {
     /// Accessibility calls rather than three. macOS limits each step to what
     /// fits on screen, so a growing window moves first and a shrinking one
     /// resizes first.
-    static func slide(_ win: AXUIElement, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
-        guard let h = NSScreen.screens.first?.frame.height else { return }
+    static func slide(_ win: WindowHandle, to frame: CGRect, moveOrigin: Bool, growing: Bool) {
+        guard let h = Displays.primaryHeight else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
-        var origin = ax.origin, size = ax.size
-        func move() { if moveOrigin, let p = AXValueCreate(.cgPoint, &origin) { AXUIElementSetAttributeValue(win, kAXPositionAttribute as CFString, p) } }
-        func resize() { if let s = AXValueCreate(.cgSize, &size) { AXUIElementSetAttributeValue(win, kAXSizeAttribute as CFString, s) } }
+        var origin = ax.origin
+        func move() { if moveOrigin { win.setPosition(origin) } }
+        func resize() { win.setSize(ax.size) }
         // The far edge must not move: the origin goes where the width the window
         // really has leaves it. A browser that is slow to narrow (or won't) is
         // then simply not moved yet, never pushed off the screen.
         func keepFarEdge() {
-            guard moveOrigin, let sv: AXValue = copy(win, kAXSizeAttribute) else { return }
-            var real = CGSize.zero
-            guard AXValueGetValue(sv, .cgSize, &real) else { return }
+            guard moveOrigin, let real = win.size() else { return }
             origin.x = ax.maxX - real.width
         }
         if growing {
@@ -140,12 +140,16 @@ enum WindowServer {
         }
     }
 
+    /// Window `n`'s bounds right now (what is on screen), Accessibility
+    /// coordinates. Cheap enough to call every frame.
+    static func bounds(_ n: UInt32) -> CGRect? {
+        guard let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first else { return nil }
+        return (info[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) }
+    }
+
     /// Window `n`'s frame right now (what is on screen), Cocoa coordinates.
-    /// Cheap enough to call every frame.
     static func frame(_ n: UInt32) -> CGRect? {
-        guard let h = NSScreen.screens.first?.frame.height,
-              let info = (CGWindowListCopyWindowInfo([.optionIncludingWindow], n) as? [[String: Any]])?.first,
-              let b = (info[kCGWindowBounds as String] as? NSDictionary).flatMap({ CGRect(dictionaryRepresentation: $0) }) else { return nil }
+        guard let b = bounds(n), let h = Displays.primaryHeight else { return nil }
         return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 
