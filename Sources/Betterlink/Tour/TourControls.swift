@@ -123,7 +123,7 @@ struct TourControlView: View {
         case .showExtension: showExtension
         case .allowAccessibility: allowAccessibility
         case .showSidebar:
-            row("Show the sidebar beside the front browser window.") { toggle("Show the sidebar", $sidebar.enabled) }
+            row("Show a sidebar beside every window of an attached browser.") { toggle("Show the sidebar", $sidebar.enabled) }
         case .chooseSyncFolder: chooseSyncFolder
         case .installCommand: installCommand
         case .askDiaAutomation: askDiaAutomation
