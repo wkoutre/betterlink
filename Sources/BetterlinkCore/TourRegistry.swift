@@ -243,6 +243,12 @@ public enum TourRegistry {
                      changed: nil, symbol: "arrow.down.circle.fill",
                      status: nil, control: .automaticUpdates, requires: nil,
                      cli: "betterlink updates set --automatic on", cliWhy: nil),
+            TourStep(id: "changelog", revision: 1,
+                     title: "See what changed in each release",
+                     body: "The Changelog page lists every release, newest first: the day it shipped and what it changed, each line linked to the pull request behind it. It is built from betterlink's release history, so it never falls behind.",
+                     changed: nil, symbol: "arrow.down.circle.fill",
+                     status: nil, control: nil, requires: nil,
+                     cli: "betterlink changelog list --limit 3", cliWhy: nil),
         ]),
     ]
 }

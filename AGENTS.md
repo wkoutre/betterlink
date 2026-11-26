@@ -6,6 +6,15 @@ For coding agents and reviewers working in this repository. [CONTRIBUTING.md](CO
 
 One Swift build at a time, always through make: `make test`, `make build`. The Makefile holds the machine-wide lock, the compiler cap and the Command Line Tools flags (see its comments). Several builds at once, from parallel agents for example, ran a 24 GB Mac out of memory.
 
+## The changelog
+
+The Changelog page, `betterlink changelog list` and each GitHub Release's notes are one list, and nobody writes it: `scripts/gen-changelog.py` reads it from git history when the app is built. A release is a `vX.Y.Z` tag; its changes are the squash commits merged since the tag before, minus version bumps, Dependabot's dependency updates, and commits that touch only what the release workflow's `paths-ignore` skips (docs, tests, CI). So:
+
+- Never add a CHANGELOG file or a hand kept list of changes. It would drift from the tags.
+- The PR title becomes the line. Write it as a person who uses betterlink would want to read it, and keep the `(#123)` GitHub adds.
+- When you squash-merge, a `Changelog: <line>` in the commit message replaces the title in the changelog, and `Changelog: none` leaves out a change nobody would notice (a refactor, a build fix). Use these when the title is about how, not what.
+- `scripts/release.sh` fails a release with no entry, and `make test` runs the generator's own cases (`--self-test`).
+
 ## The tour
 
 betterlink has a tour: the first-run flow and What's New, both drawn from the steps in `Tour/tour.json` ([docs/tour.md](docs/tour.md) says how it works and how to edit it). It is only useful while it is true, so every change is weighed against it.
