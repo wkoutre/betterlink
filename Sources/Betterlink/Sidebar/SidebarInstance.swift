@@ -154,10 +154,13 @@ final class SidebarInstance: ObservableObject {
         titles = kept
     }
 
-    /// The title a row of this tab shows, kept up to date by `show`.
+    /// The title a row of this tab shows, kept up to date by `show`. Made
+    /// from the newest look, not from `tab`: after new titles alone the view
+    /// keeps the tab list it last drew, and a lazy row built later (scrolled
+    /// to) is made from that list.
     func title(of tab: BrowserTab) -> TabTitle {
         if let title = titles[tab.id] { return title }
-        let title = TabTitle(tab.title)
+        let title = TabTitle(current(tab).title)
         titles[tab.id] = title
         return title
     }
