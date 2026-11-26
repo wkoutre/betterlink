@@ -108,10 +108,12 @@ public struct TourSeen: Equatable, Sendable {
         steps[step.id] = max(steps[step.id] ?? 0, step.revision)
     }
 
-    /// Catches up with everything: finishing or skipping the tour means the
-    /// next What's New holds only what is added after today.
-    public mutating func seeAll(in topics: [TourTopic]) {
-        for topic in topics { for step in topic.steps { see(step) } }
+    /// Catches up with everything this Mac was offered: finishing or skipping
+    /// the tour means the next What's New holds only what is added after
+    /// today. A step for something this Mac lacks (`met`) stays unseen, so it
+    /// is offered the day the Mac gets a browser it needs.
+    public mutating func seeAll(in topics: [TourTopic], met: Set<TourCondition>) {
+        for topic in topics { for step in Tour.applying(topic, met) { see(step) } }
         welcomed = true
     }
 
@@ -217,7 +219,9 @@ public enum Tour {
 
     /// What to show by itself when the window opens: the first run, once.
     /// What's New is never shown unasked; the window offers it (docs/tour.md).
-    /// `override` is BETTERLINK_TOUR, a development aid: off, welcome or new.
+    /// `override` is BETTERLINK_TOUR, a development aid: off, welcome or new
+    /// (new shows What's New when there is any; a Mac that never finished the
+    /// first run has none).
     public static func modeWhenWindowOpens(seen: TourSeen, override: String? = nil) -> TourPlan.Mode? {
         switch override {
         case "off": return nil
@@ -329,27 +333,53 @@ public struct TourSession: Equatable, Sendable {
 /// agent can read what a person has seen, show the tour, or put it back.
 public enum TourAgent {
     public static let commands = ["tour.status", "tour.show", "tour.done", "tour.reset"]
-    /// What the CLI asked the running app to show: "welcome", "new" or "topic:<id>".
+    /// What the CLI asked the app to show, and when: "welcome", "new" or
+    /// "topic:<id>", then "@" and the time in seconds.
     public static let requestKey = "tour.request"
+    /// How long a request waits for the window to be opened. Older than this
+    /// and it is dropped: nobody expects a tour they asked for yesterday.
+    public static let requestLife: TimeInterval = 600
+    /// How old a request can be for the running app to open its window for
+    /// it. The app is told at once, so anything older was asked while it
+    /// wasn't running, and waits for the person to open the window.
+    public static let requestIsNow: TimeInterval = 30
 
     public struct Refusal: Error, Equatable {
         public let message: String
     }
 
-    /// What the CLI asked to be shown, read once.
-    public static func takeRequest(from defaults: UserDefaults) -> (mode: TourPlan.Mode, topic: String?)? {
-        guard let raw = defaults.string(forKey: requestKey) else { return nil }
-        defaults.removeObject(forKey: requestKey)
-        if raw.hasPrefix("topic:") { return (.topic, String(raw.dropFirst("topic:".count))) }
-        switch raw {
-        case "new": return (.whatsNew, nil)
-        case "welcome": return (.replay, nil)
-        default: return nil
+    /// What the CLI asked to be shown, read once. A request older than
+    /// `within` is left for later (the person opening the window); one past
+    /// `requestLife`, or anything else under the key, is dropped.
+    public static func takeRequest(from defaults: UserDefaults, now: Date = Date(),
+                                   within: TimeInterval = requestLife) -> (mode: TourPlan.Mode, topic: String?)? {
+        guard let raw = defaults.string(forKey: requestKey) else {
+            defaults.removeObject(forKey: requestKey)
+            return nil
         }
+        let parts = raw.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        let what = String(parts[0])
+        let request: (mode: TourPlan.Mode, topic: String?)? =
+            what.hasPrefix("topic:") ? (.topic, String(what.dropFirst("topic:".count)))
+            : what == "new" ? (.whatsNew, nil)
+            : what == "welcome" ? (.replay, nil) : nil
+        guard let request, parts.count == 2, let at = TimeInterval(parts[1]) else {
+            defaults.removeObject(forKey: requestKey)
+            return nil
+        }
+        let age = now.timeIntervalSince1970 - at
+        // A little slack for a clock that was set back.
+        guard age <= requestLife, age >= -60 else {
+            defaults.removeObject(forKey: requestKey)
+            return nil
+        }
+        guard age <= within else { return nil }
+        defaults.removeObject(forKey: requestKey)
+        return request
     }
 
     public static func run(_ command: String, input: [String: Any], defaults: UserDefaults, met: Set<TourCondition>,
-                           topics: [TourTopic] = TourRegistry.topics) -> Result<[String: Any], Refusal> {
+                           topics: [TourTopic] = TourRegistry.topics, now: Date = Date()) -> Result<[String: Any], Refusal> {
         var seen = TourSeen(defaults: defaults)
         func refuse(_ message: String) -> Result<[String: Any], Refusal> { .failure(Refusal(message: message)) }
         let stepIds = topics.flatMap(\.steps).map(\.id).joined(separator: ", ")
@@ -381,6 +411,10 @@ public enum TourAgent {
             let request: String
             if let topic = input["topic"] as? String {
                 guard topics.contains(where: { $0.id == topic }) else { return refuse("No topic \(topic). Topics: \(topicIds).") }
+                // A topic for something this Mac lacks has nothing to show.
+                guard Tour.plan(.topic, topic: topic, seen: seen, met: met, topics: topics) != nil else {
+                    return .success(["shown": false, "note": "Nothing in \(topic) applies to this Mac (tour status says which steps do)."])
+                }
                 request = "topic:\(topic)"
             } else if (input["only"] as? String) == "new" {
                 if news(seen: seen, met: met, topics: topics).isEmpty {
@@ -393,13 +427,13 @@ public enum TourAgent {
             } else {
                 request = "welcome"
             }
-            defaults.set(request, forKey: requestKey)
-            return .success(["shown": true, "note": "betterlink opens its window on the tour if it is running; otherwise it does the next time it opens."])
+            defaults.set("\(request)@\(Int(now.timeIntervalSince1970))", forKey: requestKey)
+            return .success(["shown": true, "note": "betterlink opens its window on the tour if it is running. If it isn't, open betterlink within ten minutes and the tour starts there."])
         case "tour.done":
             switch named() {
             case .failure(let r): return .failure(r)
             case .success(let steps?): steps.forEach { seen.see($0) }
-            case .success(nil): seen.seeAll(in: topics)
+            case .success(nil): seen.seeAll(in: topics, met: met)
             }
         case "tour.reset":
             switch named() {

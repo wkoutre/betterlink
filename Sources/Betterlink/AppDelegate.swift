@@ -7,6 +7,9 @@ private let kInternetEventClass = AEEventClass(0x4755524C)  // 'GURL'
 private let kAEGetURL = AEEventID(0x4755524C)               // 'GURL'
 private let keyDirectObject = AEKeyword(0x2D2D2D2D)         // '----'
 private let keySenderPID = AEKeyword(0x73706964)            // 'spid'
+private let kAEOpenApp = AEEventID(0x6F617070)              // 'oapp'
+private let keyLaunchProperty = AEKeyword(0x70726474)       // 'prdt'
+private let kLaunchedAsLoginItem = OSType(0x6C676974)       // 'lgit'
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -48,9 +51,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuBarSetting = model.$showsMenuBarIcon.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] shown in
             MainActor.assumeIsolated { self?.setStatusItemShown(shown) }
         }
+        // Started by macOS at login, not by the person: the window still opens
+        // as it always has, but that is not the moment for the first-run tour.
+        let launch = NSAppleEventManager.shared().currentAppleEvent
+        let atLogin = launch?.eventID == kAEOpenApp
+            && launch?.paramDescriptor(forKeyword: keyLaunchProperty)?.enumCodeValue == kLaunchedAsLoginItem
         // Opened by hand (not by a link): show the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if !self.routedAtLaunch { self.showWindow() }
+            if !self.routedAtLaunch { self.showWindow(offerTour: !atLogin) }
         }
     }
 
@@ -124,6 +132,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             host.sizingOptions = []  // the window, not the content, sets the size
             w.contentViewController = host
             w.setContentSize(BetterlinkWindow.defaultSize)
+            // Closing the window on the tour ends the tour, like Skip.
+            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+                MainActor.assumeIsolated { TourModel.shared.windowClosed() }
+            }
             w.center()
             // AppKit keeps the frame in the app's own preferences: not from a
             // development or test run (MenuBarIcon.defaults).

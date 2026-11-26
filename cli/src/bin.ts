@@ -464,12 +464,16 @@ const sync = Cli.create('sync', {
     }),
     run: (c) => {
       const o = c.options
+      const parts = o.parts === undefined ? undefined : o.parts === 'none' ? [] : o.parts.split(',').map((p) => p.trim()).filter(Boolean)
+      if (parts !== undefined && o.parts !== 'none' && parts.length === 0) {
+        throw new Errors.IncurError({ code: 'REFUSED', message: 'Give parts as favorites, folders, name (comma separated), or none.' })
+      }
       return core('sync.set', {
         folder: o.folder,
         off: o.off && isOn(o.off),
         global: o.global && isOn(o.global),
         profile: o.profile,
-        parts: o.parts === undefined ? undefined : o.parts === 'none' ? [] : o.parts.split(',').map((p) => p.trim()).filter(Boolean),
+        parts,
       })
     },
   })
@@ -480,6 +484,15 @@ const tourTarget = {
   step: z.string().optional().describe('One step, by id (tour status)'),
   topic: z.string().optional().describe("One topic's steps, by id (tour status)"),
 }
+// A bare word after the command would be dropped and the command would act on
+// the whole tour (`tour reset link-rules` forgetting everything), so it is
+// refused.
+const tourStray = z.object({ what: z.string().optional().describe('Not used: name a step or topic with --step or --topic') })
+function refuseStray(what: string | undefined, flags: string) {
+  if (what !== undefined) {
+    throw new Errors.IncurError({ code: 'REFUSED', message: `"${what}" isn't an option. Say which with ${flags} (ids: tour status).` })
+  }
+}
 const tour = Cli.create('tour', {
   description: "betterlink's tour: the first-run flow and What's New. See what has been seen, show it, or put it back (this Mac only)",
 })
@@ -489,8 +502,12 @@ const tour = Cli.create('tour', {
   })
   .command('show', {
     description: "Open betterlink's window on the whole tour, or on one topic",
+    args: tourStray,
     options: z.object({ topic: z.string().optional().describe('Only this topic, by id (tour status)') }),
-    run: (c) => core('tour.show', { topic: c.options.topic }),
+    run: (c) => {
+      refuseStray(c.args.what, '--topic')
+      return core('tour.show', { topic: c.options.topic })
+    },
   })
   .command('new', {
     description: "Open betterlink's window on What's New: only the steps added or changed since the tour was last seen",
@@ -498,13 +515,21 @@ const tour = Cli.create('tour', {
   })
   .command('done', {
     description: 'Mark the tour seen without showing it: all of it, one topic or one step',
+    args: tourStray,
     options: z.object(tourTarget),
-    run: (c) => core('tour.done', c.options),
+    run: (c) => {
+      refuseStray(c.args.what, '--step or --topic')
+      return core('tour.done', c.options)
+    },
   })
   .command('reset', {
     description: 'Forget what was seen, so it shows again: all of it (the first run comes back), one topic or one step',
+    args: tourStray,
     options: z.object(tourTarget),
-    run: (c) => core('tour.reset', c.options),
+    run: (c) => {
+      refuseStray(c.args.what, '--step or --topic')
+      return core('tour.reset', c.options)
+    },
   })
 
 export const cli = Cli.create('betterlink', {

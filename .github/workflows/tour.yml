@@ -37,8 +37,16 @@ jobs:
         run: |
           set -euo pipefail
           gh api --paginate "repos/$GH_REPO/pulls/$PR/files?per_page=100" --jq '.[].filename' > "$RUNNER_TEMP/files"
-          # The tour as it is on the base, to compare revisions with. A base
-          # from before the tour has none.
-          gh api -H "Accept: application/vnd.github.raw" "repos/$GH_REPO/contents/Tour/tour.json?ref=$BASE" > "$RUNNER_TEMP/base-tour.json" 2>/dev/null \
-            || rm -f "$RUNNER_TEMP/base-tour.json"
+          # The tour as it is on the base, to compare revisions with. Only a
+          # base from before the tour has none (404); any other failure fails
+          # the check rather than skip the comparison.
+          if ! gh api -H "Accept: application/vnd.github.raw" "repos/$GH_REPO/contents/Tour/tour.json?ref=$BASE" \
+              > "$RUNNER_TEMP/base-tour.json" 2> "$RUNNER_TEMP/base-error"; then
+            if grep -q "HTTP 404" "$RUNNER_TEMP/base-error"; then
+              rm -f "$RUNNER_TEMP/base-tour.json"
+            else
+              cat "$RUNNER_TEMP/base-error" >&2
+              exit 1
+            fi
+          fi
           python3 scripts/check-tour-pr.py --files "$RUNNER_TEMP/files" --base "$RUNNER_TEMP/base-tour.json"

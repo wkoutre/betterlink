@@ -20,9 +20,12 @@ enum TourConditions {
 /// seen. Nothing here runs while no tour is on screen.
 @MainActor
 final class TourModel: ObservableObject {
-    static let shared = TourModel()
+    static let shared = TourModel(defaults: MenuBarIcon.defaults(), installed: { AppModel.installedBrowsers() },
+                                  override: ProcessInfo.processInfo.environment["BETTERLINK_TOUR"])
 
-    private let defaults = MenuBarIcon.defaults()
+    private let defaults: UserDefaults
+    /// The browsers on this Mac, asked each time the window opens.
+    private let installed: @MainActor () -> [Browser]
     /// The tour on screen, or nil.
     @Published private(set) var session: TourSession?
     @Published private(set) var seen: TourSeen
@@ -33,31 +36,42 @@ final class TourModel: ObservableObject {
     private(set) var movedForward = true
     /// BETTERLINK_TOUR, a development aid: off, welcome or new. Used once,
     /// except off, which holds for the whole run.
-    private var override = ProcessInfo.processInfo.environment["BETTERLINK_TOUR"]
+    private var override: String?
 
-    private init() {
-        seen = TourSeen(defaults: MenuBarIcon.defaults())
-        met = TourConditions.met(installed: AppModel.installedBrowsers())
+    /// `shared` is the app's; tests make their own on throwaway preferences.
+    init(defaults: UserDefaults, installed: @escaping @MainActor () -> [Browser], override: String? = nil) {
+        self.defaults = defaults
+        self.installed = installed
+        self.override = override
+        seen = TourSeen(defaults: defaults)
+        met = TourConditions.met(installed: installed())
     }
 
     /// What's New: steps added or changed since the tour was last seen. The
     /// window offers these; they never open over it by themselves.
     var news: [TourPlan.Entry] { Tour.news(seen: seen, met: met) }
 
-    /// The window opened. Shows what `betterlink tour show` asked for; else,
-    /// when `offer` is set, the first run, once.
+    /// The window opened. `offer`: the person opened it themselves (not a
+    /// problem to read, not a page that was asked for), so this is the moment
+    /// for what `betterlink tour show` asked for while betterlink wasn't
+    /// running, or else for the first run, once.
     func windowOpened(offer: Bool) {
-        let now = TourConditions.met(installed: AppModel.installedBrowsers())
+        let now = TourConditions.met(installed: installed())
         if now != met { met = now }
+        guard offer, session == nil else { return }
         if let request = TourAgent.takeRequest(from: defaults) {
             start(request.mode, topic: request.topic)
             return
         }
-        guard offer, session == nil else { return }
         let mode = Tour.modeWhenWindowOpens(seen: seen, override: override)
         if override != "off" { override = nil }
         if let mode { start(mode) }
     }
+
+    /// The window closed with the tour on it: the same as Skip. The tour is
+    /// over, so it neither covers the window the next time it opens nor
+    /// starts again by itself.
+    func windowClosed() { finish() }
 
     func start(_ mode: TourPlan.Mode, topic: String? = nil) {
         guard let plan = Tour.plan(mode, topic: topic, seen: seen, met: met), let session = TourSession(plan) else { return }
@@ -106,17 +120,23 @@ final class TourModel: ObservableObject {
 
     /// Dismisses What's New without showing it.
     func catchUp() {
-        seen.seeAll(in: TourRegistry.topics)
+        seen.seeAll(in: TourRegistry.topics, met: met)
         seen.save(to: defaults)
     }
 
-    /// `betterlink tour …` changed what was seen, or asked for the tour.
-    func reload() {
+    /// A `betterlink` command ran. It may have changed what was seen, or have
+    /// asked for the tour just now: then `showWindow` brings the window up
+    /// and the tour starts on it. Returns whether it did.
+    @discardableResult
+    func reload(showWindow: (() -> Void)? = nil) -> Bool {
         let saved = TourSeen(defaults: defaults)
         if saved != seen { seen = saved }
-        if defaults.string(forKey: TourAgent.requestKey) != nil {
-            (NSApp.delegate as? AppDelegate)?.showWindow(offerTour: false)
-        }
+        // Only a request made a moment ago: an older one was made while
+        // betterlink wasn't running, and waits for the window to be opened.
+        guard let request = TourAgent.takeRequest(from: defaults, within: TourAgent.requestIsNow) else { return false }
+        if let showWindow { showWindow() } else { (NSApp.delegate as? AppDelegate)?.showWindow(offerTour: false) }
+        start(request.mode, topic: request.topic)
+        return session != nil
     }
 
     /// A step counts as seen once it has been on screen.

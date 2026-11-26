@@ -10,7 +10,7 @@ One Swift build at a time, always through make: `make test`, `make build`. The M
 
 betterlink has a tour: the first-run flow and What's New, both drawn from the steps in `Tour/tour.json` ([docs/tour.md](docs/tour.md) says how it works and how to edit it). It is only useful while it is true, so every change is weighed against it.
 
-`make test` already fails when a new page, setting, command group or macOS permission has no step. The rest takes judgment, and it is yours to apply on every change:
+`make test` fails when a new page, setting control, command group or macOS permission has no step. It can't see a new command inside a group that already has a step, a new option, or a control that now does something else. Those, and everything below, take judgment, and it is yours to apply on every change:
 
 **Add a step** when the change gives a person something new: something they can now do, a new place in the window or the sidebar, a new browser betterlink works with, a new thing macOS or a browser will ask them to allow, or a new command group. A change that ships a feature without its step is not finished.
 

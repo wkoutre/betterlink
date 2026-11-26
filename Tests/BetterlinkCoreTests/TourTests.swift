@@ -40,7 +40,7 @@ struct TourTests {
     @Test func onlyTheFirstRunShowsByItself() {
         #expect(Tour.modeWhenWindowOpens(seen: TourSeen()) == .welcome)
         var seen = TourSeen()
-        seen.seeAll(in: sample)
+        seen.seeAll(in: sample, met: [.dia])
         #expect(Tour.modeWhenWindowOpens(seen: seen) == nil)
         // Something new is offered in the window, never opened over it.
         seen.forget(sample[0].steps[0])
@@ -60,7 +60,7 @@ struct TourTests {
 
     @Test func finishingCatchesUpSoOnlyLaterStepsAreNew() throws {
         var seen = TourSeen()
-        seen.seeAll(in: sample)
+        seen.seeAll(in: sample, met: [.dia])
         #expect(seen.welcomed)
         #expect(Tour.news(seen: seen, met: [.dia], topics: sample).isEmpty)
 
@@ -79,11 +79,16 @@ struct TourTests {
         #expect(Tour.plan(.whatsNew, seen: seen, met: [], topics: next) == nil)
     }
 
-    @Test func aStepForSomethingThisMacLacksIsNeverNew() {
+    /// Finishing the tour on a Mac without Dia leaves Dia's step unseen: it is
+    /// not offered while Dia is missing, and is the day Dia is installed.
+    @Test func aStepForSomethingThisMacLacksWaitsUntilItApplies() {
         var seen = TourSeen()
-        seen.seeAll(in: [sample[0], sample[1]])
+        seen.seeAll(in: sample, met: [])
+        #expect(seen.steps["e"] == nil)
         #expect(Tour.news(seen: seen, met: [], topics: sample).isEmpty)
         #expect(Tour.news(seen: seen, met: [.dia], topics: sample).map(\.id) == ["e"])
+        seen.seeAll(in: sample, met: [.dia])
+        #expect(Tour.news(seen: seen, met: [.dia], topics: sample).isEmpty)
     }
 
     @Test func seeingAnOlderRevisionNeverLowersWhatWasSeen() {
@@ -142,7 +147,7 @@ struct TourTests {
 
     @Test func whatsNewEndsAfterItsLastStep() throws {
         var seen = TourSeen()
-        seen.seeAll(in: [sample[0]])
+        seen.seeAll(in: [sample[0]], met: [])
         let plan = try #require(Tour.plan(.whatsNew, seen: seen, met: [], topics: sample))
         var s = try #require(TourSession(plan))
         #expect(s.entry?.id == "c")
@@ -205,7 +210,8 @@ struct TourTests {
         var out = try TourAgent.run("tour.done", input: [:], defaults: d, met: [], topics: sample).get()
         #expect(out["welcomed"] as? Bool == true)
         #expect(out["showsNext"] as? String == "nothing")
-        #expect(TourSeen(defaults: d).steps.count == 5)
+        // Dia's step doesn't apply here, so it is left for the day it does.
+        #expect(TourSeen(defaults: d).steps.count == 4)
 
         out = try TourAgent.run("tour.reset", input: ["step": "c"], defaults: d, met: [], topics: sample).get()
         #expect(out["new"] as? [String] == ["c"])
@@ -264,9 +270,42 @@ struct TourTests {
         #expect(TourAgent.takeRequest(from: d)?.mode == .whatsNew)
 
         // Anything else under the key is dropped.
-        d.set("rm -rf", forKey: TourAgent.requestKey)
-        #expect(TourAgent.takeRequest(from: d) == nil)
+        for junk in ["rm -rf", "welcome", "welcome@soon", "fly@1"] {
+            d.set(junk, forKey: TourAgent.requestKey)
+            #expect(TourAgent.takeRequest(from: d) == nil)
+            #expect(d.object(forKey: TourAgent.requestKey) == nil)
+        }
+    }
+
+    /// `tour show` while betterlink isn't running waits for the person to open
+    /// the window. It must not start on some later, unrelated moment.
+    @Test func aRequestWaitsForThePersonThenExpires() throws {
+        let d = fresh()
+        let asked = Date(timeIntervalSince1970: 1_800_000_000)
+        _ = try TourAgent.run("tour.show", input: [:], defaults: d, met: [], topics: sample, now: asked).get()
+        // The running app is told at once, so it only acts on a request made just now.
+        #expect(TourAgent.takeRequest(from: d, now: asked.addingTimeInterval(120), within: TourAgent.requestIsNow) == nil)
+        #expect(d.object(forKey: TourAgent.requestKey) != nil)
+        // The person opening the window a few minutes later gets it.
+        #expect(TourAgent.takeRequest(from: d, now: asked.addingTimeInterval(300))?.mode == .replay)
         #expect(d.object(forKey: TourAgent.requestKey) == nil)
+
+        _ = try TourAgent.run("tour.show", input: [:], defaults: d, met: [], topics: sample, now: asked).get()
+        #expect(TourAgent.takeRequest(from: d, now: asked.addingTimeInterval(5), within: TourAgent.requestIsNow)?.mode == .replay)
+
+        // Past its life it is dropped, whoever looks.
+        _ = try TourAgent.run("tour.show", input: [:], defaults: d, met: [], topics: sample, now: asked).get()
+        #expect(TourAgent.takeRequest(from: d, now: asked.addingTimeInterval(TourAgent.requestLife + 1)) == nil)
+        #expect(d.object(forKey: TourAgent.requestKey) == nil)
+    }
+
+    @Test func aTopicWithNothingForThisMacIsNotShown() throws {
+        let d = fresh()
+        let out = try TourAgent.run("tour.show", input: ["topic": "dia"], defaults: d, met: [], topics: sample).get()
+        #expect(out["shown"] as? Bool == false)
+        #expect(d.object(forKey: TourAgent.requestKey) == nil)
+        let with = try TourAgent.run("tour.show", input: ["topic": "dia"], defaults: d, met: [.dia], topics: sample).get()
+        #expect(with["shown"] as? Bool == true)
     }
 
     // MARK: The real tour

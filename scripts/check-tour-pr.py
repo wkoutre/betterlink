@@ -35,7 +35,7 @@ SHIPS = re.compile(
 # drawn is not a feature to tell people about.
 TOUR_CODE = re.compile(r"^(Sources/Betterlink/Tour/|Sources/BetterlinkCore/Tour[^/]*\.swift$)")
 
-NO_CHANGE = re.compile(r"^(none|no change|unchanged|not needed|n/a)\b[\s,.:;()\-–—]*(.*)$", re.I)
+NO_CHANGE = re.compile(r"^(none|no changes?(?: needed)?|unchanged|not needed|n/a)\b[\s,.:;()\-–—]*(.*)$", re.I)
 MIN_REASON_WORDS = 3
 
 
@@ -112,8 +112,19 @@ def check_history(base, head):
             elif (old.get("title"), old.get("body")) != (new.get("title"), new.get("body")):
                 notes.append(f"Step \"{sid}\" was reworded and is still at revision {now}: right for a wording fix. "
                              "Raise \"revision\" if what it describes changed.")
+            for key, what in (("cli", "command"), ("requires", "condition"), ("covers", "coverage")):
+                if old.get(key) != new.get(key):
+                    notes.append(f"Step \"{sid}\" has a different {what} ({key}). Check its words still match.")
     for sid in sorted(set(after) - set(before)):
         notes.append(f"Step \"{sid}\" is new: people who finished the tour are offered it under What's New.")
+    # An exemption is the quiet way to pass the coverage check, so each new
+    # one is named for the reviewer.
+    for kind in sorted(set(base.get("exempt") or {}) | set(head.get("exempt") or {})):
+        was, now = (base.get("exempt") or {}).get(kind) or {}, (head.get("exempt") or {}).get(kind) or {}
+        for name in sorted(set(now) - set(was)):
+            notes.append(f"exempt.{kind} now lists \"{name}\": it has no step, because \"{now[name]}\" A reviewer should agree.")
+        for name in sorted(set(was) & set(now)):
+            if was[name] != now[name]: notes.append(f"exempt.{kind}'s reason for \"{name}\" changed.")
     return problems, notes
 
 
@@ -137,6 +148,7 @@ def self_test():
     expect("none with a thin reason", check_note(app, "Tour: n/a."), True)
     expect("the template's own comment is not an answer", check_note(app, "<!-- Tour: none, because the template says so -->\nTour:"), True)
     expect("bold label", check_note(app, "**Tour:** no change - only the log's wording moved"), False)
+    expect("no changes needed", check_note(app, "Tour: no changes needed, the fix is in how rules are matched"), False)
     expect("says added, tour untouched", check_note(app, "Tour: added a step for the new page"), True)
     expect("says added, tour changed", check_note(app + tour, "Tour: added a step for the new page"), False)
     expect("says none, tour changed", check_note(app + tour, "Tour: none, nothing to see here"), True)
@@ -163,6 +175,11 @@ def self_test():
     expect("reworded is a note", check_history(t(one), t({**one, "body": "Second."}))[1], True)
     expect("reworded is no problem", check_history(t(one), t({**one, "body": "Second."}))[0], False)
     expect("new step is a note", check_history(t(one), t(one, {**one, "id": "two"}))[1], True)
+    expect("new command is a note", check_history(t(one), t({**one, "cli": "betterlink x"}))[1], True)
+    exempted = t(one); exempted["exempt"] = {"pages": {"about": "Has nothing to set up."}}
+    expect("new exemption is a note", check_history(t(one), exempted)[1], True)
+    expect("new exemption is no problem", check_history(t(one), exempted)[0], False)
+    expect("same exemption says nothing", check_history(exempted, exempted)[1], False)
     return ok
 
 

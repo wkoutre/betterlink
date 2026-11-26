@@ -4,7 +4,7 @@ Status: built. `Tour/tour.json` is the list of steps. `scripts/gen-tour.py` turn
 
 The tour is how betterlink introduces itself. It is one framework with three ways in:
 
-1. **The first run.** The first time the window opens on a Mac that has never finished or skipped the tour. That includes a Mac that used betterlink before the tour existed.
+1. **The first run.** The first time someone opens the window on a Mac that has never finished or skipped the tour. That includes a Mac that used betterlink before the tour existed: after the update that brings the tour, it shows the next time the window is opened, once.
 2. **What's New.** After an update, only the steps that were added or changed since this Mac last saw the tour.
 3. **A replay.** The whole tour, or one topic, whenever someone asks: **About › Tour**, the menu bar's **Show the Tour…**, or `betterlink tour show`.
 
@@ -14,18 +14,18 @@ All three show the same steps, drawn by the same views, so a new feature's step 
 
 A step fills the window: a tile, a title, two or three sentences saying what the thing is for, one control that does it (the same control its page has, with its live status), and the `betterlink` command that does the same.
 
-The first run shows the essential steps one after another, at most six: what betterlink is, making it the default browser, profiles, the fallback, and a first Link Rule. Then it offers the other topics as cards (modifier keys, the sidebar, Sync, the command, and so on) to open or leave. **Skip Tour** is on every step, and Esc does the same.
+The first run shows the essential steps one after another, at most six: what betterlink is, making it the default browser, profiles, the fallback, and a first Link Rule. Then it offers the other topics as cards (modifier keys, the sidebar, Sync, the command, and so on) to open or leave. **Skip Tour** is on every step, and Esc does the same. So does closing the window: the tour is over, and the window opens on its pages the next time.
 
 What's New never opens by itself. When there is something new, the window shows one line above its page ("New in betterlink: …" with **Show Me** and a dismiss button), and the menu bar item reads **What's New…**. Showing it, dismissing it, finishing the tour and skipping the tour all count as caught up.
 
-A step that doesn't apply to this Mac is left out: the sidebar steps need a Chromium browser, the Dia step needs Dia.
+A step that doesn't apply to this Mac is left out: the sidebar steps need a Chromium browser, the Dia step needs Dia. It also stays unseen, whatever is finished or skipped, so the day that browser is installed its steps are offered under What's New.
 
 ## The rules it follows
 
 These come from how comparable Mac apps onboard (the notes at the end) and from Apple's guidelines. They are why the tour is shaped the way it is; keep them when changing it.
 
-- **Never on a link click.** betterlink's job is to get out of the way of a link. The tour shows only when the person opens the window themselves, never when the window opens to report a problem or was asked for a page.
-- **The first run opens once.** If it is skipped it does not come back by itself.
+- **Never on a link click.** betterlink's job is to get out of the way of a link. The tour shows only when the person opens the window themselves, never when the window opens to report a problem or was asked for a page, and never when betterlink was started by macOS at login.
+- **The first run opens once.** If it is skipped, or its window is closed, it does not come back by itself.
 - **An update never opens a window.** What's New is offered, not shown.
 - **Ask where the reason is.** Each permission has its own step that says what it is for before the button that asks. The tour asks macOS for nothing by itself: every prompt follows a click on a button that says what will happen.
 - **Required and optional are different.** Only the default browser is needed. Everything else can be left for later, and the tour says so.
@@ -85,14 +85,15 @@ To remove a step: delete it and add its id to `retired`.
 | The registry is current | `TourRegistry.swift` doesn't match `Tour/tour.json` (run `make tour`). |
 | Every page has a step | A case of `RootView.Page` is in no step's `covers.pages` and not under `exempt.pages`. |
 | Every command group has a step | A group of agent commands (`rules`, `sidebar.settings`, …) is in no `covers.commands` and not exempt. |
-| Every setting has a step | A `Toggle`, picker, swatch picker or shortcut recorder on a page is bound to something no step covers. |
-| Every permission has a step | The source asks macOS or a browser for something (default browser, Full Disk Access, Accessibility, Automation, a login item, native messaging, an extension, a folder picker) that no step covers. An API for a prompt betterlink doesn't use today (camera, notifications, screen recording, …) fails too, until it has an entry and a step. |
+| Every setting has a step | A `Toggle`, picker, slider, stepper, colour or swatch picker, or shortcut recorder on a page is bound to something no step covers. |
+| Every permission has a step | The source asks macOS or a browser for something (default browser, Full Disk Access, Accessibility, Automation, a login item, native messaging, an extension and what its manifest asks for, a file or folder panel) that no step covers. An API for a prompt betterlink doesn't use today (camera, notifications, screen recording, input monitoring, the local network, Touch ID, …) fails too, until it has an entry and a step. |
 | Nothing is stale | A step or an exemption names a page, command, setting or permission the app no longer has. |
 | Commands are real | A step's `cli` names a command or an `--option` that `cli/src/bin.ts` doesn't define. |
 | The writing rules | A title over 48 characters, a body under 60 or over 330, a dash used as punctuation, an exclamation mark, a missing full stop, more than six essential steps, more than six steps in a topic. |
 | Ids are never reused | A step uses an id listed under `retired`. |
 | The steps fit the window | `TourLayoutTests`: a step is taller than the window as it opens. |
 | What the tour decides | `TourTests`: which steps the first run, What's New and a replay show, and what counts as seen. |
+| When the tour comes up | `TourModelTests`: only when the person opens the window, once; a closed window ends it; What's New never opens by itself; what a command asked for waits, then expires. |
 
 The `tour` check on every pull request (`.github/workflows/tour.yml`, `scripts/check-tour-pr.py`) adds what only a pull request shows:
 
@@ -100,15 +101,15 @@ The `tour` check on every pull request (`.github/workflows/tour.yml`, `scripts/c
 - A step's `revision` never goes down, and a raised one has a new `changed` sentence.
 - A removed step's id is added to `retired`.
 
-It also leaves a note, without failing, when a step was reworded or its control changed and its revision stayed the same.
+It also leaves a note, without failing, when a step was reworded or its control, command or condition changed and its revision stayed the same, and names each new exemption so a reviewer sees it.
 
 ## What is left to judgment
 
-A script can tell that a new page has no step. It can't tell that a change inside an existing page is worth showing someone again, or that a step's words no longer match what the control does. Those are the rules in [AGENTS.md](../AGENTS.md#the-tour), which coding agents load on every session and reviewers check a PR against, and the `Tour:` line makes each PR answer them out loud.
+A script can tell that a new page has no step. It can't tell that a new command joined a group that already has a step, that a change inside an existing page is worth showing someone again, or that a step's words no longer match what the control does. Those are the rules in [AGENTS.md](../AGENTS.md#the-tour), which coding agents load on every session and reviewers check a PR against, and the `Tour:` line makes each PR answer them out loud.
 
 ## Remembering what was seen
 
-Per Mac, in betterlink's own preferences (a separate set for each `BETTERLINK_HOME`): `tour.seen` maps a step's id to the revision that was shown, and `tour.welcomed` says the first run was finished or skipped. A step counts as seen once it has been on screen. Finishing, skipping or dismissing marks every current step seen, so the next What's New holds only what is added afterwards. Nothing about the tour syncs between Macs or leaves the Mac.
+Per Mac, in betterlink's own preferences (a separate set for each `BETTERLINK_HOME`): `tour.seen` maps a step's id to the revision that was shown, and `tour.welcomed` says the first run was finished or skipped. A step counts as seen once it has been on screen. Finishing, skipping or dismissing marks every step that applies to this Mac seen, so the next What's New holds only what is added afterwards. Nothing about the tour syncs between Macs or leaves the Mac.
 
 ## The command
 
@@ -123,9 +124,11 @@ betterlink tour reset                  # forget everything, so the first run com
 
 `tour status` is also the list an agent setting betterlink up can work through: each step carries the command that does what its control does.
 
+`tour show` and `tour new` open the window at once when betterlink is running. When it isn't, what was asked for waits ten minutes for the person to open betterlink, then is forgotten: a command never makes a window appear later, by itself. A step or topic is named with `--step` or `--topic`; a bare word after the command is refused.
+
 ## For development
 
-`BETTERLINK_TOUR` changes what the window does when it next opens, in any build: `welcome` shows the first run, `new` shows What's New, `off` shows neither (scripts that open the window use it). With `BETTERLINK_HOME` set to a temporary folder the tour starts from nothing, as on a new Mac.
+`BETTERLINK_TOUR` changes what the window does when it next opens, in any build: `welcome` shows the first run, `new` shows What's New if anything is new (nothing is before the first run is over), `off` shows neither (scripts that open the window use it). `welcome` and `new` act once. With `BETTERLINK_HOME` set to a temporary folder the tour starts from nothing, as on a new Mac.
 
 ## What other apps do
 

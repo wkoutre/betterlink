@@ -238,7 +238,15 @@ struct TourControlView: View {
         row(trusted ? "betterlink can follow your browser windows."
                     : "System Settings opens at Accessibility. Turn betterlink on in the list, then come back.") {
             if !trusted {
-                Button("Open Accessibility Settings…") { sidebar.requestTrust() }.buttonStyle(.dsPrimary)
+                Button("Open Accessibility Settings…") {
+                    // The request puts betterlink in the list (and shows
+                    // macOS's own alert, the first time only); opening the
+                    // pane is what the button says, every time.
+                    sidebar.requestTrust()
+                    if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }.buttonStyle(.dsPrimary)
             }
         }
         // macOS doesn't say when it is granted, so look twice a second, and

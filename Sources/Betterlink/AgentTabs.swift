@@ -90,6 +90,12 @@ extension AgentCommand {
         guard browser.hostsSidebar, let folder = browser.dataFolder else {
             return AgentResponseJSON.failure("The sidebar can't attach to \(browser.name): it works with Chromium browsers.")
         }
+        // The file goes into the browser's own folder, which a temporary
+        // settings folder doesn't move: a test or a dev build would repoint
+        // the installed betterlink's helper at itself.
+        if !(ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty {
+            return AgentResponseJSON.failure("BETTERLINK_HOME is set, and this writes into \(browser.name)'s own folder (\(folder.path)), which BETTERLINK_HOME doesn't move. Run it without BETTERLINK_HOME to set up the installed betterlink.")
+        }
         var remove = false
         if let v = input["remove"] {
             guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return AgentResponseJSON.failure("remove must be true or false.") }

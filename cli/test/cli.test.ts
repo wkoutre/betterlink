@@ -267,7 +267,8 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     const done = run(d, 'tour', 'done').json
     expect(done.welcomed).toBe(true)
     expect(done.showsNext).toBe('nothing')
-    expect(done.topics.flatMap((t: any) => t.steps).every((s: any) => s.state === 'seen')).toBe(true)
+    // A step for something this Mac lacks (Dia, a Chromium browser) is left for the day it applies.
+    expect(done.topics.flatMap((t: any) => t.steps).every((s: any) => s.state === (s.applies ? 'seen' : 'new'))).toBe(true)
     expect(run(d, 'tour', 'new').json.shown).toBe(false)
 
     // One step put back is What's New, and only that.
@@ -277,20 +278,22 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'tour', 'new').json.shown).toBe(true)
     expect(run(d, 'tour', 'done', '--topic', 'link-rules').json.new).toEqual([])
 
-    expect(run(d, 'tour', 'show', '--topic', 'sidebar').json.shown).toBe(true)
-    for (const bad of [['show', '--topic', 'nope'], ['done', '--step', 'nope'], ['reset', '--step', 'welcome', '--topic', 'welcome']]) {
+    expect(run(d, 'tour', 'show', '--topic', 'feedback').json.shown).toBe(true)
+    // A bare word is refused, not dropped: `tour reset link-rules` must not forget everything.
+    for (const bad of [['show', '--topic', 'nope'], ['done', '--step', 'nope'], ['reset', '--step', 'welcome', '--topic', 'welcome'],
+      ['reset', 'link-rules'], ['done', 'sidebar'], ['show', 'sidebar']]) {
       const r = run(d, 'tour', ...bad)
       expect(r.code).not.toBe(0)
     }
+    expect(run(d, 'tour', 'status').json.welcomed).toBe(true)
     // All of it put back: the first run again.
     const again = run(d, 'tour', 'reset').json
     expect(again.welcomed).toBe(false)
     expect(again.showsNext).toBe('welcome')
   })
 
-  // Every command a tour step names runs: the names and options are checked
-  // against this file's commands by scripts/gen-tour.py, and here they are in
-  // the list an agent reads.
+  // The commands the tour's steps name are in the list an agent reads
+  // (scripts/gen-tour.py checks each step's command and options exist).
   test('the tour, Sync and tab helper commands are listed for agents', () => {
     const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
     for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup']) {
@@ -316,7 +319,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'sync', 'set', '--profile', 'Work', '--parts', 'none').code).toBe(0)
     expect(run(d, 'sync', 'get').json.profiles).toEqual([])
 
-    for (const bad of [['--folder', join(folder, 'missing')], ['--folder', folder, '--off', 'on'], ['--parts', 'favorites'], ['--profile', 'Work', '--parts', 'colour'], []]) {
+    for (const bad of [['--folder', join(folder, 'missing')], ['--folder', folder, '--off', 'on'], ['--parts', 'favorites'], ['--profile', 'Work', '--parts', 'colour'], ['--profile', 'Work', '--parts', ','], []]) {
       expect(run(d, 'sync', 'set', ...bad).code).not.toBe(0)
     }
     expect(run(d, 'sync', 'set', '--off', 'on').code).toBe(0)
@@ -331,6 +334,13 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     for (const b of list) expect(['setUp', 'notSetUp', 'pointsElsewhere']).toContain(b.helper)
     expect(run(d, 'tabs', 'setup', '--browser', 'No Such Browser').code).not.toBe(0)
     expect(run(d, 'tabs', 'setup', '--browser', 'Safari').code).not.toBe(0)
+    // With a temporary settings folder it refuses a real browser too, before writing anything.
+    for (const b of list) {
+      const r = run(d, 'tabs', 'setup', '--browser', b.browser)
+      expect(r.code).not.toBe(0)
+      expect(r.stdout + r.stderr).toContain('BETTERLINK_HOME')
+    }
+    expect(run(d, 'tabs', 'helpers').json.browsers).toEqual(list)
   })
 
   test('an app that is not there gives APP_NOT_FOUND and its hint', async () => {

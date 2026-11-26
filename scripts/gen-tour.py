@@ -42,14 +42,18 @@ PERMISSIONS = {
                    "anchors": ["Privacy_Automation"]},
     "native-messaging": {"source": [r"NativeMessagingHosts"]},
     "browser-extension": {"source": [r"chrome://extensions"]},
-    "files-and-folders": {"source": [r"\bNSOpenPanel\("]},
+    "files-and-folders": {"source": [r"\bNS(Open|Save)Panel\("]},
 }
+# What the Tabs extension asks the browser for (browser-extension/manifest.json).
+# The browser shows these when the extension is added, and asks again when one
+# is added later, so the step that has people add it says what it can see.
+EXTENSION_ASKS = {"tabs", "nativeMessaging", "favicon", "storage"}
 # Things macOS asks a person about that betterlink doesn't use today. One of
 # these appearing in the source means a new prompt: give it an entry above and
 # a step in Tour/tour.json.
 NOT_ASKED_TODAY = {
     "screen recording": r"CGRequestScreenCaptureAccess|CGPreflightScreenCaptureAccess|SCShareableContent|CGWindowListCreateImage",
-    "input monitoring": r"IOHIDRequestAccess|IOHIDCheckAccess|CGEvent\.tapCreate|CGEventTapCreate",
+    "input monitoring": r"IOHIDRequestAccess|IOHIDCheckAccess|CGEvent\.tapCreate|CGEventTapCreate|addGlobalMonitorForEvents\(matching:[^)]*\.key",
     "notifications": r"UNUserNotificationCenter",
     "the camera or microphone": r"AVCaptureDevice",
     "location": r"CLLocationManager",
@@ -57,7 +61,8 @@ NOT_ASKED_TODAY = {
     "calendars or reminders": r"EKEventStore",
     "photos": r"PHPhotoLibrary",
     "Bluetooth": r"CBCentralManager",
-    "the local network": r"\bNWBrowser\b|\bNetServiceBrowser\b",
+    "the local network": r"\bNWBrowser\b|\bNetServiceBrowser\b|\bNWListener\b",
+    "Touch ID or your password": r"\bLAContext\b",
     "speech recognition": r"SFSpeechRecognizer",
 }
 # Entitlements that change how the code runs and ask the user nothing.
@@ -70,6 +75,7 @@ SILENT_ENTITLEMENTS = {
 SETTING_CONTROLS = {
     "Toggle": "isOn", "Picker": "selection", "DSPicker": "selection", "ProfileMenu": "selection",
     "DSSwatchPicker": "color", "ShortcutRecorder": "shortcut",
+    "Slider": "value", "Stepper": "value", "ColorPicker": "selection",
 }
 
 problems = []
@@ -105,7 +111,7 @@ def prose(where, text, most, least=1, sentence=True):
         problem(f"{where} is {len(text)} characters; the most is {most}. Say less, or split the step.")
     if len(text) < least:
         problem(f"{where} is {len(text)} characters; a step explains itself in at least {least}.")
-    if "—" in text or "–" in text:
+    if "—" in text or "–" in text or " - " in text or "--" in text:
         problem(f"{where} uses a dash as punctuation; write two sentences or use a comma.")
     if "!" in text:
         problem(f"{where} has an exclamation mark; the tour stays calm.")
@@ -338,14 +344,19 @@ def app_settings():
             where = f"{path.relative_to(ROOT).as_posix()}:{line}"
             if not b:
                 fatal(f"{where}: a {m.group(1)} with no `{label}:` this script can read. Teach scripts/gen-tour.py its shape.")
-            found[f"{path.stem}.{b.group(1) or b.group(2) or b.group(3)}"] = where
+            # A second control in the file bound to the same name (a local
+            # `on`, say) is another setting: it gets its own name, #2.
+            key, n = f"{path.stem}.{b.group(1) or b.group(2) or b.group(3)}", 1
+            while (key if n == 1 else f"{key}#{n}") in found: n += 1
+            found[key if n == 1 else f"{key}#{n}"] = where
     if len(found) < 5:
         fatal("found almost no setting controls. If the pages moved, teach scripts/gen-tour.py where they are.")
     return found
 
 def app_permissions():
     """permission -> where the source shows betterlink asks for it."""
-    sources = list(swift_sources(ROOT / "Sources"))
+    # The tour's own files too: a step's control can be what asks.
+    sources = list(swift_sources(ROOT / "Sources", skip_tour=False))
     plist = read(ROOT / "Info.plist")
     usage = set(re.findall(r"<key>(NS\w+UsageDescription)</key>", plist))
     entitlements = set()
@@ -353,8 +364,10 @@ def app_permissions():
         entitlements |= set(re.findall(r"<key>([\w.-]+)</key>", read(f)))
     anchors = {}
     for path, text in sources:
-        for m in re.finditer(r"x-apple\.systempreferences:[\w.]+\?(\w+)", text):
-            anchors[m.group(1)] = path.relative_to(ROOT).as_posix()
+        # The pane's name wherever it is written, so a link put together from
+        # parts counts too.
+        for m in re.finditer(r"x-apple\.systempreferences:[\w.]+\?(\w+)|\b(Privacy_\w+)", text):
+            anchors[m.group(1) or m.group(2)] = path.relative_to(ROOT).as_posix()
     asked = {}
     for name, signs in PERMISSIONS.items():
         for path, text in sources:
@@ -378,6 +391,22 @@ def app_permissions():
         if anchor not in known_anchors:
             problem(f"{where} opens System Settings at {anchor}, a permission the tour doesn't know. Add it to PERMISSIONS in "
                     "scripts/gen-tour.py and give it a step in Tour/tour.json.")
+    try:
+        manifest = json.loads(read(ROOT / "browser-extension/manifest.json"))
+    except json.JSONDecodeError as e:
+        fatal(f"browser-extension/manifest.json isn't valid JSON: {e}")
+    asks = set()
+    for key in ("permissions", "optional_permissions", "host_permissions", "optional_host_permissions"):
+        asks |= set(manifest.get(key, []))
+    for scripts in manifest.get("content_scripts", []):
+        asks |= set(scripts.get("matches", []))
+    for extra in sorted(asks - EXTENSION_ASKS):
+        problem(f"browser-extension/manifest.json now asks the browser for {extra!r}. The browser tells people when they add or update the "
+                "extension, so say what it is for in the step that covers the browser-extension permission, then add it to EXTENSION_ASKS "
+                "in scripts/gen-tour.py.")
+    for gone in sorted(EXTENSION_ASKS - asks):
+        problem(f"EXTENSION_ASKS in scripts/gen-tour.py lists {gone!r}, which browser-extension/manifest.json no longer asks for. Remove it, "
+                "and anything the step says about it.")
     for what, pattern in NOT_ASKED_TODAY.items():
         for path, text in sources:
             if re.search(pattern, text):

@@ -35,6 +35,7 @@ If betterlink is installed on your Mac, your real rules live in its settings fol
 - Read-only commands (`betterlink status`, `rules list`, `test <url>`, `config check`) are safe against real settings.
 - `dist/betterlink.app/Contents/MacOS/Betterlink --test '<url>'` prints a routing decision and opens nothing.
 - Don't run `default-browser set` or `login set` from a dev build unless you mean to change your Mac.
+- `tabs setup` writes into a browser's own folder, which `BETTERLINK_HOME` doesn't move, so it refuses to run while `BETTERLINK_HOME` is set. From a dev build without it, it points that browser's Tabs extension at the dev build until the installed betterlink is opened again.
 - After launching a `dist/` build on a Mac where an installed betterlink is the default browser, unregister the dev build so links keep going to the installed copy:
 
   ```sh
