@@ -244,6 +244,34 @@ import Testing
         #expect(c.kind(of: 4) == .notBrowser && c.wait(for: 4) == nil)
     }
 
+    /// A word that a window is a popup came from one pairing, and a window
+    /// without a sidebar is paired no more: an event that can change what the
+    /// window shows (a resize, a return from the Dock) lets it be judged
+    /// afresh, by a new word or by its looks, so one wrong pairing is not for
+    /// good (review G1).
+    @Test func anEventThatStartsAWindowOverForgetsAWordThatItIsAPopup() {
+        var k = WindowKinds()
+        k.listening = true
+        k.saw([1: dia])
+        k.said([1: .other])
+        #expect(k.kind(of: 1) == .notBrowser)
+        k.startOver(1)
+        #expect(k.kind(of: 1) == .unknown && k.awaitsWord(1))
+        k.said([1: .normal])
+        #expect(k.kind(of: 1) == .browser)
+        // A word that it is a browser window is kept: tabs or not, that is what it is.
+        k.startOver(1)
+        #expect(k.kind(of: 1) == .browser)
+        // Where tabs tell, it gets its looks again.
+        var c = WindowKinds()
+        c.saw([3: normal])
+        c.saw([4: popup])
+        c.said([4: .other])
+        #expect(c.kind(of: 4) == .notBrowser && c.wait(for: 4) == nil)
+        c.startOver(4)
+        #expect(c.kind(of: 4) == .unknown && c.wait(for: 4) == 0)
+    }
+
     @Test func whereTabsCantTellANewWindowWaitsForTheExtensionsWordWhileItIsConnected() {
         var k = WindowKinds()
         k.listening = true

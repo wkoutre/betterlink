@@ -160,8 +160,18 @@ public struct WindowKinds: Equatable, Sendable {
 
     /// An event that can change what the window shows (it was resized, as on
     /// leaving full screen, or came back from the Dock): it gets its looks
-    /// afresh.
-    public mutating func startOver(_ window: UInt32) { seen[window]?.looks = 0 }
+    /// afresh. A word that it is a popup or an app window is forgotten too:
+    /// that word came from a pairing, and a window without a sidebar is paired
+    /// no more, so without this one wrong pairing would hold until the window
+    /// closes. It is paired again and its new word, or its looks, decide.
+    public mutating func startOver(_ window: UInt32) {
+        guard seen[window] != nil else { return }
+        seen[window]!.looks = 0
+        if seen[window]!.word == .other {
+            seen[window]!.word = nil
+            seen[window]!.waited = false
+        }
+    }
 
     /// Forgets a window that has closed.
     public mutating func forget(_ window: UInt32) { seen[window] = nil }
