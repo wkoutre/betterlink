@@ -387,6 +387,7 @@ struct TourAboutSection: View {
                         Button(topic.title) { tour.start(.topic, topic: topic.id) }
                     }
                 }
+                .menuIndicator(.visible)
                 .fixedSize()
                 Button("Show the Tour") { tour.start(.replay) }
             }

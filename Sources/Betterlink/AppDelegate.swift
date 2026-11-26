@@ -127,11 +127,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.titleVisibility = .hidden
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
-            w.contentMinSize = BetterlinkWindow.minSize
             let host = NSHostingController(rootView: RootView().environmentObject(model))
             host.sizingOptions = []  // the window, not the content, sets the size
             w.contentViewController = host
             w.setContentSize(BetterlinkWindow.defaultSize)
+            // After the content is in: set before it, the minimum didn't hold, and
+            // a window dragged smaller clips the page's edges (and the tour's buttons).
+            w.contentMinSize = BetterlinkWindow.minSize
             // Closing the window on the tour ends the tour, like Skip.
             // The window lives as long as the app, so the observer is never removed.
             _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
