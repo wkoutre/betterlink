@@ -147,15 +147,14 @@ final class TabsModel: ObservableObject {
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the
-    /// browser's Local State. Retried at most every 5 s until found (the
-    /// browser writes the storage a moment after the extension starts).
+    /// browser's Local State. Retried at most every 5 s until found, for a
+    /// minute, then every 30 s (`ProfileLocator.lookAgain`).
     /// The color comes from the profile's Preferences (a custom theme) or
     /// Local State (the frame color).
     private func lookUpProfiles(_ sessions: [BrowserSession]) {
         for s in sessions {
-            // Unknown profiles retry every 5 s; known ones are read again at most
-            // every 30 s, on the next tab change, so a name or color changed in
-            // the browser shows up.
+            // Known ones are read again at most every 30 s, on the next tab
+            // change, so a name or color changed in the browser shows up.
             guard let instance = s.instance,
                   Date().timeIntervalSince(profileLookups[instance] ?? .distantPast)
                     > ProfileLocator.lookAgain(found: profiles[instance] != nil,

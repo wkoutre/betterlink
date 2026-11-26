@@ -10,10 +10,12 @@ public enum ProfileLocator {
     /// Seconds after a look before a session's profile is looked for again
     /// (each look reads the profile folders' extension storage and Local
     /// State): one found is read again every 30 s, so a renamed or recolored
-    /// profile shows; one not found yet every 5 s. `lookingFor`: seconds
-    /// since its first look.
+    /// profile shows; one not found yet every 5 s for its first minute (the
+    /// browser writes the storage a moment after the extension starts), and
+    /// after that, when this browser's folder doesn't seem to have it, every
+    /// 30 s as well. `lookingFor`: seconds since its first look.
     public static func lookAgain(found: Bool, lookingFor: Double) -> Double {
-        found ? 30 : 5
+        found || lookingFor >= 60 ? 30 : 5
     }
 
     /// The profile folder name (`Default`, `Profile 1`) under `dataFolder` whose
