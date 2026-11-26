@@ -74,7 +74,8 @@ public final class SyncHub: @unchecked Sendable {
     /// unread, and the collect reads only each tab's newest (`readHeld`).
     /// A change the app needs at once (opens, closes, moves, switches, a tab's
     /// address, anything but a title or icon) is read with everything kept
-    /// before it, in order, and handed on at once. Off, every line is read
+    /// before it, in order, and handed on at once; so is a kept title line
+    /// found, when read, to carry a new address. Off, every line is read
     /// and handed on as it comes (the terminal view, the e2e test).
     public init(directory: String = SocketDirectory.path,
                 holdingContent: Bool = false,
@@ -108,15 +109,19 @@ public final class SyncHub: @unchecked Sendable {
 
     /// The newest tab lists, for the app publishing them: the next change to
     /// what tabs show is handed on again.
+    /// A held line that turns out to move a tab's address or window is
+    /// handed on as well, at once (`movesAddress`).
     public func collect() -> [BrowserSession] {
         q.sync {
+            var moved = false
             for (path, lines) in held {
                 guard var s = sessions.removeValue(forKey: path) else { continue }
-                readHeld(lines, into: &s, from: path)
+                if readHeld(lines, into: &s, from: path) { moved = true }
                 sessions[path] = s
             }
             held = [:]
-            handedContent = false
+            handedContent = moved
+            if moved { publish() }
             return orderedSessions()
         }
     }
@@ -194,9 +199,12 @@ public final class SyncHub: @unchecked Sendable {
             sessions[path] = s
             return
         }
-        // What was kept came before these.
-        if let kept = held.removeValue(forKey: path) { readHeld(kept, into: &s, from: path) }
         var decoded = false, atOnce = false
+        // What was kept came before these.
+        if let kept = held.removeValue(forKey: path), readHeld(kept, into: &s, from: path) {
+            decoded = true
+            atOnce = true
+        }
         for line in rest {
             decodes += 1
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
@@ -243,8 +251,13 @@ public final class SyncHub: @unchecked Sendable {
     /// the app already has (`TabStore.applyTitles`), so only each tab's
     /// newest is read, when they are what they looked like: title changes of
     /// known tabs, numbered one after another from the store's last. Else
-    /// every one is read, in order, as it would have been.
-    private func readHeld(_ kept: [(line: Data, at: Double)], into s: inout BrowserSession, from path: String) {
+    /// every one is read, in order, as it would have been. The extension sends
+    /// the whole tab with each update, whatever its `changes` name, so a line
+    /// that looked like a title can move the tab's address: then every one is
+    /// read, and true says the app is to hear of it at once (`movesAddress`).
+    /// Only each tab's newest is checked on the way: a tab whose address went
+    /// away and back between two collects is where it was.
+    private func readHeld(_ kept: [(line: Data, at: Double)], into s: inout BrowserSession, from path: String) -> Bool {
         var newest: [Int: Int] = [:]
         for (i, k) in kept.enumerated() { if let id = Self.titleOnlyTab(k.line) { newest[id] = i } }
         var read: [Inbound] = []
@@ -253,7 +266,7 @@ public final class SyncHub: @unchecked Sendable {
                 decodes += 1
                 guard let m = try? dec.decode(Inbound.self, from: kept[i].line), m.type == "event", m.kind == "tabUpdated",
                       m.changes == ["title"], let t = m.tab, s.store.tabs[t.id] != nil, let seq = m.seq,
-                      seq > (read.last?.seq ?? s.store.lastSeq) else { read = []; break }
+                      seq > (read.last?.seq ?? s.store.lastSeq), !Self.movesAddress(m, in: s.store) else { read = []; break }
                 read.append(m)
             }
         }
@@ -263,14 +276,17 @@ public final class SyncHub: @unchecked Sendable {
             for m in read { onLine?(path, m) }
             if let t = last.t { s.lastEventLatencyMs = kept[kept.count - 1].at - t }
             s.lastEventKind = last.kind
-            return
+            return false
         }
+        var moved = false
         for k in kept {
             decodes += 1
             guard let m = try? dec.decode(Inbound.self, from: k.line) else { continue }
             onLine?(path, m)
+            if Self.movesAddress(m, in: s.store) { moved = true }
             take(m, into: &s, from: path, receivedAt: k.at)
         }
+        return moved
     }
 
     /// The tab a line names when it looks like a change of that tab's title
