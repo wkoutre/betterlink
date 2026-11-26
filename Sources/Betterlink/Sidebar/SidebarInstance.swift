@@ -429,7 +429,7 @@ final class SidebarInstance: ObservableObject {
 
     /// Starts resizing. False when there is no window at rest to resize against.
     func beginResize() -> Bool {
-        endResize() // a single step still waiting for its window ends here
+        endResize() // a single step still waiting for its window ends when a drag begins
         guard slideRun == nil, !hidden, isShown, let panel, panel.isVisible else { return false }
         let t = window.target
         let l = loan?.seen(at: t.frame, screen: screen(for: t.frame)).loan
@@ -506,13 +506,16 @@ final class SidebarInstance: ObservableObject {
     /// One step without a pointer (the edge's adjustable action: VoiceOver,
     /// the keyboard). There is no button to come up, so the resize stays open
     /// until the window has answered (follow()), or `EdgeDrag.answerWait` has
-    /// passed, and then ends from the window's frame as a drag does.
-    func nudge(by delta: CGFloat) {
-        guard edgeTimer == nil, beginResize() else { return }
-        resize(by: delta)
+    /// passed, and then ends from the window's frame as a drag does. A step
+    /// taken while the last one still waits (key repeat) adds to what is
+    /// asked, and the wait starts again.
+    func nudge(by step: CGFloat) {
+        guard edgeTimer == nil, resizing?.waits == true || beginResize(), let open = resizing else { return }
+        resize(by: open.drag.stepped(open.delta, by: step))
         guard let r = resizing else { return }
         if r.drag.answered(r.asked, by: window.target.frame) { return endResize() }
         resizing?.waits = true
+        stepEnd?.cancel()
         let work = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.endResize() } }
         stepEnd = work
         DispatchQueue.main.asyncAfter(deadline: .now() + EdgeDrag.answerWait, execute: work)

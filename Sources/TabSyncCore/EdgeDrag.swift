@@ -76,6 +76,18 @@ public struct EdgeDrag: Equatable, Sendable {
         return abs(real.width - ask.width) < 2
     }
 
+    /// The delta after one more single step of `step` points on a resize
+    /// that stands at `delta`: steps taken before the window has answered add
+    /// up. Counted from what is asked now, so steps past a limit don't pile up
+    /// beyond it and one step back is felt at once.
+    public func stepped(_ delta: CGFloat, by step: CGFloat, minWindowWidth: CGFloat = 500) -> CGFloat {
+        func within(_ d: CGFloat) -> CGFloat {
+            SidebarGeometry.resized(window: window, width: width, to: width + d, side: side,
+                                    minWindowWidth: covers ? 0 : minWindowWidth).width - width
+        }
+        return within(within(delta) + step)
+    }
+
     /// What the window has lent once the drag is over, seen at `real`. The
     /// space it had before (`outer`, when it had lent some already) stays;
     /// one that had lent nothing lends what the drag took. Nil: nothing

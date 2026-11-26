@@ -182,6 +182,38 @@ import Testing
         #expect(EdgeDrag.answerWait > 0 && EdgeDrag.answerWait <= 0.5)
     }
 
+    /// From the second review: a step taken before the window had answered
+    /// the last one (key repeat) ended that one from the unanswered frame and
+    /// asked the same again, so two presses gave 10 pt.
+    @Test func stepsBeforeTheWindowAnswersAddUp() {
+        for side in SidebarSide.allCases {
+            let drag = start(side)
+            var b = Browser(frame: drag.window)
+            let was = edges(side, b.frame, 280)
+            var delta = drag.stepped(0, by: 10)
+            #expect(step(drag, delta, &b, answers: false) == 280, "\(side)")
+            delta = drag.stepped(delta, by: 10)
+            #expect(delta == 20 && drag.ask(delta: delta)?.width == 980, "\(side)")
+            #expect(step(drag, delta, &b, answers: false) == 280, "\(side)")
+            b.answer()
+            if let at = drag.kept(b.frame) { b.frame = at }
+            #expect(drag.answered(drag.ask(delta: delta), by: b.frame), "\(side)")
+            #expect(drag.width(delta: delta, beside: b.frame) == 300 && edges(side, b.frame, 300) == was, "\(side)")
+            // Steps past a limit don't pile up: one step back is felt at once.
+            var wide = delta, narrow = CGFloat(0)
+            for _ in 0..<30 {
+                wide = drag.stepped(wide, by: 10)
+                narrow = drag.stepped(narrow, by: -10)
+            }
+            #expect(wide == 160 && drag.stepped(wide, by: -10) == 150, "\(side)")
+            #expect(narrow == -80 && drag.stepped(narrow, by: 10) == -70, "\(side)")
+            let covering = EdgeDrag(window: drag.window, width: 280, side: side, covers: true)
+            #expect(covering.stepped(covering.stepped(0, by: 10), by: 10) == 20, "\(side)")
+        }
+        // Nor past what the window is asked for: one 520 wide gives 20.
+        #expect(start(.right, window: 520).stepped(20, by: 10) == 20)
+    }
+
     @Test func theLoanAtTheEndIsWhatTheWindowReallyLent() throws {
         for side in SidebarSide.allCases {
             // Snapped to the tile and narrowed by the sidebar's 280. Asked for
