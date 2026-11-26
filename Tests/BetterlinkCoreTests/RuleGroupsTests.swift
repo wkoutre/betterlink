@@ -10,9 +10,10 @@ import Testing
     static let personal = ProfileRef(browser: Browser.brave.bundleId, directory: "Default")
     static let chrome = ProfileRef(browser: "com.google.Chrome", directory: "Default")
 
-    func rule(_ kind: Rule.Kind = .domain, _ pattern: String, _ p: ProfileRef) -> Rule {
+    func rule(_ kind: Rule.Kind, _ pattern: String, _ p: ProfileRef) -> Rule {
         Rule(kind: kind, pattern: pattern, browser: p.browser, profile: p.directory)
     }
+    func rule(_ pattern: String, _ p: ProfileRef) -> Rule { rule(.domain, pattern, p) }
 
     @Test func groupsFollowTheProfilesPageThenFirstAppearance() {
         let rules = [rule("a.com", Self.chrome), rule("b.com", Self.personal), rule("c.com", Self.work), rule("d.com", Self.personal)]
