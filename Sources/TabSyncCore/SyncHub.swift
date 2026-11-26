@@ -88,12 +88,23 @@ public final class SyncHub: @unchecked Sendable {
     }
 
     private let dec = JSONDecoder()
+    #if DEBUG
     /// How many lines were decoded, for the tab churn guard (TabChurnTests).
+    /// Debug builds (the tests) only: the app, built for release, counts nothing.
     private var decodes = 0
     var decodeCount: Int { q.sync { decodes } }
     /// How many lines came in, read or held.
     private var lines = 0
     var lineCount: Int { q.sync { lines } }
+    #endif
+
+    /// Counts for the tab churn guard; nothing in a release build.
+    @inline(__always) private func count(decodes d: Int = 0, lines l: Int = 0) {
+        #if DEBUG
+        decodes += d
+        lines += l
+        #endif
+    }
 
     public func start() {
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true,
@@ -185,7 +196,7 @@ public final class SyncHub: @unchecked Sendable {
 
     private func handle(_ lines: [Data], from path: String, receivedAt: Double) {
         guard var s = sessions.removeValue(forKey: path) else { return }
-        self.lines += lines.count
+        count(lines: lines.count)
         var rest = lines[...]
         // A title change after one was handed on: kept unread until the app
         // collects, or until a line that isn't one comes (`readHeld`).
@@ -206,7 +217,7 @@ public final class SyncHub: @unchecked Sendable {
             atOnce = true
         }
         for line in rest {
-            decodes += 1
+            count(decodes: 1)
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
             decoded = true
             onLine?(path, m)
@@ -263,7 +274,7 @@ public final class SyncHub: @unchecked Sendable {
         var read: [Inbound] = []
         if s.store.hasSnapshot {
             for i in newest.values.sorted() {
-                decodes += 1
+                count(decodes: 1)
                 guard let m = try? dec.decode(Inbound.self, from: kept[i].line), m.type == "event", m.kind == "tabUpdated",
                       m.changes == ["title"], let t = m.tab, s.store.tabs[t.id] != nil, let seq = m.seq,
                       seq > (read.last?.seq ?? s.store.lastSeq), !Self.movesAddress(m, in: s.store) else { read = []; break }
@@ -280,7 +291,7 @@ public final class SyncHub: @unchecked Sendable {
         }
         var moved = false
         for k in kept {
-            decodes += 1
+            count(decodes: 1)
             guard let m = try? dec.decode(Inbound.self, from: k.line) else { continue }
             onLine?(path, m)
             if Self.movesAddress(m, in: s.store) { moved = true }
