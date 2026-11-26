@@ -66,6 +66,17 @@ public enum FolderIcon: Codable, Hashable, Sendable {
         return scalars.contains { $0.value == 0xFE0F }
     }
 
+    /// The emoji a folder's Choose Emoji… offers to click, beside a field for
+    /// any other one typed or pasted. The sidebar is a panel that never makes
+    /// betterlink the active app, and the Mac's emoji picker opens only for
+    /// the active app, so the sidebar offers its own.
+    public static let suggestedEmoji: [String] = [
+        "📁", "📂", "🗂️", "📚", "📖", "📝", "📌", "⭐️",
+        "❤️", "🔥", "💡", "🎯", "🚀", "💼", "🏠", "🛒",
+        "💰", "📈", "🧾", "🗓️", "✈️", "🌍", "🎵", "🎬",
+        "🎮", "📷", "🍳", "🏋️", "🧪", "💻", "🛠️", "🔒",
+    ]
+
     /// The longest symbol name taken. The Mac's longest are about 50 characters.
     static let maxSymbolLength = 100
 

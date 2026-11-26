@@ -395,6 +395,10 @@ struct SidebarView: View {
                     Divider()
                     Button("Delete Folder", role: .destructive) { deleteFolder(f, p) }
                 }
+                if let editing = iconEditing, editing.id == f.id, editing.kind == .emoji {
+                    emojiGrid(f, p, indent: CGFloat(depth) * Self.indent)
+                        .transition(Motion.reveal(reduceMotion))
+                }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
                         ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
@@ -494,9 +498,40 @@ struct SidebarView: View {
         renaming = nil
         renamingProfile = nil
         // A symbol's name starts as the one it has, to change a little; an
-        // emoji starts empty, so the one picked is the only one there.
+        // emoji starts empty, so the one typed is the only one there.
         if kind == .symbol, case .symbol(let name)? = f.icon { iconDraft = name } else { iconDraft = "" }
-        iconEditing = (f.id, kind)
+        // Unset first: SwiftUI moves the keyboard only when the focus changes,
+        // and a field left from the last icon may still count as focused.
+        iconFocused = false
+        animate { iconEditing = (f.id, kind) }
+    }
+
+    private func endIcon() {
+        iconFocused = false
+        animate { iconEditing = nil }
+    }
+
+    /// Gives the icon field the keyboard as it opens, as Rename's field takes
+    /// it. Opened from the Icon submenu, the first try was seen to miss (on
+    /// screen, typing reached the field only after a click), so it is tried
+    /// again a turn later and once the menu has closed, making the panel key
+    /// when it isn't. The panel never activates betterlink, so the browser
+    /// stays the active app.
+    private func focusIconField() {
+        func attempt(last: Bool) {
+            guard iconEditing != nil else { return }
+            if let panel = sidebar.panel, !panel.isKeyWindow { panel.makeKey() }
+            if !iconFocused {
+                iconFocused = true
+            } else if last, !(sidebar.panel?.firstResponder is NSTextView) {
+                // Set, and it did not take: SwiftUI moves the focus only on a change.
+                iconFocused = false
+                DispatchQueue.main.async { iconFocused = true }
+            }
+        }
+        attempt(last: false)
+        DispatchQueue.main.async { attempt(last: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { attempt(last: true) }
     }
 
     /// What `iconDraft` would set, or nil while it isn't one yet.
@@ -508,9 +543,9 @@ struct SidebarView: View {
     }
 
     /// The row while its icon is typed: a preview where the icon goes, then
-    /// the field. An emoji opens the Mac's emoji picker, and the first one
-    /// picked or typed is set; a symbol's name is set with Return, once the
-    /// preview shows it. Esc leaves the icon as it was.
+    /// the field. An emoji is set as soon as one is typed or pasted, or
+    /// clicked in the grid below the row; a symbol's name is set with Return,
+    /// once the preview shows it. Esc leaves the icon as it was.
     @ViewBuilder
     private func iconField(_ f: SidebarFolder, _ kind: IconKind, _ p: SidebarProfile) -> some View {
         let draft = draftIcon(kind)
@@ -527,30 +562,42 @@ struct SidebarView: View {
             .font(DS.TextStyle.body)
             .focused($iconFocused)
             .accessibilityLabel(kind == .emoji ? "Emoji for \(f.name)" : "Symbol name for \(f.name)")
-            .onAppear {
-                iconFocused = true
-                // The picker types into the field that has the keyboard: open it once the field has it.
-                if kind == .emoji { DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) } }
-            }
+            // A field of its own for each kind, so switching kinds opens it afresh.
+            .id(kind)
+            .onAppear { focusIconField() }
             .onChange(of: iconDraft) { _, _ in
                 if kind == .emoji, let icon = draftIcon(.emoji) { setIcon(f.id, icon, p) }
             }
             .onSubmit {
                 if let icon = draftIcon(kind) { setIcon(f.id, icon, p) } else { NSSound.beep() }
             }
-            .onExitCommand { iconEditing = nil }
-        if kind == .emoji {
-            Button { NSApp.orderFrontCharacterPalette(nil) } label: { RowIcon("face.smiling") }
+            .onExitCommand { endIcon() }
+    }
+
+    /// Under a row choosing an emoji: common ones to click. The Mac's emoji
+    /// picker opens only for the active app's field, and this panel never
+    /// makes betterlink the active app (opening it brought another app
+    /// forward instead), so the sidebar offers its own; any other emoji can
+    /// be typed or pasted into the field.
+    private func emojiGrid(_ f: SidebarFolder, _ p: SidebarProfile, indent: CGFloat) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 26, maximum: 30), spacing: 2)], spacing: 2) {
+            ForEach(FolderIcon.suggestedEmoji, id: \.self) { e in
+                Button { setIcon(f.id, .emoji(e), p) } label: {
+                    Text(e).font(DS.TextStyle.body).frame(width: 26, height: 26).contentShape(Rectangle())
+                }
                 .buttonStyle(PressStyle())
-                .foregroundStyle(pal.textSecondary)
-                .help("Show Emoji & Symbols")
-                .accessibilityLabel("Show Emoji & Symbols")
+                .help(e)
+                .accessibilityLabel(e)
+            }
         }
+        .padding(.leading, DS.Space.space2 + indent)
+        .padding(.trailing, DS.Space.space2)
+        .padding(.vertical, DS.Space.space1)
     }
 
     private func setIcon(_ id: UUID, _ icon: FolderIcon, _ p: SidebarProfile) {
         edit(p.id) { $0.setIcon(id, to: icon) }
-        iconEditing = nil
+        endIcon()
     }
 
     private func newFolder(in parent: UUID?, _ p: SidebarProfile) {
