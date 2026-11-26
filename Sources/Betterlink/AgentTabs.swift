@@ -94,7 +94,7 @@ extension AgentCommand {
         // settings folder doesn't move: a test or a dev build would repoint
         // the installed betterlink's helper at itself.
         if !(ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty {
-            return AgentResponseJSON.failure("BETTERLINK_HOME is set, and this writes into \(browser.name)'s own folder (\(folder.path)), which BETTERLINK_HOME doesn't move. Run it without BETTERLINK_HOME to set up the installed betterlink.")
+            return AgentResponseJSON.failure("BETTERLINK_HOME is set, and this writes into \(browser.name)'s own folder (~/Library/Application Support/\(folder)), which BETTERLINK_HOME doesn't move. Run it without BETTERLINK_HOME to set up the installed betterlink.")
         }
         var remove = false
         if let v = input["remove"] {
