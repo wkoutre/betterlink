@@ -72,7 +72,11 @@ jobs:
       - run: make test
       - run: make test-cli
       - run: make test-tabs
-      - run: ./scripts/check-idle.sh # against the app test-cli built
+      # Against the app test-cli built, with Sync on and the sidebar beside a
+      # browser window of its own.
+      - run: ./scripts/check-idle.sh
+        env:
+          CHECK_IDLE_SIDEBAR: /Applications/Google Chrome.app
       # Package.resolved pins Sparkle to a commit. A build that had to change
       # it means the committed pins are stale: run `swift package resolve`
       # and commit the result.
