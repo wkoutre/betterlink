@@ -68,6 +68,48 @@ import Testing
         #expect(handed.value == settled + 4)
     }
 
+    /// Held titles are read before whatever comes after them, an icon the
+    /// app has is kept through them, and titles that aren't numbered one
+    /// after another are read one by one: the lists are those of reading
+    /// every line in order.
+    @Test func heldTitlesLeaveTheListsAsReadingEveryLineWould() throws {
+        let host = try FakeHost()
+        defer { host.close() }
+        let handed = Counter()
+        let hub = SyncHub(directory: host.dir, holdingContent: true, onChange: { _ in handed.add() })
+        hub.start()
+        try host.accept()
+        var sent = [Self.snapshot()]
+        host.send(sent)
+        try wait(hub) { $0.first?.store.tabCount == Self.tabs }
+        _ = hub.collect()
+
+        var seq = 1
+        func line(_ l: String) -> String { sent.append(l); return l }
+        func next() -> Int { seq += 1; return seq }
+        let icon = #"{"type":"event","kind":"tabFavicon","seq":\#(next()),"t":1,"tabId":105,"favicon":"data:image/png;base64,AAAA"}"#
+        let titles = (0..<300).map { Self.updated(seq: next(), tab: 100 + $0 % Self.tabs, title: "t\($0)") }
+        host.send([line(icon)] + titles.map(line))
+        try wait(hub) { _ in hub.lineCount == sent.count }
+        let handedBefore = handed.value
+        let activated = #"{"type":"event","kind":"tabActivated","seq":\#(next()),"tabId":105,"windowId":1}"#
+        host.send([line(activated)])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        #expect(handed.value == handedBefore + 1)
+        #expect(hub.current.first?.store == reference(sent: sent))
+        #expect(hub.current.first?.store.tabs[105]?.favIconUrl == "data:image/png;base64,AAAA")
+        _ = hub.collect()
+
+        // The first title is handed on, then a gap: one title never came.
+        host.send([line(Self.updated(seq: next(), tab: 100, title: "handed"))])
+        try wait(hub) { $0.first?.store.lastSeq == seq }
+        _ = next()
+        let gapped = (0..<20).map { Self.updated(seq: next(), tab: 100 + $0, title: "after the gap \($0)") }
+        host.send(gapped.map(line))
+        try wait(hub) { _ in hub.lineCount == sent.count }
+        #expect(hub.collect().first?.store == reference(sent: sent))
+    }
+
     /// The terminal view and the e2e test see every change as it comes.
     @Test func aHubThatHoldsNothingHandsOnEveryChange() throws {
         let host = try FakeHost()

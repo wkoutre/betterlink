@@ -62,15 +62,20 @@ public final class SyncHub: @unchecked Sendable {
     private let holdingContent: Bool
     /// One such change was handed on and the lists weren't collected since.
     private var handedContent = false
+    /// Title changes taken in since then and not read yet, by connection, in
+    /// the order they came, each with when it came.
+    private var held: [String: [(line: Data, at: Double)]] = [:]
 
     /// `holdingContent`: for the app, which draws what tabs show at most once
     /// per `PublishPacer.interval` and takes the newest lists then
     /// (`collect()`). A window of 56 tabs changing their titles twice a second
-    /// is 112 messages a second; each is still applied here as it comes, and
-    /// a change the app needs at once (opens, closes, moves, switches, a tab's
-    /// address, anything but a title or icon) is handed on at once, but the
-    /// titles in between cost the app nothing. Off, every change is handed
-    /// on as it comes (the terminal view, the e2e test).
+    /// is 112 messages a second. The first title or icon change after a
+    /// collect is read and handed on; the title changes after it are kept
+    /// unread, and the collect reads only each tab's newest (`readHeld`).
+    /// A change the app needs at once (opens, closes, moves, switches, a tab's
+    /// address, anything but a title or icon) is read with everything kept
+    /// before it, in order, and handed on at once. Off, every line is read
+    /// and handed on as it comes (the terminal view, the e2e test).
     public init(directory: String = SocketDirectory.path,
                 holdingContent: Bool = false,
                 onLine: (@Sendable (String, Inbound) -> Void)? = nil,
@@ -105,6 +110,12 @@ public final class SyncHub: @unchecked Sendable {
     /// what tabs show is handed on again.
     public func collect() -> [BrowserSession] {
         q.sync {
+            for (path, lines) in held {
+                guard var s = sessions.removeValue(forKey: path) else { continue }
+                readHeld(lines, into: &s, from: path)
+                sessions[path] = s
+            }
+            held = [:]
             handedContent = false
             return orderedSessions()
         }
@@ -152,7 +163,9 @@ public final class SyncHub: @unchecked Sendable {
                 let lines = pooled { dec.feed(Data(buf[0..<n])) }
                 let received = nowMs()
                 guard let hub = self else { return }
-                hub.q.async { hub.handle(lines, from: path, receivedAt: received) }
+                // On this thread, in the hub's turn: waking another thread
+                // for every message cost more than most messages do.
+                hub.q.sync { hub.handle(lines, from: path, receivedAt: received) }
             }
             guard let hub = self else { return }
             hub.q.async { hub.disconnect(path) }
@@ -160,44 +173,37 @@ public final class SyncHub: @unchecked Sendable {
     }
 
     private func disconnect(_ path: String) {
+        held[path] = nil
         if let fd = connections.removeValue(forKey: path) { close(fd) }
         if sessions.removeValue(forKey: path) != nil { publish() }
     }
 
     private func handle(_ lines: [Data], from path: String, receivedAt: Double) {
-        // Taken out while it changes, so its tabs are changed in place rather
-        // than copied for every message.
         guard var s = sessions.removeValue(forKey: path) else { return }
         self.lines += lines.count
+        var rest = lines[...]
+        // A title change after one was handed on: kept unread until the app
+        // collects, or until a line that isn't one comes (`readHeld`).
+        if holdingContent && handedContent {
+            while let line = rest.first, let id = Self.titleOnlyTab(line), s.store.tabs[id] != nil {
+                held[path, default: []].append((line, receivedAt))
+                rest.removeFirst()
+            }
+        }
+        guard !rest.isEmpty else {
+            sessions[path] = s
+            return
+        }
+        // What was kept came before these.
+        if let kept = held.removeValue(forKey: path) { readHeld(kept, into: &s, from: path) }
         var decoded = false, atOnce = false
-        for line in lines {
+        for line in rest {
             decodes += 1
             guard let m = try? dec.decode(Inbound.self, from: line) else { continue }
             decoded = true
             onLine?(path, m)
             if !PublishPacer.isContent(m) || Self.movesAddress(m, in: s.store) { atOnce = true }
-            switch m.type {
-            case "host":
-                s.browser = m.browser ?? s.browser
-                s.pid = m.pid ?? s.pid
-                s.browserPid = m.browserPid ?? s.browserPid
-            case "hello":
-                s.greet(m)
-            case "ack":
-                if let id = m.id, let sent = pending.removeValue(forKey: id) {
-                    s.lastCommandRoundTripMs = receivedAt - sent
-                }
-            default:
-                if s.store.apply(m) == .needsSnapshot, let fd = connections[path],
-                   var data = try? JSONEncoder().encode(Command.snapshot()) {
-                    data.append(0x0A)
-                    _ = writeAllBytes(fd, data)
-                }
-                if m.type == "event", let t = m.t {
-                    s.lastEventLatencyMs = receivedAt - t
-                    s.lastEventKind = m.kind
-                }
-            }
+            take(m, into: &s, from: path, receivedAt: receivedAt)
         }
         sessions[path] = s
         guard decoded else { return }
@@ -206,6 +212,99 @@ public final class SyncHub: @unchecked Sendable {
             handedContent = true
         }
         publish()
+    }
+
+    private func take(_ m: Inbound, into s: inout BrowserSession, from path: String, receivedAt: Double) {
+        switch m.type {
+        case "host":
+            s.browser = m.browser ?? s.browser
+            s.pid = m.pid ?? s.pid
+            s.browserPid = m.browserPid ?? s.browserPid
+        case "hello":
+            s.greet(m)
+        case "ack":
+            if let id = m.id, let sent = pending.removeValue(forKey: id) {
+                s.lastCommandRoundTripMs = receivedAt - sent
+            }
+        default:
+            if s.store.apply(m) == .needsSnapshot, let fd = connections[path],
+               var data = try? JSONEncoder().encode(Command.snapshot()) {
+                data.append(0x0A)
+                _ = writeAllBytes(fd, data)
+            }
+            if m.type == "event", let t = m.t {
+                s.lastEventLatencyMs = receivedAt - t
+                s.lastEventKind = m.kind
+            }
+        }
+    }
+
+    /// Reads kept title changes. Each replaces its tab whole but for an icon
+    /// the app already has (`TabStore.applyTitles`), so only each tab's
+    /// newest is read, when they are what they looked like: title changes of
+    /// known tabs, numbered one after another from the store's last. Else
+    /// every one is read, in order, as it would have been.
+    private func readHeld(_ kept: [(line: Data, at: Double)], into s: inout BrowserSession, from path: String) {
+        var newest: [Int: Int] = [:]
+        for (i, k) in kept.enumerated() { if let id = Self.titleOnlyTab(k.line) { newest[id] = i } }
+        var read: [Inbound] = []
+        if s.store.hasSnapshot {
+            for i in newest.values.sorted() {
+                decodes += 1
+                guard let m = try? dec.decode(Inbound.self, from: kept[i].line), m.type == "event", m.kind == "tabUpdated",
+                      m.changes == ["title"], let t = m.tab, s.store.tabs[t.id] != nil, let seq = m.seq,
+                      seq > (read.last?.seq ?? s.store.lastSeq) else { read = []; break }
+                read.append(m)
+            }
+        }
+        if let last = read.last, let seq = last.seq, read.count == newest.count,
+           newest.values.max() == kept.count - 1, seq == s.store.lastSeq + kept.count {
+            s.store.applyTitles(read, through: seq)
+            for m in read { onLine?(path, m) }
+            if let t = last.t { s.lastEventLatencyMs = kept[kept.count - 1].at - t }
+            s.lastEventKind = last.kind
+            return
+        }
+        for k in kept {
+            decodes += 1
+            guard let m = try? dec.decode(Inbound.self, from: k.line) else { continue }
+            onLine?(path, m)
+            take(m, into: &s, from: path, receivedAt: k.at)
+        }
+    }
+
+    /// The tab a line names when it looks like a change of that tab's title
+    /// alone, read off its bytes without decoding it (in any order of keys:
+    /// the browser may sort them). Nil when it may be anything else; such a
+    /// line is read as it comes.
+    static func titleOnlyTab(_ line: Data) -> Int? {
+        line.withUnsafeBytes { raw -> Int? in
+            guard Self.find(Self.eventMark, in: raw) != nil, Self.find(Self.updatedMark, in: raw) != nil,
+                  Self.find(Self.titleMark, in: raw) != nil,
+                  let at = Self.find(Self.idMark, in: raw) else { return nil }
+            // One id only: the tab's.
+            let after = at + Self.idMark.count
+            guard Self.find(Self.idMark, in: UnsafeRawBufferPointer(rebasing: raw[after...])) == nil else { return nil }
+            var id = 0, i = after
+            while i < raw.count, raw[i] >= 0x30, raw[i] <= 0x39, i - after < 15 {
+                id = id * 10 + Int(raw[i] - 0x30)
+                i += 1
+            }
+            guard i > after, i < raw.count, raw[i] == 0x2C || raw[i] == 0x7D else { return nil } // , or }
+            return id
+        }
+    }
+    private static let eventMark = Array(#""type":"event""#.utf8)
+    private static let updatedMark = Array(#""kind":"tabUpdated""#.utf8)
+    private static let titleMark = Array(#""changes":["title"]"#.utf8)
+    private static let idMark = Array(#""id":"#.utf8)
+
+    private static func find(_ needle: [UInt8], in raw: UnsafeRawBufferPointer) -> Int? {
+        guard let base = raw.baseAddress, raw.count >= needle.count else { return nil }
+        return needle.withUnsafeBytes { n -> Int? in
+            guard let hit = memmem(base, raw.count, n.baseAddress!, n.count) else { return nil }
+            return base.distance(to: UnsafeRawPointer(hit))
+        }
     }
 
     /// A tab update that changes a tab's address or window, or names a tab

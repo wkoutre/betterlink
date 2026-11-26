@@ -498,7 +498,7 @@ final class BrowserWatcher {
             // lists come every 2 s (PublishPacer): it is read at the next
             // pairing, which those lists bring (`readTitleIfChanged`). In front
             // it is read now, as the pairing then keeps to the moment.
-            guard NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+            guard tracker.frontPid == pid else {
                 w.titleChanged = true
                 return
             }
