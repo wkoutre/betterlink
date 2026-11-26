@@ -18,7 +18,7 @@ struct SyncSettingsSection: View {
                 Text(sync.status).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary).lineLimit(2)
                 Spacer()
                 if sync.folder != nil { Button("Turn Off") { sync.turnOff() } }
-                Button(sync.folder == nil ? "Choose Folder…" : "Change…") { chooseFolder() }
+                Button(sync.folder == nil ? "Choose Folder…" : "Change…") { sync.chooseFolderWithPanel() }
             }
             if sync.folder != nil {
                 Toggle(isOn: $sync.selection.global) {
@@ -84,16 +84,6 @@ struct SyncSettingsSection: View {
         case 1: return "Syncs its \(names[0])."
         default: return "Syncs its \(names.dropLast().joined(separator: ", ")) and \(names.last!)."
         }
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Sync Here"
-        panel.message = "Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync."
-        if panel.runModal() == .OK, let url = panel.url { sync.choose(folder: url) }
     }
 }
 

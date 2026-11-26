@@ -10,11 +10,8 @@ final class SyncController: ObservableObject {
 
     private let defaults = MenuBarIcon.defaults()
     /// BETTERLINK_SYNC_DEVICE (tests): this copy's device id, with its own
-    /// sync settings, so two copies on one Mac sync like two Macs.
-    private let testDevice = SyncController.testDeviceID
-    private static let testDeviceID = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"]
-    private func key(_ k: String) -> String { Self.key(k) }
-    private static func key(_ k: String) -> String { testDeviceID.map { "\($0).\(k)" } ?? k }
+    /// sync settings (SyncDefaults), so two copies on one Mac sync like two Macs.
+    private let testDevice = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"]
 
     /// The sync folder (inside Dropbox, Google Drive or iCloud Drive); nil: off.
     @Published private(set) var folder: URL?
@@ -46,9 +43,20 @@ final class SyncController: ObservableObject {
     }()
 
     private init() {
-        folder = MenuBarIcon.defaults().string(forKey: Self.key("sync.folder")).map { URL(fileURLWithPath: $0, isDirectory: true) }
-        selection = MenuBarIcon.defaults().data(forKey: Self.key("sync.selection")).flatMap { try? JSONDecoder().decode(SyncSelection.self, from: $0) }
-            ?? SyncSelection(global: true, profiles: [:])
+        folder = SyncDefaults.folder(in: MenuBarIcon.defaults())
+        selection = SyncDefaults.selection(in: MenuBarIcon.defaults())
+    }
+
+    /// `betterlink sync set` wrote the folder or the selection from another
+    /// process: take them up as if they were chosen here.
+    func reloadSettings() {
+        let saved = SyncDefaults.selection(in: defaults)
+        if saved != selection { selection = saved }
+        let now = SyncDefaults.folder(in: defaults)
+        guard now?.standardizedFileURL != folder?.standardizedFileURL else { return }
+        folder = now
+        note(now.map { "Sync folder is now \($0.path)." } ?? "Sync is off on this Mac.")
+        restart()
     }
 
     /// Called when the settings folder is known or changes.
@@ -60,14 +68,25 @@ final class SyncController: ObservableObject {
 
     func choose(folder url: URL) {
         folder = url
-        defaults.set(url.path, forKey: key("sync.folder"))
+        SyncDefaults.setFolder(url, in: defaults)
         note("Sync folder is now \(url.path).")
         restart()
     }
 
+    /// Asks for the sync folder with the system's panel (General › Sync, and the tour).
+    func chooseFolderWithPanel() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Sync Here"
+        panel.message = "Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync."
+        if panel.runModal() == .OK, let url = panel.url { choose(folder: url) }
+    }
+
     func turnOff() {
         folder = nil
-        defaults.removeObject(forKey: key("sync.folder"))
+        SyncDefaults.setFolder(nil, in: defaults)
         note("Sync is off on this Mac. Its file stays in the sync folder, so other Macs keep everything it shared.")
         restart()
     }
@@ -150,7 +169,7 @@ final class SyncController: ObservableObject {
     }
 
     private func saveSelection() {
-        if let d = try? JSONEncoder().encode(selection) { defaults.set(d, forKey: key("sync.selection")) }
+        SyncDefaults.setSelection(selection, in: defaults)
     }
 
     // MARK: - Browser profiles on this Mac
