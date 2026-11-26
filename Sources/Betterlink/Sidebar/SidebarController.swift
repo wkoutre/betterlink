@@ -202,6 +202,7 @@ final class SidebarController: ObservableObject {
             feeds = [
                 TabsModel.shared.$sessions.sink { [weak self] s in
                     self?.sessions = s
+                    self?.traceListed()
                     self?.pair()
                 },
                 TabsModel.shared.$profiles.sink { [weak self] p in
@@ -357,7 +358,11 @@ final class SidebarController: ObservableObject {
                          title: t.title, focused: i.window.isFocused)
         }
         // A popup or an app window the extension reports is never the window beside a sidebar.
+        let was = found
         found = pairing.update(windows, in: sessions.map(\.normalWindowsOnly), now: CACurrentMediaTime())
+        if DragTrace.enabled {
+            for (id, f) in found where was[id] != f { DragTrace.log("pair: window \(instances[id]?.window.number ?? 0): \(f)") }
+        }
         refreshLooks()
         // A word on the focus counts once it has held: one more look then.
         pairAgain?.cancel()
@@ -366,6 +371,25 @@ final class SidebarController: ObservableObject {
             DispatchQueue.main.asyncAfter(deadline: .now() + max(0, at - CACurrentMediaTime()) + 0.01, execute: work)
             return work
         }
+    }
+
+    /// The browser windows the extension has listed, for the trace.
+    private var listed: Set<String> = []
+
+    /// Trace only: says when the extension first lists a window, and as what
+    /// (normal, popup, app). Set against the watcher's "appeared" line for the
+    /// same window, it gives how long the browser's own word takes to arrive.
+    private func traceListed() {
+        guard DragTrace.enabled else { return }
+        var now: Set<String> = []
+        for s in sessions {
+            for w in s.store.orderedWindows {
+                let key = "\(s.browser) pid \(s.browserPid) window \(w.id)"
+                now.insert(key)
+                if !listed.contains(key) { DragTrace.log("ext: \(key) listed as \(w.window.type ?? "no type")") }
+            }
+        }
+        listed = now
     }
 
     /// Only the sidebars on screen, and each only when what it shows differs:
