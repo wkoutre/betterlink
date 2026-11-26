@@ -57,6 +57,12 @@ public struct WindowSteps: Sendable {
     public private(set) var interrupted = false
     /// Done because the window stopped short wider than `widest`.
     public private(set) var stoppedShort = false
+    /// How long a call that changes nothing is waited for: `timeout`, or
+    /// less for a browser known to answer quickly (a drag of the sidebar's
+    /// edge, whose next call comes anyway).
+    public var patience = WindowSteps.timeout
+    /// The longest any call took to land (its last change), in seconds.
+    public private(set) var slowest = 0.0
 
     private enum Phase: Equatable {
         case start
@@ -142,8 +148,9 @@ public struct WindowSteps: Sendable {
             let still = s.changed > s.at && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end.
             let arrived = Self.reached(s.call, seen) && s.changed < now
-            guard arrived || still || now - s.at >= Self.timeout else { return nil }
+            guard arrived || still || now - s.at >= patience else { return nil }
             sent = nil
+            if s.changed > s.at { slowest = max(slowest, s.changed - s.at) }
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
             if case .position(let f) = s.call, s.changed > s.at, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {

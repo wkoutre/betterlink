@@ -564,7 +564,7 @@ final class SidebarRig {
             tick()
             tick()
         }
-        callsBefore = fake.setCalls
+        callsBefore = fake.setCalls - (instance.sliding ? 1 : 0) // the call out when the button comes up counts
         widthAtPress = began
         presses = 1
         personPut = nil

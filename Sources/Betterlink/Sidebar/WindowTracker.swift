@@ -224,12 +224,6 @@ final class WindowTracker: NSObject {
 
     // MARK: - Windows
 
-    /// Moves or resizes a window, and reports where it really went.
-    func setFrame(_ frame: CGRect, of w: TrackedWindow) {
-        AXWindow.setFrame(frame, of: w.handle)
-        w.watcher?.refresh(w)
-    }
-
     func scheduleSettle(_ w: TrackedWindow) {
         w.settleWork?.cancel()
         let work = DispatchWorkItem { [weak self, weak w] in
