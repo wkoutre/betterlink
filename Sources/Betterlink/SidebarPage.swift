@@ -3,25 +3,70 @@ import BetterlinkCore
 import SwiftUI
 import TabSyncCore
 
-/// The sidebar's settings: the browsers it attaches to, the sidebar itself,
+/// What the Sidebar page shows, top to bottom. The Sidebar section and its
+/// switch come first. While the sidebar is off the switch is all there is:
+/// nothing else on the page does anything until it is on.
+struct SidebarPagePlan: Equatable {
+    enum Section: Hashable { case sidebar, browsers, options, imports }
+    /// A row of the Sidebar section.
+    enum Row: Hashable { case show, windowsWarning, cornersNote, accessibility, side, shortcut }
+
+    let sections: [Section]
+    let rows: [Row]
+
+    init(enabled: Bool, canTellWindowsApart: Bool = true, readsWindowCorners: Bool = true, trusted: Bool = true) {
+        guard enabled else {
+            sections = [.sidebar]
+            rows = [.show]
+            return
+        }
+        sections = [.sidebar, .browsers, .options, .imports]
+        var rows: [Row] = [.show]
+        if !canTellWindowsApart { rows.append(.windowsWarning) }
+        if !readsWindowCorners { rows.append(.cornersNote) }
+        if !trusted { rows.append(.accessibility) }
+        self.rows = rows + [.side, .shortcut]
+    }
+}
+
+/// The sidebar's settings: the sidebar itself, the browsers it attaches to,
 /// and imports. Sidebar Profiles are managed from the cog in the sidebar.
 struct SidebarPage: View {
     @EnvironmentObject var model: AppModel
     @ObservedObject private var tabs = TabsModel.shared
     @ObservedObject private var sidebar = SidebarController.shared
     @ObservedObject private var lib = SidebarLibraryModel.shared
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private var plan: SidebarPagePlan {
+        SidebarPagePlan(enabled: sidebar.enabled, canTellWindowsApart: sidebar.canTellWindowsApart,
+                        readsWindowCorners: sidebar.readsWindowCorners, trusted: sidebar.trusted)
+    }
 
     var body: some View {
+        let plan = self.plan
         PageForm {
             PageHeader(title: "Sidebar",
                        subtitle: "A sidebar for your browser: Favorites, folders and this window's tabs.")
             if let problem = lib.problem { Banner(text: problem, style: .error) }
-            browsers
-            settings
-            options
-            SidebarImportSection()
+            ForEach(plan.sections, id: \.self) { section in
+                self.section(section, rows: plan.rows)
+                    .transition(Motion.reveal(reduceMotion))
+            }
         }
+        // Turning the sidebar on or off brings the rest of the page in or out.
+        .animation(Motion.quick(reduceMotion), value: plan)
         .onAppear { tabs.start() }
+    }
+
+    @ViewBuilder
+    private func section(_ section: SidebarPagePlan.Section, rows: [SidebarPagePlan.Row]) -> some View {
+        switch section {
+        case .sidebar: settings(rows)
+        case .browsers: browsers
+        case .options: options
+        case .imports: SidebarImportSection()
+        }
     }
 
     private var browsers: some View {
@@ -45,53 +90,57 @@ struct SidebarPage: View {
         }
     }
 
-    private var settings: some View {
+    private func settings(_ rows: [SidebarPagePlan.Row]) -> some View {
         DSSection {
-            Toggle(isOn: $sidebar.enabled) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("Show the sidebar")
-                    Text("Sits against the edge of every browser window and moves with it. Drag the edge between them to resize that window's.")
+            ForEach(rows, id: \.self) { row in
+                switch row {
+                case .show:
+                    Toggle(isOn: $sidebar.enabled) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show the sidebar")
+                            Text("Sits against the edge of every browser window and moves with it. Drag the edge between them to resize that window's.")
+                                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                case .windowsWarning:
+                    Text("This version of macOS no longer tells betterlink one browser window from another, so no window gets a sidebar. Look for a newer betterlink.")
+                        .foregroundStyle(DS.Palette.danger)
+                        .fixedSize(horizontal: false, vertical: true)
+                case .cornersNote:
+                    Text("betterlink can't read each browser window's corner radius on this Mac, so every sidebar is cut for a 20 pt corner (Chrome's). Beside another browser its corners may not match the window's.")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            if !sidebar.canTellWindowsApart {
-                Text("This version of macOS no longer tells betterlink one browser window from another, so no window gets a sidebar. Look for a newer betterlink.")
-                    .foregroundStyle(DS.Palette.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if !sidebar.readsWindowCorners {
-                Text("betterlink can't read each browser window's corner radius on this Mac, so every sidebar is cut for a 20 pt corner (Chrome's). Beside another browser its corners may not match the window's.")
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            if sidebar.enabled && !sidebar.trusted {
-                HStack {
-                    Text("betterlink needs Accessibility access to follow your browser windows.")
-                        .foregroundStyle(DS.Palette.textSecondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Spacer()
-                    Button("Allow…") { sidebar.requestTrust() }
-                }
-            }
-            LabeledContent("Side") {
-                Picker("Side", selection: $sidebar.side) {
-                    Text("Left").tag(SidebarSide.left)
-                    Text("Right").tag(SidebarSide.right)
-                }
-                .labelsHidden()
-                .pickerStyle(.segmented)
-                .fixedSize()
-            }
-            LabeledContent("Show or hide") {
-                HStack {
-                    ShortcutRecorder(shortcut: $sidebar.shortcut)
-                    if sidebar.shortcut != .sidebarDefault {
-                        Button("Reset") { sidebar.shortcut = .sidebarDefault }
+                case .accessibility:
+                    HStack {
+                        Text("betterlink needs Accessibility access to follow your browser windows.")
+                            .foregroundStyle(DS.Palette.textSecondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Spacer()
+                        Button("Allow…") { sidebar.requestTrust() }
                     }
-                }
-                if let problem = sidebar.hotKeyProblem {
-                    Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
+                case .side:
+                    LabeledContent("Side") {
+                        Picker("Side", selection: $sidebar.side) {
+                            Text("Left").tag(SidebarSide.left)
+                            Text("Right").tag(SidebarSide.right)
+                        }
+                        .labelsHidden()
+                        .pickerStyle(.segmented)
+                        .fixedSize()
+                    }
+                case .shortcut:
+                    LabeledContent("Show or hide") {
+                        HStack {
+                            ShortcutRecorder(shortcut: $sidebar.shortcut)
+                            if sidebar.shortcut != .sidebarDefault {
+                                Button("Reset") { sidebar.shortcut = .sidebarDefault }
+                            }
+                        }
+                        if let problem = sidebar.hotKeyProblem {
+                            Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
+                        }
+                    }
                 }
             }
         } header: {

@@ -53,8 +53,9 @@ e2e/                         full pipe test
 ## Try it
 
 1. Build and run betterlink (CONTRIBUTING.md: use a `BETTERLINK_HOME` temp folder).
-2. Sidebar page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Uninstall** deletes it.
-3. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/` (the repository's folder while you are changing the extension; see below for an installed betterlink).
+2. Sidebar page › Sidebar › **Show the sidebar**, on. The rest of the page (Browsers, the sidebar's side and shortcut, Options, Import) shows only while it is on.
+3. Sidebar page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Uninstall** deletes it.
+4. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/` (the repository's folder while you are changing the extension; see below for an installed betterlink).
 
 ## The extension on a Mac without the repository
 
@@ -66,7 +67,7 @@ The extension is not in the Chrome Web Store yet (docs/tabs-store.md), so it is 
 
 Once per browser profile:
 
-1. Sidebar page › Browsers › **Show in Finder** (or `betterlink tabs extension`, which prints the folder).
+1. Sidebar page › Browsers › **Show in Finder**, with **Show the sidebar** on (or `betterlink tabs extension`, which prints the folder).
 2. In the browser, open chrome://extensions and turn on Developer mode.
 3. Drag the `extension` folder from Finder onto that page. (Load unpacked works too: press ⌘⇧G in its file picker and paste the path, because `~/Library` is hidden.)
 

@@ -183,7 +183,7 @@ public enum TourRegistry {
                      cli: nil, cliWhy: "macOS grants Accessibility only in System Settings."),
             TourStep(id: "sidebar-show", revision: 3,
                      title: "Show the sidebar",
-                     body: "Turn the sidebar on and every browser window of an attached browser gets its own. The shortcut (⌃⌥S unless you change it) hides or shows the sidebar of the browser window in front, and dragging an edge resizes that one. Two windows that look alike show their tabs once clicked. Its other settings are on the Sidebar page.",
+                     body: "Turn the sidebar on and every browser window of an attached browser gets its own. The shortcut (⌃⌥S unless you change it) hides or shows the sidebar of the browser window in front, and dragging an edge resizes that one. Two windows that look alike show their tabs once clicked. Once on, the Sidebar page shows its other settings.",
                      changed: "Showing the sidebar now always makes its room inside the browser window's own frame, wherever the window is, and hiding gives the window the frame of both back.", symbol: "sidebar.left",
                      status: .sidebar, control: .showSidebar, requires: .sidebarBrowser,
                      cli: "betterlink sidebar settings set --enabled on", cliWhy: nil),
