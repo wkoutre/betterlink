@@ -15,7 +15,9 @@ final class TabsModel: ObservableObject {
     static let shared = TabsModel()
 
     @Published private(set) var sessions: [BrowserSession] = []
-    /// Browser profiles, by the extension's instance id (see ProfileLocator).
+    /// Browser profiles, by the extension's instance id (see ProfileLocator):
+    /// which one, its name ("Claude", "Work"), and the color the browser
+    /// paints its window frame, when it has one.
     @Published private(set) var profiles: [String: (ref: ProfileRef, name: String, color: UInt32?)] = [:]
     private var profileLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
@@ -42,6 +44,9 @@ final class TabsModel: ObservableObject {
             } else if m.type == "event", m.kind == "tabRemoved", m.isWindowClosing != true, let tab = m.tabId {
                 DispatchQueue.main.async { SidebarHoldsModel.shared.closed(tab: tab, socketPath: path) }
             }
+            if m.type == "event", m.kind == "windowFocused" {
+                DragTrace.log("focus: the extension says window \(m.windowId ?? -1) has it (\(path))")
+            }
             // Whether the change that follows is only what a tab shows.
             if !PublishPacer.isContent(m) { self?.urgent.withLock { $0 = true } }
         }, onChange: { [weak self] s in
@@ -60,10 +65,11 @@ final class TabsModel: ObservableObject {
         hub.start()
     }
 
-    /// Whether the sidebar is on screen: its tab list is worth keeping to the
-    /// moment. Hidden, or with no browser in front, what tabs show can wait.
-    var isWatched = false {
-        didSet { if isWatched, !oldValue, latest != nil { publish() } }
+    /// How often, at most, what tabs show goes on while it keeps changing
+    /// (`PublishPacer.interval`; the sidebar says which). When it gets
+    /// shorter, what was held back goes on at once.
+    var interval = PublishPacer.interval(sidebarOnScreen: false, browserInFront: false) {
+        didSet { if interval < oldValue, latest != nil { publish() } }
     }
     /// The newest tab lists, when not published yet.
     private var latest: [BrowserSession]?
@@ -75,7 +81,7 @@ final class TabsModel: ObservableObject {
 
     private func changed(_ s: [BrowserSession], urgent: Bool) {
         latest = s
-        switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: isWatched ? 0.1 : 2) {
+        switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: interval) {
         case .now: publish()
         case .after(let seconds):
             let work = DispatchWorkItem { [weak self] in self?.publish() }
@@ -130,13 +136,6 @@ final class TabsModel: ObservableObject {
             hub?.send(.reloadSelf(), to: s.socketPath)
         }
     }
-
-    /// The browser profile a session runs in, once known ("Claude", "Work").
-    func profileName(_ s: BrowserSession) -> String? { s.instance.flatMap { profiles[$0]?.name } }
-    /// Which browser profile a session runs in, once known.
-    func profileRef(_ s: BrowserSession) -> ProfileRef? { s.instance.flatMap { profiles[$0]?.ref } }
-    /// The color the browser paints this profile's window frame, when it has one.
-    func profileColor(_ s: BrowserSession) -> UInt32? { s.instance.flatMap { profiles[$0]?.color } }
 
     /// Finds each new session's profile in the background: the extension's id
     /// in a profile folder's extension storage, then that folder's name in the

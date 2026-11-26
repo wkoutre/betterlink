@@ -3,6 +3,37 @@ import Testing
 @testable import TabSyncCore
 
 @Suite struct PublishPacerTests {
+    /// Sidebars are on screen beside every browser window nearly all day. Only
+    /// with a browser in front is anyone watching titles change as they change.
+    @Test func whatTabsShowKeepsToTheMomentOnlyWithASidebarOnScreenAndABrowserInFront() {
+        #expect(PublishPacer.interval(sidebarOnScreen: true, browserInFront: true) == 0.1)
+        #expect(PublishPacer.interval(sidebarOnScreen: true, browserInFront: false) == 2)
+        #expect(PublishPacer.interval(sidebarOnScreen: false, browserInFront: true) == 2)
+        #expect(PublishPacer.interval(sidebarOnScreen: false, browserInFront: false) == 2)
+    }
+
+    /// Another app in front, a tab's title changing twice a second: every 2 s.
+    /// The browser comes forward: the next change goes at once.
+    @Test func theRateFollowsWhichAppIsInFront() {
+        var p = PublishPacer(), published = 0, due: Double?
+        func run(from: Int, to: Int, inFront: Bool) {
+            for i in from..<to { // a change every half second
+                let now = Double(i) / 2
+                if let d = due, now >= d { p.published(now: d); published += 1; due = nil }
+                switch p.changed(urgent: false, now: now, interval: PublishPacer.interval(sidebarOnScreen: true, browserInFront: inFront)) {
+                case .now: p.published(now: now); published += 1; due = nil
+                case .after(let s): due = now + s
+                case .waiting: break
+                }
+            }
+        }
+        run(from: 0, to: 60, inFront: false) // 30 s
+        #expect((15...16).contains(published))
+        published = 0
+        run(from: 60, to: 120, inFront: true)
+        #expect((60...61).contains(published)) // each of the 60, and the one held back
+    }
+
     @Test func aQuietChangeGoesAtOnce() {
         var p = PublishPacer()
         #expect(p.changed(urgent: false, now: 10, interval: 0.1) == .now)

@@ -58,15 +58,16 @@ public struct TabStore: Equatable, Sendable {
     }
 
     /// Windows in display order, each with its tabs in tab-strip order.
-    public var orderedWindows: [WindowEntry] {
-        windowOrder.compactMap { wid in
-            guard let w = windows[wid] else { return nil }
-            return WindowEntry(window: w, tabs: w.tabIds.enumerated().compactMap { i, id in
-                guard var t = tabs[id] else { return nil }
-                t.index = i
-                return t
-            })
-        }
+    public var orderedWindows: [WindowEntry] { windowOrder.compactMap(entry) }
+
+    /// One window with its tabs in tab-strip order.
+    public func entry(_ windowId: Int) -> WindowEntry? {
+        guard let w = windows[windowId] else { return nil }
+        return WindowEntry(window: w, tabs: w.tabIds.enumerated().compactMap { i, id in
+            guard var t = tabs[id] else { return nil }
+            t.index = i
+            return t
+        })
     }
 
     public var tabCount: Int { tabs.count }

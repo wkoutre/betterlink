@@ -3,16 +3,18 @@ import SwiftUI
 import BetterlinkCore
 import TabSyncCore
 
-/// What the sidebar panel shows, like Arc's and Dia's sidebars: the Sidebar
-/// Profile linked to the front window's browser profile (its Favorites grid and
+/// What a sidebar panel shows, like Arc's and Dia's sidebars: the Sidebar
+/// Profile linked to its window's browser profile (its Favorites grid and
 /// folders of saved links), then that window's other open tabs.
 struct SidebarView: View {
-    @EnvironmentObject var sidebar: SidebarController
-    @ObservedObject private var tabs = TabsModel.shared
+    /// This window's sidebar. What it shows comes from `sidebar.look`, which
+    /// changes only when this window's does: the tab sync itself isn't watched.
+    @EnvironmentObject var sidebar: SidebarInstance
+    private let tabs = TabsModel.shared
     private var pal: SidebarColors { SidebarColors(sidebar.palette) }
     @ObservedObject private var lib = SidebarLibraryModel.shared
     /// The tabs saved links hold (a saved link keeps its tab as it navigates).
-    @ObservedObject private var holds = SidebarHoldsModel.shared
+    private let holds = SidebarHoldsModel.shared
     @State private var newURL = ""
     @State private var renaming: UUID?
     @State private var renamingProfile: UUID?
@@ -53,10 +55,10 @@ struct SidebarView: View {
     @FocusState private var nameFocused: Bool
 
     var body: some View {
-        let look = Self.look(target: sidebar.target, sessions: tabs.sessions)
-        let profile = lib.library.profile(for: look.match.flatMap { $0.certain ? tabs.profileRef($0.session) : nil })
+        let look = sidebar.look
+        let profile = lib.library.profile(for: look.match?.profile?.ref)
         // Which tab each saved link stands for, worked out once for this redraw.
-        let match = look.match.map { $0.resolving(profile, holds: holds.holds(in: $0.session)) }
+        let match = look.match.map { $0.resolving(profile) }
         let windowTabs = match?.window?.tabs ?? []
         let iconsToLearn = Self.iconsToLearn(profile, match)
         VStack(alignment: .leading, spacing: 0) {
@@ -97,7 +99,7 @@ struct SidebarView: View {
                                         } mute: {
                                             tabs.setMuted(!tab.muted, tab, in: m.session)
                                         }
-                                        .onDrag { drag(Self.dragKey(tab)) }
+                                        .onDrag { drag(tabKeyPrefix + String(tab.id)) }
                                         // Drop a tab before or after another to reorder the window's tabs.
                                         .modifier(tabDropRow(tab, m, windowTabs))
                                         .contextMenu { tabMenu(tab, profile, m, windowTabs) }
@@ -152,8 +154,6 @@ struct SidebarView: View {
                 confirmDelete = nil
             }
         }
-        // The browser profile's frame color, like the browser's own window.
-        .onChange(of: match.flatMap { tabs.profileColor($0.session) }, initial: true) { _, rgb in sidebar.setTint(rgb) }
         // A saved link with no icon (an imported one) takes its open tab's, once.
         .onChange(of: iconsToLearn, initial: true) { _, icons in
             if let p = profile, !icons.isEmpty { lib.change(profile: p.id) { $0.learnIcons(icons) } }
@@ -195,7 +195,7 @@ struct SidebarView: View {
     }
 
     private func headerLine(match: Match?, profile: SidebarProfile?) -> some View {
-        let known = match.map { $0.certain && tabs.profileRef($0.session) != nil } ?? false
+        let known = match?.profile != nil
         return HStack(spacing: DS.Space.space1) {
             if let p = profile, renamingProfile == p.id {
                 TextField("Name", text: $profileDraft)
@@ -244,19 +244,19 @@ struct SidebarView: View {
 
     @ViewBuilder
     private func profileMenu(match: Match?, profile: SidebarProfile?) -> some View {
-        if let m = match, m.certain, let ref = tabs.profileRef(m.session) {
-            Section("Show for \(m.session.browser) · \(tabs.profileName(m.session) ?? "this Browser Profile")") {
+        if let m = match, let known = m.profile {
+            Section("Show for \(m.session.browser) · \(known.name)") {
                 ForEach(lib.library.profiles) { sp in
-                    Button { animate { lib.change { $0.link(ref, to: sp.id) } } } label: {
+                    Button { animate { lib.change { $0.link(known.ref, to: sp.id) } } } label: {
                         if sp.id == profile?.id { Label(sp.name, systemImage: "checkmark") } else { Text(sp.name) }
                     }
                 }
             }
             Button("New Sidebar Profile") {
                 animate { lib.change { l in
-                    let sp = SidebarProfile(name: tabs.profileName(m.session) ?? "Profile \(l.profiles.count + 1)")
+                    let sp = SidebarProfile(name: known.name)
                     l.profiles.append(sp)
-                    l.link(ref, to: sp.id)
+                    l.link(known.ref, to: sp.id)
                 } }
             }
         }
@@ -528,7 +528,7 @@ struct SidebarView: View {
     private func allowed(_ spot: SidebarProfile.Spot, _ p: SidebarProfile) -> Bool {
         guard let key = dragging else { return false }
         if let id = Self.savedID(key) { return p.canPlace(id, at: spot) }
-        return key.hasPrefix("betterlink-tab:")
+        return key.hasPrefix(tabKeyPrefix)
     }
 
     /// Starts a drag of `key`, remembering it for the drop targets.
@@ -574,7 +574,7 @@ struct SidebarView: View {
         var next = spot
         for k in keys {
             var changed = false
-            if let t = Self.tab(forDragKey: k, in: open) {
+            if let t = tab(forDragKey: k, in: open) {
                 let at = next, link = Self.saved(t)
                 edit(p.id) { let before = $0; $0.insert(link, at: at); changed = $0 != before }
                 if changed { holdIfSaved(t, link) }
@@ -680,9 +680,9 @@ struct SidebarView: View {
         if let m = downKeyMonitor { NSEvent.removeMonitor(m); downKeyMonitor = nil }
         guard on else { return }
         downKeyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
-            // Only this panel's own field, and not while an input method is
-            // choosing among candidates.
-            guard e.specialKey == .downArrow, e.window is SidebarPanel,
+            // Only this panel's own field (other windows have theirs), and not
+            // while an input method is choosing among candidates.
+            guard e.specialKey == .downArrow, let panel = sidebar.panel, e.window === panel,
                   (e.window?.firstResponder as? NSTextView)?.hasMarkedText() == false,
                   e.modifierFlags.isDisjoint(with: [.command, .control, .option, .shift]) else { return e }
             listFocused = true
@@ -761,8 +761,7 @@ struct SidebarView: View {
     /// After a save: the tab it came from is the new link's tab from now on
     /// (nothing when the save was refused, such as a Favorite already there).
     private func holdIfSaved(_ tab: BrowserTab, _ link: SavedLink) {
-        guard lib.library.allLinkIDs.contains(link.id),
-              let s = Self.look(target: sidebar.target, sessions: tabs.sessions).match?.session else { return }
+        guard lib.library.allLinkIDs.contains(link.id), let s = sidebar.look.match?.session else { return }
         holds.hold(tab, for: link.id, in: s)
     }
 
@@ -784,7 +783,8 @@ struct SidebarView: View {
     /// The link's tab in another window of this browser profile: one it holds
     /// there, else one at its address.
     private func elsewhere(_ link: SavedLink, _ m: Match) -> BrowserTab? {
-        let all = m.session.store.orderedWindows.flatMap(\.tabs)
+        // As the profile's windows are now: `m` is as of this window's last change.
+        let all = (tabs.sessions.first { $0.id == m.session.id } ?? m.session).store.orderedWindows.flatMap(\.tabs)
         let held = Set(holds.holds(in: m.session).tabs(heldBy: link.id))
         return all.first { held.contains($0.id) } ?? all.first { SavedLink.same($0.url, link.url) }
     }
@@ -804,7 +804,10 @@ struct SidebarView: View {
         SavedLink(title: t.title.isEmpty ? t.url : t.title, url: t.url, icon: t.favIconUrl.hasPrefix("data:") ? t.favIconUrl : nil)
     }
 
-    static func dragKey(_ t: BrowserTab) -> String { "betterlink-tab:\(t.id)" }
+    /// What a dragged tab is known by. It names the window too: a tab dropped
+    /// on another window's sidebar is not that window's, and two browsers
+    /// number their tabs alike.
+    private var tabKeyPrefix: String { "betterlink-tab:\(sidebar.window.id):" }
 
     /// A stable row id for a tab, for the drop line.
     static func rowID(_ t: BrowserTab) -> UUID {
@@ -815,7 +818,7 @@ struct SidebarView: View {
     /// after it moves there in the browser.
     private func tabDropRow(_ target: BrowserTab, _ m: Match, _ open: [BrowserTab]) -> some ViewModifier {
         let id = Self.rowID(target)
-        func dragged() -> BrowserTab? { dragging.flatMap { Self.tab(forDragKey: $0, in: open) } }
+        func dragged() -> BrowserTab? { dragging.flatMap { tab(forDragKey: $0, in: open) } }
         return DropRowModifier(id: id, horizontal: false, canHold: false, color: pal.accent,
                                size: rowSizes[id] ?? .zero, target: $dropTarget,
                                measured: { rowSizes[id] = $0 },
@@ -825,20 +828,20 @@ struct SidebarView: View {
                                    return TabMove.index(moving: t.index, nextTo: target.index, after: zone == .after) != nil
                                }) { keys, zone in
             dragging = nil
-            guard let t = keys.lazy.compactMap({ Self.tab(forDragKey: $0, in: open) }).first,
+            guard let t = keys.lazy.compactMap({ tab(forDragKey: $0, in: open) }).first,
                   let to = TabMove.index(moving: t.index, nextTo: target.index, after: zone == .after) else { return }
             tabs.move(t, to: to, in: m.session, windowId: m.window?.id)
         }
     }
 
-    static func tab(forDragKey k: String, in tabs: [BrowserTab]) -> BrowserTab? {
-        guard k.hasPrefix("betterlink-tab:"), let id = Int(k.dropFirst("betterlink-tab:".count)) else { return nil }
+    private func tab(forDragKey k: String, in tabs: [BrowserTab]) -> BrowserTab? {
+        guard k.hasPrefix(tabKeyPrefix), let id = Int(k.dropFirst(tabKeyPrefix.count)) else { return nil }
         return tabs.first { $0.id == id }
     }
 
     /// One line saying why there are no tabs, and a way to the settings.
     @ViewBuilder
-    private func emptyState(_ look: Look) -> some View {
+    private func emptyState(_ look: SidebarLook) -> some View {
         if let text = emptyText(look) {
             VStack(alignment: .leading, spacing: DS.Space.space3) {
                 Text(text)
@@ -852,12 +855,11 @@ struct SidebarView: View {
         }
     }
 
-    private func emptyText(_ look: Look) -> String? {
-        guard let t = sidebar.target else { return nil }
+    private func emptyText(_ look: SidebarLook) -> String? {
         switch look {
         case .window, .connecting: return nil
         case .unseen: return "betterlink can't see this window's tabs."
-        case .notConnected: return "Tabs aren't set up for \(t.appName)."
+        case .notConnected: return "Tabs aren't set up for \(sidebar.window.target.appName)."
         }
     }
 
@@ -872,71 +874,7 @@ struct SidebarView: View {
         return p.iconsToLearn(from: have)
     }
 
-    struct Match {
-        var session: BrowserSession
-        var window: TabStore.WindowEntry?
-        /// Always true: the window in front is found for certain or not shown
-        /// at all (WindowMatch.find).
-        var certain = true
-        /// Which tab each saved link stands for in this window.
-        var links = LinkResolution()
-        var byId: [Int: BrowserTab] = [:]
-
-        var incognito: Bool { window?.window.incognito ?? false }
-
-        func tab(for link: SavedLink) -> BrowserTab? { links.tab(for: link.id).flatMap { byId[$0] } }
-
-        /// This match with its saved links resolved against the window's tabs.
-        func resolving(_ p: SidebarProfile?, holds: LinkHolds) -> Match {
-            var m = self
-            let open = window?.tabs ?? []
-            m.byId = Dictionary(open.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
-            if let p {
-                m.links = LinkResolution(links: p.allLinks, tabs: open.map { OpenTab(id: $0.id, url: $0.url) }, holds: holds)
-            }
-            return m
-        }
-    }
-
-    /// What the sidebar can show for the window it is bound to.
-    enum Look {
-        case window(Match)
-        /// The browser is connected, but this window isn't one the extension
-        /// reports (Incognito without permission, a profile without it).
-        case unseen
-        /// Connected, with the first list of tabs still on its way.
-        case connecting
-        case notConnected
-
-        var match: Match? {
-            if case .window(let m) = self { return m }
-            return nil
-        }
-    }
-
-    /// The browser session (profile) and window behind the bound window, or
-    /// why there is none. Never a guess (see WindowMatch.find): a click here
-    /// switches, closes and opens tabs, so the wrong window is worse than none.
-    static func look(target: WindowTracker.Target?, sessions: [BrowserSession]) -> Look {
-        guard let t = target else { return .notConnected }
-        // Each browser profile is its own session. One whose browser process
-        // isn't known yet is matched by the browser's name.
-        let mine = sessions.filter { $0.browserPid == Int(t.pid) }
-        let candidates = mine.isEmpty ? sessions.filter { $0.browser == t.appName } : mine
-        let frame = NSScreen.screens.first.map { screen -> WindowBounds in
-            let ax = SidebarGeometry.ax(fromCocoa: t.frame, mainScreenHeight: screen.frame.height)
-            return WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height)
-        }
-        switch WindowMatch.find(frame: frame, title: t.title, in: candidates) {
-        case .window(let hit):
-            guard let s = candidates.first(where: { $0.id == hit.session }) else { return .unseen }
-            return .window(Match(session: s, window: s.store.orderedWindows.first { $0.id == hit.windowId }))
-        case .notConnected:
-            return .notConnected
-        case .unseen:
-            return candidates.contains { !$0.store.hasSnapshot } ? .connecting : .unseen
-        }
-    }
+    typealias Match = SidebarLook.Match
 }
 
 private struct SidebarTabRow: View {
@@ -1099,7 +1037,7 @@ private struct FocusRing: ViewModifier {
 
 /// The edge between the sidebar and the browser window: drag it to resize.
 private struct ResizeHandle: View {
-    let sidebar: SidebarController
+    let sidebar: SidebarInstance
 
     var body: some View {
         ResizeHandleView(sidebar: sidebar)
@@ -1118,14 +1056,14 @@ private struct ResizeHandle: View {
 /// AppKit, not a SwiftUI gesture: the first press on a panel without the
 /// keyboard must already drag, and dragging must not take the keyboard.
 private struct ResizeHandleView: NSViewRepresentable {
-    let sidebar: SidebarController
+    let sidebar: SidebarInstance
     func makeNSView(context: Context) -> Handle { Handle(sidebar) }
     func updateNSView(_ view: Handle, context: Context) {}
 
     final class Handle: NSView {
-        private let sidebar: SidebarController
+        private let sidebar: SidebarInstance
 
-        init(_ sidebar: SidebarController) { self.sidebar = sidebar; super.init(frame: .zero) }
+        init(_ sidebar: SidebarInstance) { self.sidebar = sidebar; super.init(frame: .zero) }
         required init?(coder: NSCoder) { fatalError("not used") }
 
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }

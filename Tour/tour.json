@@ -279,9 +279,10 @@
         },
         {
           "id": "sidebar-show",
-          "revision": 1,
+          "revision": 2,
           "title": "Show the sidebar",
-          "body": "Turn the sidebar on and it attaches to the front browser window. Press its shortcut (⌃⌥S unless you change it) while the browser is in front to hide or show it. Its side, shortcut and whether it replaces the browser's tab strip are on the Sidebar page.",
+          "body": "Turn the sidebar on and every window of an attached browser gets its own. The shortcut (⌃⌥S unless you change it) hides or shows the sidebar of the browser window in front, and dragging an edge resizes that one. Two windows that look alike show their tabs once clicked. Its other settings are on the Sidebar page.",
+          "changed": "Every browser window now has its own sidebar, shown while other apps are in front, and the shortcut and a dragged edge change one window's, not all.",
           "status": "sidebar",
           "control": "showSidebar",
           "cli": "betterlink sidebar settings set --enabled on",

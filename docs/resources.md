@@ -13,6 +13,8 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 |---|---|
 | Idle, no browser in front | app under 0.1% of a core, under 1 wakeup a second |
 | Quiet browser in front | the same |
+| Several quiet browser windows, each with its sidebar | the same |
+| Several windows with sidebars, another app in front, tabs changing: paced every 2 s | no budget set yet. Measured with four windows and Finder in front: one background tab changing twice a second 0.61% of a core and 1.1 wakeups a second, 56 tabs changing 3.76% and 1.5 (one sidebar, before a sidebar per window: 0.33% and 1.79%) |
 | 56 tabs changing their titles twice a second, sidebar hidden | app under 2% |
 | Tab host | flat memory, under 1% |
 
@@ -20,9 +22,10 @@ Measure with an isolated build (CONTRIBUTING.md: `BETTERLINK_HOME`, plus `BETTER
 
 How it stays there:
 
-- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, or every 2 seconds while the sidebar is hidden or no browser is in front.
+- **Tab lists are paced** (`PublishPacer`, unit tested). Opens, closes, moves and switches go on at once. What a tab shows (title, icon) goes at once when quiet and at most 10 times a second under churn, but only while a sidebar is on screen and an attached browser is the front app (`PublishPacer.interval`, unit tested). Otherwise every 2 seconds: with no sidebar on screen, and with sidebars on screen beside their windows while another app is in front, which is most of the day. When a browser comes to the front, what was held back goes on at once.
 - **Tab rows are drawn again only when something they show or use changed** (`SkipUnchanged`, `RowKey` in SidebarView): another tab's title isn't such a thing.
 - **The host drains its pool per read** (`e2e/host-memory.test.mjs` fails if its memory grows).
 - **The extension says nothing** when an update changes nothing the app sees.
-- **Mouse drags are watched** only while a browser is in front.
+- **A sidebar per window adds nothing while nothing changes.** No timer runs for a sidebar at rest. Each is handed what it shows only when its own window's tabs, Browser Profile or held tabs differ (`SidebarLook`, unit tested), so a tab changing in one window redraws no other window's sidebar, and one that isn't on screen is handed nothing. Their places among the windows are checked on app and window events, with one reading of the window list for all of them, and once more 0.3 s later. Which browser window each one is, is worked out on the same kind of event (the tab lists as they are published, a window's title or resting place, the focus), once more 0.3 s after a word on the focus that could change it, and once 3 s after a pairing the focus made starts to look wrong or a focused window's title starts saying it is another window; a comparison of titles and frames, with nothing drawn unless the answer differs. For it the window server's complete list (every window of every app on every Space) is read when a window is made, closed, comes to rest or takes the focus, when an app comes forward and when the extension reports one window more or fewer: one read for all the sidebars, about 2.5 ms for 350 windows for the call alone, timed on a Mac mini outside the app, and 2.5 to 15.4 ms in the app (median 8.4 ms over 36 reads with the Mac idle and 6.4 ms over 24 with eight busy loops running; in a later run 2.6 to 15.4 ms, median 6.3 ms over 62 reads, idle and busy together; `BETTERLINK_TRACE=1` logs each read's time in the app). Never when tab lists or titles arrive, however often, and never on a timer.
+- **Mouse drags are watched** only while a browser is in front, or until the button comes up after a window moved with it down.
 - **The sync rescan** skips this Mac's own file and may run up to 10 s late.

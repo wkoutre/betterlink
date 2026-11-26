@@ -300,6 +300,9 @@ extension AgentCommand {
     // MARK: Sidebar settings
 
     /// The Sidebar page's settings, from the same keys SidebarController uses.
+    /// `shown` and `width` are what a window gets when nothing was chosen for
+    /// it: a window hidden with the shortcut, or with its edge dragged, has
+    /// its own, which only the app knows.
     static func sidebarSettings() -> [String: Any] {
         let d = MenuBarIcon.defaults()
         let w = d.double(forKey: "sidebar.width")
@@ -309,6 +312,8 @@ extension AgentCommand {
             "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
+            // False: this macOS no longer says which browser window is which, and no window gets a sidebar.
+            "canTellWindowsApart": AXWindow.numbersWindows,
             "browsers": (d.array(forKey: "sidebar.browsers") as? [String]).map { Browser.sidebarHosts($0).sorted() }
                 // Until changed, every installed browser the sidebar can attach to (SidebarController.defaultBrowsers).
                 ?? Browser.known.filter { $0.hostsSidebar
@@ -359,10 +364,12 @@ extension AgentCommand {
             return AgentResponseJSON.failure("Give any of enabled, shown, side, width, takeOverTabs, browsers.")
         }
         if let enabled { d.set(enabled, forKey: "sidebar.enabled") }
-        if let shown { d.set(!shown, forKey: "sidebar.collapsed") }
+        // For every window, also one hidden or shown on its own: the running
+        // app (or the next launch) takes the marks as "apply to all".
+        if let shown { d.set(!shown, forKey: "sidebar.collapsed"); d.set(true, forKey: "sidebar.shownForAll") }
         if let take { d.set(take, forKey: "sidebar.takeOverTabs") }
         if let side { d.set(side, forKey: "sidebar.side") }
-        if let width { d.set(width, forKey: "sidebar.width") }
+        if let width { d.set(width, forKey: "sidebar.width"); d.set(true, forKey: "sidebar.widthForAll") }
         if let browsers { d.set(browsers, forKey: "sidebar.browsers") }
         d.synchronize()  // the running app reads it as soon as it is notified
         var out = sidebarSettings()

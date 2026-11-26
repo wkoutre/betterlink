@@ -301,14 +301,14 @@ const sidebarProfiles = Cli.create('profiles', {
   })
 
 const sidebarSettings = Cli.create('settings', { description: 'The sidebar on this Mac: on or off, shown or hidden, side, width, browsers' })
-  .command('get', { description: 'Show the sidebar settings', run: () => core('sidebar.settings.get') })
+  .command('get', { description: 'Show the sidebar settings. shown and width are what a window gets when nothing was chosen for it; a window hidden with the shortcut, or with its edge dragged, has its own', run: () => core('sidebar.settings.get') })
   .command('set', {
     description: 'Change the sidebar settings; the running app applies them at once',
     options: z.object({
       enabled: onOff('the sidebar').optional(),
-      shown: onOff('show it, or hide it and give the window its space back (like the shortcut)').optional(),
+      shown: onOff('show it in every window, or hide it and give the windows their space back (the shortcut does one window)').optional(),
       side: z.enum(['left', 'right']).optional(),
-      width: z.number().min(200).max(440).optional().describe('Points, 200 to 440'),
+      width: z.number().min(200).max(440).optional().describe("Points, 200 to 440, for every window's sidebar (dragging an edge sets one window's)"),
       takeOverTabs: onOff("switch the browser's own tab strip to its collapsed vertical tabs").optional(),
       browsers: z.string().optional().describe('Browsers it attaches to, comma separated names or bundle ids'),
     }),
