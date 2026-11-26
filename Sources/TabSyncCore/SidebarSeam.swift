@@ -37,6 +37,15 @@ public enum SidebarSeam {
         return r
     }
 
+    /// The radius to cut for after asking the window server: what it gave
+    /// (`read`, nil when nothing usable). A read that gives nothing keeps
+    /// the last radius that was read for this window: it says nothing about
+    /// the window (the moment a window leaves full screen the window server
+    /// may not have its corner back yet), and a corner cut for 20 pt beside
+    /// a 16 pt window would stay until something asked again. The fallback
+    /// is for a window never read.
+    public static func radius(read: CGFloat?, lastRead: CGFloat?) -> CGFloat { read ?? lastRead ?? fallbackRadius }
+
     // MARK: - The panel's frame
 
     /// How many device pixels the seam's notch is cut into the window, on

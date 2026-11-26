@@ -56,8 +56,10 @@ final class SidebarInstance: ObservableObject {
 
     /// The radius of this window's corners: what the seam's notches and the
     /// sidebar's outer corners are cut for. From the window server
-    /// (`WindowServer.cornerRadius`), or the fallback when it can't say.
+    /// (`WindowServer.cornerRadius`), or the fallback while it has never said.
     private(set) var cornerRadius = SidebarSeam.fallbackRadius
+    /// The last radius the window server gave for this window.
+    private var cornerRead: CGFloat?
     /// The display the window was on when its corner was last read.
     private var cornerDisplay: CGDirectDisplayID?
 
@@ -65,17 +67,24 @@ final class SidebarInstance: ObservableObject {
         (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
     }
 
-    /// Asks the window server once: when the window is first followed, and
-    /// when it leaves or enters full screen or comes to rest on another
-    /// display. Never per frame or on a timer.
+    /// Asks the window server once: when the window is first followed, when
+    /// it enters or leaves full screen, and each time it comes to rest (the
+    /// moment it leaves full screen the window server may not have its
+    /// corner back yet). Never per frame or on a timer. A read that gives
+    /// nothing keeps the last one that did (`SidebarSeam.radius(read:lastRead:)`).
     func readCorner(_ why: String) {
         let began = CACurrentMediaTime()
         let read = WindowServer.cornerRadius(window.number)
         let ms = (CACurrentMediaTime() - began) * 1000
-        let radius = read ?? SidebarSeam.fallbackRadius
-        DragTrace.log(String(format: "corner: window %u (%@) radius %.2f pt %@, read in %.3f ms (%@)", window.number, window.target.appName, Double(radius),
-                             read != nil ? "from the window server"
-                                 : "the fallback: " + (WindowServer.cornersUnreadBecause ?? "the window server gave no radius between 4 and 40 pt"), ms, why))
+        let radius = SidebarSeam.radius(read: read, lastRead: cornerRead)
+        if DragTrace.enabled {
+            let nothing = WindowServer.cornersUnreadBecause ?? "the window server gave no radius between 4 and 40 pt"
+            let from = read != nil ? "from the window server" : cornerRead != nil ? "kept from the last read (\(nothing))" : "the fallback (\(nothing))"
+            DragTrace.log(String(format: "corner: window %u (%@) radius %.2f pt %@, read in %.3f ms (%@)", window.number, window.target.appName,
+                                 Double(radius), from, ms, why))
+        }
+        if let read { cornerRead = read }
+        // The same radius: the panel is left as it is.
         guard radius != cornerRadius else { return }
         cornerRadius = radius
         follow() // a panel on screen takes the new shape now
@@ -330,10 +339,12 @@ final class SidebarInstance: ObservableObject {
     /// The window came to rest: make the pair fill the space the window was given.
     func settle(_ t: WindowTracker.Target) {
         rest = t.frame
-        let on = display(for: t.frame).flatMap(Self.number)
-        if on != cornerDisplay {
+        // At rest, its corner is asked again: not while it is dragged, slid
+        // or its edge is dragged (it comes to rest again after those).
+        if slideRun == nil, resizing == nil, !tracker.isDragging(window) {
+            let on = display(for: t.frame).flatMap(Self.number)
+            readCorner(on != cornerDisplay ? "settled on another display" : "settled")
             cornerDisplay = on
-            readCorner("another display")
         }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }

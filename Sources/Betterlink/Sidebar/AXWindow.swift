@@ -144,8 +144,8 @@ enum WindowServer {
     /// (`SidebarSeam.radius(reported:)`). Each window has its own: on macOS
     /// 26.5 a Chrome or Brave window reads 20, Dia 16, System Settings 26.
     /// Needs no permission. One round trip to the window server: asked when a
-    /// window is first followed and when it changes display or leaves full
-    /// screen, never per frame.
+    /// window is first followed, when it enters or leaves full screen and
+    /// each time it comes to rest, never per frame.
     ///
     /// No public API tells it. These are private SkyLight calls, looked up by
     /// name and never linked (as `_AXUIElementGetWindow` is), so a macOS
@@ -178,7 +178,11 @@ enum WindowServer {
     }
 
     /// Whether the window server can be asked for a window's corner radius
-    /// here. False: every sidebar is cut for `SidebarSeam.fallbackRadius`.
+    /// on this Mac: its macOS is one the calls were verified on, all of them
+    /// are there (they are looked up on Apple silicon only), and the fallback
+    /// isn't forced. False: every sidebar is cut for
+    /// `SidebarSeam.fallbackRadius`. One window's unusable answer doesn't
+    /// change it; the trace has that.
     nonisolated static var readsCorners: Bool { skyLight != nil }
 
     /// Why it can't, for the trace.
@@ -187,7 +191,7 @@ enum WindowServer {
         if !SidebarSeam.verifiedSystems.contains(ProcessInfo.processInfo.operatingSystemVersion.majorVersion) {
             return "the window server's corner radius was not verified on macOS \(ProcessInfo.processInfo.operatingSystemVersion.majorVersion)"
         }
-        return skyLight == nil ? "this macOS has no call for a window's corner radius" : nil
+        return skyLight == nil ? "the call for a window's corner radius can't be found on this Mac" : nil
     }
 
     /// For a capture of the fallback's corners beside a real window's:

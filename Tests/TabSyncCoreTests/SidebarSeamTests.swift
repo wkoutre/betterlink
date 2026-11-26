@@ -72,6 +72,23 @@ struct SidebarSeamTests {
         #expect(SidebarSeam.verifiedSystems == [26])
     }
 
+    /// A window's corner is asked for more than once (followed, full screen,
+    /// each time it comes to rest). A read that gives nothing says nothing
+    /// about the window: asked the moment it leaves full screen, the window
+    /// server may not have its corner back yet. The last radius it did give
+    /// stands, and the fallback is only for a window never read.
+    @Test func aReadThatGivesNothingKeepsTheLastRadiusThatWasRead() {
+        #expect(SidebarSeam.radius(read: 16, lastRead: nil) == 16)
+        #expect(SidebarSeam.radius(read: nil, lastRead: 16) == 16)
+        #expect(SidebarSeam.radius(read: nil, lastRead: 26) == 26)
+        // A new answer replaces the old one.
+        #expect(SidebarSeam.radius(read: 20, lastRead: 16) == 20)
+        // Never read: Chrome's.
+        #expect(SidebarSeam.radius(read: nil, lastRead: nil) == SidebarSeam.fallbackRadius)
+        // What "nothing" is: a 0 on the way out of full screen is no radius.
+        #expect(SidebarSeam.radius(read: SidebarSeam.radius(reported: 0), lastRead: 16) == 16)
+    }
+
     // MARK: - How far the panel reaches over the window
 
     /// As far as the corner's pixels go, in whole points: AppKit keeps a
