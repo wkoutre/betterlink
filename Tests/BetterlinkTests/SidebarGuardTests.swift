@@ -377,12 +377,15 @@ final class SidebarRig {
         fake.now = { [unowned self] in self.time }
         instance.reducesMotion = { reduceMotion }
         SidebarRig.notices = []
+        SidebarRig.withdrawn = 0
         SidebarInstance.tell = { notice, frame in SidebarRig.notices.append((notice, frame)) }
+        SidebarInstance.untell = { SidebarRig.withdrawn += 1 }
     }
 
     /// The notes shown since the rig was made: why the sidebar didn't open, and over which frame.
     static var notices: [(SidebarNotice, CGRect)] = []
-
+    /// How many notes were taken away since (the browser made room after all).
+    static var withdrawn = 0
 
     /// betterlink quit, or let the window go (`During.quit`, `.turnOff`): no sidebar any more.
     private(set) var gone = false
@@ -1555,6 +1558,9 @@ struct GuardCase: CustomStringConvertible {
                     var check = RuleCheck(rig, displays: [screen])
                     check.timely("\(b) \(side): show")
                     check.shown(from: start, mustOpen: true, "\(b) \(side): show")
+                    // Given up on, it said so; open after all, the note is taken back.
+                    #expect(SidebarRig.notices.map(\.0).allSatisfy { $0 == .noSize } && SidebarRig.withdrawn == SidebarRig.notices.count,
+                            "\(b) \(side): notes \(SidebarRig.notices.map(\.0)), \(SidebarRig.withdrawn) taken back")
                     let w = rig.sidebarWidth, browser = rig.fake.frame
                     rig.toggle()
                     check.timely("\(b) \(side): hide")

@@ -45,17 +45,36 @@ enum AXWindow {
         }
     }
 
-    /// Moves the window to `frame` one call at a time, each waited for on
-    /// screen, now: for when there is no later (the app quitting). At most
-    /// `WindowSteps.timeout` a call. `clock` and `pause`: the time, and
-    /// waiting (tests step their own).
-    static func placeNow(_ win: WindowHandle, to frame: CGRect, keep side: SidebarSide?,
-                         clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) {
-        var steps = WindowSteps(target: frame, keep: side)
+    /// A window given its space back: the frame it takes, the steps it was
+    /// on (their call in flight may still land), and calls of earlier steps
+    /// that may still land.
+    struct Move {
+        var window: WindowHandle
+        var frame: CGRect
+        var after: WindowSteps?
+        var late: [WindowSteps.Call] = []
+    }
+
+    /// Moves each window to its frame, one call at a time each, waited for on
+    /// screen, now: for when there is no later (the app quitting, the sidebar
+    /// turned off). All the windows together, each call sent as soon as that
+    /// window's last has landed, so the wait is that of the slowest window,
+    /// not the sum of them all, and never more than 4 x `WindowSteps.timeout`
+    /// however many windows there are (review F3). A size a window doesn't
+    /// take leaves it where it was put (`WindowSteps.retreats`), so a browser
+    /// that answers after betterlink has quit still takes its frame.
+    /// `clock` and `pause`: the time, and waiting (tests step their own).
+    static func placeNow(_ moves: [Move], clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) {
+        var all = moves.map { (window: $0.window, steps: WindowSteps(target: $0.frame, keep: nil, retreats: false, after: $0.after, late: $0.late),
+                               over: false) }
         let began = clock()
-        while !steps.done, clock() - began < 4 * WindowSteps.timeout {
-            guard let seen = shownFrame(of: win) ?? Self.frame(of: win) else { return }
-            if let call = steps.step(seen: seen, now: clock()) { send(call, to: win) }
+        while all.contains(where: { !$0.over }), clock() - began < 4 * WindowSteps.timeout {
+            for k in all.indices where !all[k].over {
+                // A window that can't be read: nothing more for it.
+                guard let seen = shownFrame(of: all[k].window) ?? Self.frame(of: all[k].window) else { all[k].over = true; continue }
+                if let call = all[k].steps.step(seen: seen, now: clock()) { send(call, to: all[k].window) }
+                all[k].over = all[k].steps.done
+            }
             pause(0.01)
         }
     }

@@ -19,7 +19,10 @@ import CoreGraphics
 ///   it doesn't take, sent twice, leaves the window where it is.
 /// - Widening: the position first (a window can't grow past its screen's
 ///   edge from where it is), then the size. A size it doesn't take moves it
-///   back where it was.
+///   back where it was, unless the steps are giving the window space back
+///   (`retreats` false): there a browser that answers late takes the size
+///   where it was put, and macOS would cut that size short at the screen's
+///   edge from where it was.
 /// - Then the frame is checked, and what is missing asked once more. A size
 ///   it took only part of and stopped at is its minimum (or a screen's
 ///   edge): that is not asked again, since a browser that has shown it can't
@@ -36,6 +39,11 @@ import CoreGraphics
 ///   it was sent, all the way across (macOS doesn't stop a move sideways). A
 ///   call still on its way from steps these took over from (`after`) can
 ///   land too.
+/// - Calls waited out with nothing changed may still land after the steps
+///   are done (`mayStillLand`): a browser can answer late, by any amount.
+///   Giving space back (`retreats` false) to a frame the window is already
+///   at while such a call may still land, the frame is asked again, so it
+///   is the browser's last word.
 ///
 /// Pure: the caller reads the frame on screen and sends what `step` returns.
 public struct WindowSteps: Sendable {
@@ -52,6 +60,8 @@ public struct WindowSteps: Sendable {
     public let keep: SidebarSide?
     /// The widest the window may end at and still be of use; nil: any.
     public let widest: CGFloat?
+    /// Widening, a size it doesn't take moves it back where it was.
+    public let retreats: Bool
     public private(set) var done = false
     /// Done because something else changed the window (see above).
     public private(set) var interrupted = false
@@ -78,6 +88,8 @@ public struct WindowSteps: Sendable {
     private var adopt: (call: Call, from: CGRect, moved: Bool)?
     private var retried = false
     private var resentSize = false
+    /// Giving space back, the window already where it goes: asked again.
+    private var reasserted = false
     /// Calls that may still land: the one in flight, those waited out with
     /// nothing changed (a browser can answer late), and those of the steps
     /// these took over from.
@@ -92,17 +104,25 @@ public struct WindowSteps: Sendable {
     public static let timeout = 0.6
 
     /// `after`: the steps these replace, mid-way: what they sent may still land.
-    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, after earlier: WindowSteps? = nil) {
+    /// `late`: calls of steps already done that may still land (`mayStillLand`).
+    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, after earlier: WindowSteps? = nil,
+                late: [Call] = []) {
         self.target = target
         self.keep = keep
         self.widest = widest
+        self.retreats = retreats
+        pending = late
         // Its call in flight is waited for first, as one of these.
         if let earlier, !earlier.done {
-            pending = earlier.pending
+            pending += earlier.pending
             sent = earlier.sent
             inherited = sent != nil
         }
     }
+
+    /// The calls sent that may still land: waited out with nothing changed
+    /// (a browser can answer late), and those of the steps these took over from.
+    public var mayStillLand: [Call] { pending }
 
     private static func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1 }
     private static func between(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool { x >= min(a, b) - 1.5 && x <= max(a, b) + 1.5 }
@@ -111,15 +131,44 @@ public struct WindowSteps: Sendable {
     /// still land can do: a size keeps the top left, at any size (a browser
     /// takes what it can); a position keeps the size and goes toward where it
     /// was sent. A browser that does two calls in one go changes both.
-    private func explains(_ p: CGRect, _ seen: CGRect) -> Bool {
-        let samePlace = Self.near(p.minX, seen.minX) && Self.near(p.maxY, seen.maxY)
-        let sameSize = Self.near(p.width, seen.width) && Self.near(p.height, seen.height)
-        let sized = pending.contains { if case .size = $0 { true } else { false } }
-        let placed = pending.contains {
+    private func explains(_ p: CGRect, _ seen: CGRect) -> Bool { Self.explains(from: p, to: seen, by: pending) }
+
+    /// Whether `calls` landing can take a window at `p` to `seen` (see above):
+    /// its change is betterlink's, not someone else's.
+    public static func explains(from p: CGRect, to seen: CGRect, by calls: [Call]) -> Bool {
+        let samePlace = near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
+        let sameSize = near(p.width, seen.width) && near(p.height, seen.height)
+        let sized = calls.contains { if case .size = $0 { true } else { false } }
+        let placed = calls.contains {
             guard case .position(let t) = $0 else { return false }
-            return Self.between(seen.minX, p.minX, t.minX) && Self.between(seen.maxY, p.maxY, t.maxY)
+            return between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
         }
         return (samePlace || placed) && (sameSize || sized)
+    }
+
+    /// Whether one or two of `calls` done as sent (a position, a size, or a
+    /// position and a size) take a window at `p` exactly to `seen`: an older
+    /// call landing late, not a browser stopping at its own minimum, nor
+    /// someone else's change.
+    public static func lands(from p: CGRect, to seen: CGRect, by calls: [Call]) -> Bool {
+        var places = [p.origin]
+        var sizes = [p.size]
+        for c in calls {
+            switch c {
+            case .position(let f): places.append(CGPoint(x: f.minX, y: f.maxY))
+            case .size(let f): sizes.append(f.size)
+            }
+        }
+        let top = p.maxY
+        for (i, o) in places.enumerated() {
+            for (j, s) in sizes.enumerated() where i > 0 || j > 0 {
+                // A place keeps the top left (`o` from p: its top; from a call: the call's top).
+                let maxY = i == 0 ? top : o.y
+                let f = CGRect(x: o.x, y: maxY - s.height, width: s.width, height: s.height)
+                if abs(f.minX - seen.minX) < 2, abs(f.maxY - seen.maxY) < 2, abs(f.width - seen.width) < 2, abs(f.height - seen.height) < 2 { return true }
+            }
+        }
+        return false
     }
 
     private static func reached(_ c: Call, _ seen: CGRect) -> Bool {
@@ -167,7 +216,18 @@ public struct WindowSteps: Sendable {
         }
         switch phase {
         case .start:
-            if SidebarGeometry.same(seen, target) { done = true; return nil }
+            if SidebarGeometry.same(seen, target) {
+                // Giving space back, there already, but a call may still land (one in flight, or
+                // waited out): the frame is asked again, position then size, so a browser that
+                // does its calls in order, however late, ends where it goes.
+                if !retreats, !reasserted, !pending.isEmpty {
+                    reasserted = true
+                    phase = .movedFirst(from: seen)
+                    return send(.position(target), seen, now)
+                }
+                done = true
+                return nil
+            }
             // The steps taken over from asked this same narrower size, and the window answered: that answer is this one's.
             if let a = adopt, a.moved, case .size(let f) = a.call, abs(f.width - target.width) < 1, abs(f.height - target.height) < 1,
                target.width < a.from.width {
@@ -204,8 +264,8 @@ public struct WindowSteps: Sendable {
                 return send(.size(target), seen, now)
             }
             guard took else {
-                // It didn't take the size: where it was, its position untouched.
-                guard let back = movedFirst, !Self.near(seen.minX, back.minX) || !Self.near(seen.maxY, back.maxY) else {
+                // It didn't take the size: where it was, its position untouched (or, giving space back, where it was put).
+                guard retreats, let back = movedFirst, !Self.near(seen.minX, back.minX) || !Self.near(seen.maxY, back.maxY) else {
                     done = true
                     return nil
                 }

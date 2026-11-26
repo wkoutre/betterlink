@@ -247,7 +247,8 @@ final class SidebarController: ObservableObject {
 
     private func stop() {
         feeds = []
-        tracker.stop() // lets every window go: each gets its space back (removed)
+        giveSpaceBack() // every window at once, not one after another as each is let go
+        tracker.stop() // lets every window go (removed)
         takenOver = []
         arrange()
     }
@@ -258,13 +259,19 @@ final class SidebarController: ObservableObject {
     /// each would wait out its time while the app is quitting.
     func giveSpaceBack() { giveSpaceBack(of: Array(instances.values)) }
 
+    /// Every window moved together (`AXWindow.placeNow`): the wait is the
+    /// slowest window's, bounded however many there are (review F3).
     /// `clock` and `pause`: the time, and waiting (tests step their own).
     func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
                        pause: @escaping (Double) -> Void = AXWindow.sleep) {
         var hung: Set<pid_t> = []
+        var moves: [AXWindow.Move] = []
         for i in all where !hung.contains(i.window.target.pid) {
-            if !i.giveSpaceBack(), AXWindow.timedOut { hung.insert(i.window.target.pid) }
+            let (readable, move) = i.spaceBack()
+            if !readable, AXWindow.timedOut { hung.insert(i.window.target.pid) }
+            if let move { moves.append(move) }
         }
+        AXWindow.placeNow(moves, clock: clock, pause: pause)
     }
 
     private func trustMayHaveChanged() {
@@ -385,6 +392,13 @@ final class SidebarController: ObservableObject {
     /// that window, as if hidden with the shortcut.
     func refused(_ i: SidebarInstance) {
         chosen.set(hidden: true, window: i.window.number, pid: i.window.target.pid)
+        saveChosen()
+    }
+
+    /// The window's refused sidebar opened after all (its browser made room
+    /// late): kept open for that window, as if shown with the shortcut.
+    func reopened(_ i: SidebarInstance) {
+        chosen.set(hidden: false, window: i.window.number, pid: i.window.target.pid)
         saveChosen()
     }
 

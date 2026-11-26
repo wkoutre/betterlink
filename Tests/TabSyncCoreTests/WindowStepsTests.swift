@@ -55,6 +55,34 @@ import Testing
         #expect(end == narrowed)
     }
 
+    /// Giving space back (`retreats` false), a size not taken leaves the
+    /// window where it was put: a browser that answers late then takes it
+    /// there, where macOS doesn't cut it short at the screen's edge. What
+    /// was waited out may still land (`mayStillLand`).
+    @Test func givingSpaceBackASizeNotTakenStaysWherePut() {
+        var s = WindowSteps(target: full, keep: nil, retreats: false)
+        var w = narrowed, t = 0.0
+        while !s.done, t < 10 {
+            if let c = s.step(seen: w, now: t), case .position(let f) = c { w.origin.x = f.minX }
+            t += 1.0 / 120
+        }
+        #expect(w == CGRect(x: 0, y: 0, width: 1776, height: 1290))
+        #expect(s.mayStillLand.filter { if case .size = $0 { true } else { false } }.count == 2, "\(s.mayStillLand)")
+    }
+
+    /// A late answer of calls already given up on (`late`) is the steps' own,
+    /// not someone else's move, and what landed is no longer waited for.
+    @Test func aLateAnswerOfEarlierCallsIsNotSomeoneElses() {
+        let asked = CGRect(x: 0, y: 0, width: 1776, height: 1290)
+        #expect(WindowSteps.explains(from: full, to: asked, by: [.size(asked)]))
+        #expect(!WindowSteps.explains(from: full, to: narrowed, by: [.size(asked)]), "a size keeps the top left")
+        #expect(WindowSteps.explains(from: full, to: narrowed, by: [.size(asked), .position(narrowed)]))
+        var s = WindowSteps(target: narrowed, keep: .left, late: [.size(asked)])
+        _ = s.step(seen: full, now: 0) // the size, again
+        _ = s.step(seen: asked, now: 0.1) // the late one lands meanwhile
+        #expect(!s.interrupted)
+    }
+
     /// Brave at its minimum (615 of 800 asked down to 520): the size is sent
     /// once, never again, and the steps end as soon as it has stopped.
     @Test func aMinimumIsNotAskedAgain() {

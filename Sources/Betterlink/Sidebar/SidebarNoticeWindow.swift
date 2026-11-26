@@ -8,6 +8,7 @@ import TabSyncCore
 /// never takes focus or clicks and never activates betterlink: the browser
 /// stays the front app with the keyboard. It fades in, stays
 /// `SidebarNotice.duration`, and fades out; a new note replaces one showing.
+/// Its words are announced to VoiceOver as it shows (review F4).
 @MainActor
 final class SidebarNoticeWindow {
     static let shared = SidebarNoticeWindow()
@@ -19,13 +20,15 @@ final class SidebarNoticeWindow {
     static var headless = false
 
     /// Says the note to VoiceOver (and any other assistive app), at once and
-    /// over what it was saying. Tests record it instead.
+    /// over what it was saying: the note is the only word on why nothing
+    /// happened. Tests record it instead.
     static var announce: (String) -> Void = { text in
         NSAccessibility.post(element: NSApp as Any, notification: .announcementRequested,
                              userInfo: [.announcement: text, .priority: NSAccessibilityPriorityLevel.high.rawValue])
     }
 
     func show(_ text: String, over window: CGRect) {
+        Self.announce(text)
         guard !Self.headless else { return }
         generation += 1
         let mine = generation
@@ -52,6 +55,21 @@ final class SidebarNoticeWindow {
                 MainActor.assumeIsolated { if self.generation == mine { p.orderOut(nil) } }
             })
         }
+    }
+
+    /// The note is no longer true (the browser made room after all): it
+    /// fades now.
+    func withdraw() {
+        generation += 1
+        guard let p = panel, p.isVisible else { return }
+        let mine = generation
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.18
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            p.animator().alphaValue = 0
+        }, completionHandler: {
+            MainActor.assumeIsolated { if self.generation == mine { p.orderOut(nil) } }
+        })
     }
 
     /// The panel with the note in it, at its place (not yet shown).
