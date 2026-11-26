@@ -76,9 +76,70 @@ struct WindowCornerTests {
     0:
     """
 
+    /// The top-left corner of a Chrome for Testing window opened with
+    /// `--app` as the window server drew it (macOS 26.5.2, 2x display,
+    /// radius 16 by the window server; alpha of a single-window capture
+    /// without its shadow, `screencapture -o -l`, 2026-11-26; all four
+    /// corners the same, and the same again with the window moved).
+    /// Rows as in `chrome20at2x`.
+    static let app16at2x = """
+    26:1 8 20 36 53 70 87 103 119 132 145 155 166 176 185 195 204 213 223 232 241 247
+    21:1 16 50 98 154 222
+    19:26 84 168
+    16:3 49 143
+    15:45 155
+    13:18 112
+    12:46 184
+    10:1 73 249
+    9:4 93
+    8:4 99
+    7:1 93
+    7:73
+    6:46 249
+    5:18 184
+    5:112
+    4:45
+    3:3 155
+    3:49
+    3:143
+    2:26
+    2:84
+    1:1 168
+    1:16
+    1:50
+    1:98
+    1:154
+    0:1 222
+    0:8
+    0:20
+    0:36
+    0:53
+    0:70
+    0:87
+    0:103
+    0:119
+    0:132
+    0:145
+    0:155
+    0:166
+    0:176
+    0:185
+    0:195
+    0:204
+    0:213
+    0:223
+    0:232
+    0:241
+    0:247
+    0:
+    0:
+    """
+
     /// The capture as how much of each pixel the window covers, `side` pixels square.
-    static func measured(side: Int) -> [[Double]] {
-        chrome20at2x.split(separator: "\n").prefix(side).map { line in
+    static func measured(side: Int) -> [[Double]] { measured(chrome20at2x, side: side) }
+
+    static func measured(_ capture: String, side: Int) -> [[Double]] {
+        capture.split(separator: "\n").prefix(side).map { line in
             let parts = line.split(separator: ":", omittingEmptySubsequences: false)
             let clear = Int(parts[0].trimmingCharacters(in: .whitespaces)) ?? 0
             let partial = parts[1].split(separator: " ").compactMap { Double($0) }.map { $0 / 255 }
@@ -111,6 +172,19 @@ struct WindowCornerTests {
         for j in 0..<model.side { for i in 0..<model.side { worst = max(worst, abs(model.window[j][i] - real[j][i])) } }
         #expect(worst < 0.08, "a pixel is \(worst) off the capture")
         for (m, r) in zip(rowSums(model.window), rowSums(real)) { #expect(abs(m - r) < 0.12, "a row is \(m - r) px off") }
+    }
+
+    /// The same at 16 pt, the other radius measured pixel by pixel, and to
+    /// the same tolerance.
+    @Test func theModelIsTheCornerMeasuredOnA16PointWindow() throws {
+        let model = WindowCorner.pixels(radius: 16, scale: 2)
+        let real = Self.measured(Self.app16at2x, side: model.side)
+        try #require(real.count == model.side)
+        var worst = 0.0
+        for j in 0..<model.side { for i in 0..<model.side { worst = max(worst, abs(model.window[j][i] - real[j][i])) } }
+        #expect(worst < 0.08, "a pixel is \(worst) off the capture")
+        for (m, r) in zip(rowSums(model.window), rowSums(real)) { #expect(abs(m - r) < 0.12, "a row is \(m - r) px off") }
+        expectNothingShowsThrough(model, over: real, "the 16 pt capture")
     }
 
     @Test func aCornerIsClearAtItsPointSolidPastItsRunAndTheSameBothWays() {
