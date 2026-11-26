@@ -11,7 +11,7 @@ extension AgentCommand {
     static let tabCommands = [
         "tabs.list", "tabs.open", "tabs.close", "tabs.activate", "tabs.move", "tabs.mute",
         "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below",
-        "tabs.extension",
+        "tabs.extension", "tabs.helper.list", "tabs.helper.set",
         "sidebar.settings.get", "sidebar.settings.set",
     ]
 
@@ -19,6 +19,8 @@ extension AgentCommand {
         if command == "sidebar.settings.get" { return AgentResponseJSON.success(sidebarSettings()) }
         if command == "sidebar.settings.set" { return setSidebarSettings(input) }
         if command == "tabs.extension" { return tabsExtension() }
+        if command == "tabs.helper.list" { return AgentResponseJSON.success(["browsers": tabHelpers()]) }
+        if command == "tabs.helper.set" { return setTabHelper(input) }
         let hub = SyncHub(onChange: { _ in })
         hub.start()
         let sessions = waitForSessions(hub)
@@ -55,6 +57,55 @@ extension AgentCommand {
             "version": version,
             "id": HostRegistration.extensionId,
             "load": "Once per browser profile: open chrome://extensions, turn on Developer mode, click Load unpacked and choose this folder. Leave Developer mode on. The extension then updates with betterlink.",
+        ])
+    }
+
+    // MARK: The tab helper (the Sidebar page's Set Up)
+
+    private static func helperState(_ b: Browser) -> String {
+        guard let folder = b.dataFolder else { return "notSetUp" }
+        switch HostRegistration.state(dataFolder: folder, hostPath: TabsModel.hostPath) {
+        case .installed: return "setUp"
+        case .notInstalled: return "notSetUp"
+        case .stale: return "pointsElsewhere"
+        }
+    }
+
+    /// Each installed browser the sidebar can attach to, and whether its tab
+    /// helper is set up for this betterlink.
+    static func tabHelpers() -> [[String: Any]] {
+        Browser.known.filter { $0.hostsSidebar && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
+            .map { ["browser": $0.name, "bundleId": $0.bundleId, "helper": helperState($0)] }
+    }
+
+    /// Writes (or removes) the one file that lets a browser start betterlink's
+    /// tab helper, exactly as the Sidebar page's Set Up and Uninstall do.
+    static func setTabHelper(_ input: [String: Any]) -> Data {
+        guard let wanted = input["browser"] as? String, !wanted.isEmpty else {
+            return AgentResponseJSON.failure("Give browser: a name or bundle id (tabs helpers).")
+        }
+        guard let browser = Browser.known.first(where: { $0.bundleId.lowercased() == wanted.lowercased() || $0.name.lowercased() == wanted.lowercased() }) else {
+            return AgentResponseJSON.failure("No browser \"\(wanted)\" betterlink knows (browsers list).")
+        }
+        guard browser.hostsSidebar, let folder = browser.dataFolder else {
+            return AgentResponseJSON.failure("The sidebar can't attach to \(browser.name): it works with Chromium browsers.")
+        }
+        var remove = false
+        if let v = input["remove"] {
+            guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return AgentResponseJSON.failure("remove must be true or false.") }
+            remove = n.boolValue
+        }
+        do {
+            if remove { try HostRegistration.uninstall(dataFolder: folder) }
+            else { try HostRegistration.install(dataFolder: folder, hostPath: TabsModel.hostPath) }
+        } catch {
+            return AgentResponseJSON.failure(remove ? "Couldn't remove \(browser.name)'s tab helper file: \(error.localizedDescription)"
+                                                    : "Couldn't set up \(browser.name): \(error.localizedDescription). Open \(browser.name) once first, so its folder exists.")
+        }
+        return AgentResponseJSON.success([
+            "browser": browser.name, "bundleId": browser.bundleId, "helper": helperState(browser),
+            "next": remove ? "Removed. The Tabs extension in \(browser.name) can no longer reach betterlink."
+                           : "Add the Tabs extension in \(browser.name), once per browser profile (tabs extension says how), then restart the extension or the browser.",
         ])
     }
 

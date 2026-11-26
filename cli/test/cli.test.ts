@@ -2,7 +2,7 @@
 // (`make build` first) and a temporary settings folder.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -243,6 +243,91 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     })
     expect(r.status).toBe(0)
     expect(JSON.parse(readFileSync(join(d, 'sent.json'), 'utf8'))).toEqual({ standard: true })
+  })
+
+  // The tour (docs/tour.md): what the window shows, an agent can read, mark
+  // seen and put back. Nothing here opens a window: the temporary settings
+  // folder has no running app.
+  test('the tour: status, done, reset and what is new', () => {
+    const d = home()
+    const fresh = run(d, 'tour', 'status').json
+    expect(fresh.welcomed).toBe(false)
+    expect(fresh.showsNext).toBe('welcome')
+    expect(fresh.new).toEqual([])
+    // Every step says how an agent does what it does, or why it can't.
+    const steps = fresh.topics.flatMap((t: any) => t.steps)
+    expect(steps.length).toBeGreaterThan(10)
+    for (const s of steps) expect(typeof (s.command ?? s.noCommand)).toBe('string')
+    // Nothing is new before the first run.
+    expect(run(d, 'tour', 'new').json.shown).toBe(false)
+
+    const done = run(d, 'tour', 'done').json
+    expect(done.welcomed).toBe(true)
+    expect(done.showsNext).toBe('nothing')
+    expect(done.topics.flatMap((t: any) => t.steps).every((s: any) => s.state === 'seen')).toBe(true)
+    expect(run(d, 'tour', 'new').json.shown).toBe(false)
+
+    // One step put back is What's New, and only that.
+    const back = run(d, 'tour', 'reset', '--step', 'link-rules').json
+    expect(back.new).toEqual(['link-rules'])
+    expect(back.showsNext).toBe('new')
+    expect(run(d, 'tour', 'new').json.shown).toBe(true)
+    expect(run(d, 'tour', 'done', '--topic', 'link-rules').json.new).toEqual([])
+
+    expect(run(d, 'tour', 'show', '--topic', 'sidebar').json.shown).toBe(true)
+    for (const bad of [['show', '--topic', 'nope'], ['done', '--step', 'nope'], ['reset', '--step', 'welcome', '--topic', 'welcome']]) {
+      const r = run(d, 'tour', ...bad)
+      expect(r.code).not.toBe(0)
+    }
+    // All of it put back: the first run again.
+    const again = run(d, 'tour', 'reset').json
+    expect(again.welcomed).toBe(false)
+    expect(again.showsNext).toBe('welcome')
+  })
+
+  // Every command a tour step names runs: the names and options are checked
+  // against this file's commands by scripts/gen-tour.py, and here they are in
+  // the list an agent reads.
+  test('the tour, Sync and tab helper commands are listed for agents', () => {
+    const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
+    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup']) {
+      expect(llms).toContain(`betterlink ${c}`)
+    }
+  })
+
+  test('sync: a folder, what syncs, and off', () => {
+    const d = home()
+    expect(run(d, 'sync', 'get').json).toMatchObject({ on: false, folder: null })
+    const folder = mkdtempSync(join(tmpdir(), 'bl-sync-'))
+    const on = run(d, 'sync', 'set', '--folder', folder, '--global', 'off')
+    expect(on.code).toBe(0)
+    const now = run(d, 'sync', 'get').json
+    expect(now.on).toBe(true)
+    expect(realpathSync(now.folder)).toBe(realpathSync(folder))
+    expect(now.global).toBe(false)
+
+    // What of one Sidebar Profile syncs.
+    expect(run(d, 'sidebar', 'profiles', 'add', '--name', 'Work').code).toBe(0)
+    expect(run(d, 'sync', 'set', '--profile', 'Work', '--parts', 'favorites,name').code).toBe(0)
+    expect(run(d, 'sync', 'get').json.profiles).toEqual([expect.objectContaining({ name: 'Work', favorites: true, folders: false, appearance: true })])
+    expect(run(d, 'sync', 'set', '--profile', 'Work', '--parts', 'none').code).toBe(0)
+    expect(run(d, 'sync', 'get').json.profiles).toEqual([])
+
+    for (const bad of [['--folder', join(folder, 'missing')], ['--folder', folder, '--off', 'on'], ['--parts', 'favorites'], ['--profile', 'Work', '--parts', 'colour'], []]) {
+      expect(run(d, 'sync', 'set', ...bad).code).not.toBe(0)
+    }
+    expect(run(d, 'sync', 'set', '--off', 'on').code).toBe(0)
+    expect(run(d, 'sync', 'get').json).toMatchObject({ on: false, folder: null })
+  })
+
+  // Read only: setting a helper up writes into the browser's own folder,
+  // which BETTERLINK_HOME does not move.
+  test('tab helpers: lists the browsers, and refuses one it does not know', () => {
+    const d = home()
+    const list = run(d, 'tabs', 'helpers').json.browsers
+    for (const b of list) expect(['setUp', 'notSetUp', 'pointsElsewhere']).toContain(b.helper)
+    expect(run(d, 'tabs', 'setup', '--browser', 'No Such Browser').code).not.toBe(0)
+    expect(run(d, 'tabs', 'setup', '--browser', 'Safari').code).not.toBe(0)
   })
 
   test('an app that is not there gives APP_NOT_FOUND and its hint', async () => {

@@ -39,7 +39,9 @@ To bring in the profiles of the browsers you already have, run this once:
 /Applications/betterlink.app/Contents/MacOS/Betterlink --import-profiles
 ```
 
-Then open **Permissions** in the window:
+The first time its window opens, betterlink shows a short tour: making it the default browser, your profiles, the fallback and a first Link Rule, then the optional parts (modifier keys, the sidebar, Sync, the command). Every step can be skipped, and **About › Tour** shows it again. After an update, anything new is offered as one line at the top of the window; it never opens by itself. See [docs/tour.md](docs/tour.md).
+
+The same settings are under **Permissions** in the window:
 - **Default browser** (required): click **Make Default Browser**.
 - **Browser data** (optional): lets betterlink read each browser's profile list by itself. macOS calls this Full Disk Access; **Open Privacy Settings** goes straight to it. The page shows, per browser, whether its profiles are readable and, if not, why. Chrome and Brave usually need no grant at all; if a browser shows **Blocked** with Full Disk Access on, something else on the Mac refuses the read (often a work Mac's security software), so add its profiles by hand.
 - **Open at login** (optional).
@@ -154,7 +156,10 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - the link toast;
 - default browser;
 - the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
-- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open).
+- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open);
+- a browser's tab helper (the Sidebar page's Set Up);
+- Sync: the folder, what syncs, and off;
+- the tour: what was seen, showing it, and putting it back.
 
 The app keeps its log in memory only, so the command can't read it. A few sidebar actions still need the sidebar itself: opening a saved link so it holds its tab, Back to Saved Page, and Save This Page Here.
 
@@ -168,6 +173,9 @@ betterlink sidebar settings set --side left --width 300
 betterlink tabs list
 betterlink tabs close-others --tab 1234
 betterlink tabs extension                                     # where the Tabs extension is, for Load unpacked
+betterlink tabs setup --browser "Google Chrome"               # set up a browser's tab helper, as the Sidebar page does
+betterlink sync set --folder ~/Dropbox/betterlink             # sync through a folder your cloud drive keeps in sync
+betterlink tour status                                        # every step of the tour, with the command that does it
 ```
 
 The command ships inside the app at `betterlink.app/Contents/Helpers/betterlink`. **Agents › Install Command** in the window links it into `~/.local/bin`, creating that folder if needed (it never replaces a file, or a link that isn't betterlink's). Or link it yourself, using wherever betterlink.app is (usually `/Applications`):
@@ -208,7 +216,8 @@ The window follows betterlink's design system: `Design/tokens.json` holds the co
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the toolchain and the rules for testing without touching your real settings. Report security problems privately, as [SECURITY.md](SECURITY.md) describes.
 
 ```sh
-make test       # fetches the pinned TypeScript compiler, then runs swift test
+make test       # fetches the pinned TypeScript compiler, checks design tokens and the tour, then runs swift test
+make tour       # after editing Tour/tour.json: regenerates the tour's Swift registry and checks it covers the app
 make build      # dist/betterlink.app, with the command inside; needs Bun 1.4.4 (https://bun.sh)
 make test-cli   # builds, then runs the command's tests against the built app
 dist/betterlink.app/Contents/MacOS/Betterlink --test 'https://app.example.com'   # prints the decision; opens nothing
@@ -225,6 +234,7 @@ For screenshots and manual checks, these environment variables change how better
 | `BETTERLINK_SYNC_DEVICE` | Tests only: this copy's sync device id, with its own sync settings, so two copies on one Mac sync like two Macs. |
 | `BETTERLINK_TRACE` | `1` logs sidebar diagnostics to `trace.log` in the settings folder: how far the sidebar trailed each window drag, and each show and hide. |
 | `BETTERLINK_SHEET` | `rules` or `profiles` opens that editor sheet. |
+| `BETTERLINK_TOUR` | `welcome` shows the first-run tour when the window opens, `new` shows What's New, `off` shows neither. |
 | `BETTERLINK_TEST_LINK` | Pre-fills the link tester. |
 
 `Tests/BetterlinkCoreTests/Fixtures/url-vectors.json` comes from `node scripts/gen-url-vectors.mjs`. Node's `URL` follows the same standard as Brave.

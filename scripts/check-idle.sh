@@ -28,6 +28,8 @@ mkdir -p "$work/home" "$work/sockets" "$work/sync"
 make -s .build/measure-resources .build/idle-probe
 export BETTERLINK_HOME="$work/home" BETTERLINK_TABS_SOCKET_DIR="$work/sockets" BETTERLINK_PAGE=tabs
 export BETTERLINK_TABS_BROWSER_NAME=Idle
+# A new settings folder would open on the first-run tour; this measures the pages.
+export BETTERLINK_TOUR=off
 
 # This Mac's settings for a BETTERLINK_HOME live in a preferences domain named
 # after the folder (MenuBarIcon.developmentSuite): an id file inside it, and

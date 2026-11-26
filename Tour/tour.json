@@ -1,0 +1,444 @@
+{
+  "about": [
+    "betterlink's tour: every step of the first-run flow and of What's New, in one list.",
+    "A step never seen shows in What's New after an update. Raise a step's revision (and say what changed) to show it again.",
+    "Run `make tour` after editing. `make test` fails when a page, setting, permission or command has no step here. See docs/tour.md."
+  ],
+  "version": 1,
+  "topics": [
+    {
+      "id": "welcome",
+      "title": "Welcome",
+      "summary": "What betterlink does.",
+      "symbol": "arrow.triangle.branch",
+      "tile": "accent",
+      "tier": "essential",
+      "page": null,
+      "steps": [
+        {
+          "id": "welcome",
+          "revision": 1,
+          "title": "Every link, in the right browser and profile",
+          "body": "betterlink sits between a click and your browsers. It reads each link you open in any app and sends it to the browser and profile you chose for it. This tour takes about two minutes, and every step can be skipped.",
+          "covers": {}
+        }
+      ]
+    },
+    {
+      "id": "default-browser",
+      "title": "Default browser",
+      "summary": "Links you click come to betterlink first.",
+      "symbol": "globe",
+      "tile": "success",
+      "tier": "essential",
+      "page": "permissions",
+      "steps": [
+        {
+          "id": "default-browser",
+          "revision": 1,
+          "title": "Make betterlink your default browser",
+          "body": "macOS sends every link you click to the default browser. Once that is betterlink, it passes each one on to the right profile. macOS asks you to confirm the change.",
+          "status": "defaultBrowser",
+          "control": "makeDefaultBrowser",
+          "cli": "betterlink default-browser set",
+          "covers": {
+            "pages": ["permissions"],
+            "commands": ["default-browser"],
+            "permissions": ["default-browser"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "profiles",
+      "title": "Profiles",
+      "summary": "The browser profiles links can open in.",
+      "symbol": "person.2.fill",
+      "tile": "coral",
+      "tier": "essential",
+      "page": "profiles",
+      "steps": [
+        {
+          "id": "profiles",
+          "revision": 1,
+          "title": "Find your browser profiles",
+          "body": "betterlink opens links in the profiles your browsers already have, and reads each browser's list by itself. If a browser shows as not allowed, turn on Full Disk Access for betterlink in Privacy Settings, or add its profiles by hand under Profiles.",
+          "status": "browserData",
+          "control": "browserData",
+          "cli": "betterlink profiles import",
+          "covers": {
+            "pages": ["profiles"],
+            "commands": ["profiles"],
+            "permissions": ["full-disk-access"],
+            "settings": ["ProfilesEditor.row.color", "ProfilesEditor.row.browser"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "fallback",
+      "title": "Fallback profile",
+      "summary": "Where links that match no rule open.",
+      "symbol": "arrow.turn.down.right",
+      "tile": "accent",
+      "tier": "essential",
+      "page": "rules",
+      "steps": [
+        {
+          "id": "fallback",
+          "revision": 1,
+          "title": "Choose where everything else opens",
+          "body": "Links that match no rule open in one profile, your fallback. Pick the profile you use most. You can change it any time at the bottom of Link Rules.",
+          "control": "fallbackPicker",
+          "cli": "betterlink fallback set --profile Personal",
+          "covers": {
+            "commands": ["fallback"],
+            "settings": ["Pages.model.fallback"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "link-rules",
+      "title": "Link Rules",
+      "summary": "Send a site to a profile.",
+      "symbol": "arrow.triangle.branch",
+      "tile": "accent",
+      "tier": "essential",
+      "page": "rules",
+      "steps": [
+        {
+          "id": "link-rules",
+          "revision": 1,
+          "title": "Send a site to a profile",
+          "body": "A Link Rule reads \"Open domains matching example.com in Work\". Rules are checked top to bottom and the first match wins. Add one now, or later under Link Rules, where you can also test any link.",
+          "control": "firstRule",
+          "cli": "betterlink rules add --kind domain --pattern example.com --profile Work",
+          "covers": {
+            "pages": ["rules"],
+            "commands": ["rules", "test"],
+            "settings": ["RulesEditor.rule.kind", "RulesEditor.rule.target"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "modifier-keys",
+      "title": "Modifier keys",
+      "summary": "Hold keys while you click to pick a profile for one link.",
+      "symbol": "command",
+      "tile": "tileInk",
+      "tier": "more",
+      "page": "rules",
+      "steps": [
+        {
+          "id": "modifier-keys",
+          "revision": 1,
+          "title": "Hold keys to pick a profile for one click",
+          "body": "Hold a combination such as ⌃⌘ while you click a link, and it opens in the profile you gave those keys, whatever the rules say. Keep holding until the browser comes forward.",
+          "control": "editKeys",
+          "cli": "betterlink keys add --keys control,command --profile Work",
+          "covers": {
+            "commands": ["keys"],
+            "settings": ["KeysEditor.rule.target"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "feedback",
+      "title": "See where links go",
+      "summary": "A toast for each routed link, and a log of every one.",
+      "symbol": "text.bubble.fill",
+      "tile": "tileNeutral",
+      "tier": "more",
+      "page": "general",
+      "steps": [
+        {
+          "id": "link-toast",
+          "revision": 1,
+          "title": "A toast says what chose the profile",
+          "body": "When held keys, config.ts or a Link Rule picks the profile, a small badge names the profile and what chose it, then fades. Links that open in the fallback show none.",
+          "control": "linkToast",
+          "cli": "betterlink toast set --shown on --position top",
+          "covers": {
+            "pages": ["general"],
+            "commands": ["toast"],
+            "settings": ["Pages.model.showsLinkToast", "Pages.model.linkToastPosition"]
+          }
+        },
+        {
+          "id": "log",
+          "revision": 1,
+          "title": "The Log shows every link, and why",
+          "body": "Turn on the Log page to see each link, where it went and what sent it there. The log is kept in memory only and cleared when betterlink quits.",
+          "control": "showLog",
+          "cli": "betterlink settings set --showLog on",
+          "covers": {
+            "pages": ["log"],
+            "commands": ["settings"],
+            "settings": ["Pages.model.showLog"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "background",
+      "title": "Always running",
+      "summary": "The menu bar icon, and opening at login.",
+      "symbol": "menubar.rectangle",
+      "tile": "tileNeutral",
+      "tier": "more",
+      "page": "general",
+      "steps": [
+        {
+          "id": "menu-bar",
+          "revision": 1,
+          "title": "betterlink lives in the menu bar",
+          "body": "It has no Dock icon, and closing this window keeps it running and routing links. The menu bar icon opens the window and lists recent links. Hide the icon if you like, and open betterlink from Spotlight instead.",
+          "control": "menuBarIcon",
+          "cli": "betterlink menu-bar set --shown on",
+          "covers": {
+            "commands": ["menu-bar"],
+            "settings": ["Pages.model.showsMenuBarIcon"]
+          }
+        },
+        {
+          "id": "open-at-login",
+          "revision": 1,
+          "title": "Open betterlink at login",
+          "body": "Start betterlink when you log in, so the first link after a restart opens without a pause and held keys are seen in time. macOS lists it under Login Items.",
+          "status": "openAtLogin",
+          "control": "openAtLogin",
+          "cli": "betterlink login set --enabled on",
+          "covers": {
+            "commands": ["login"],
+            "permissions": ["login-item"],
+            "settings": ["Pages.model.opensAtLogin"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sidebar",
+      "title": "Sidebar",
+      "summary": "Favorites, folders and live tabs beside your browser window. A preview.",
+      "symbol": "sidebar.left",
+      "tile": "tileTeal",
+      "tier": "more",
+      "page": "tabs",
+      "requires": "sidebarBrowser",
+      "steps": [
+        {
+          "id": "sidebar",
+          "revision": 1,
+          "title": "A sidebar for your browser",
+          "body": "betterlink can sit beside a Chromium browser window, Arc style, with Favorites, folders and that window's tabs, in step with the browser both ways. It is a preview, and takes four short steps to set up. Nothing is installed until you do them.",
+          "covers": {
+            "pages": ["tabs"],
+            "commands": ["tabs"]
+          }
+        },
+        {
+          "id": "sidebar-helper",
+          "revision": 1,
+          "title": "Set up the tab helper",
+          "body": "Set Up writes one small file into the browser's own folder, so the browser can start betterlink's tab helper. Do it for each browser the sidebar should attach to. Uninstall removes the file.",
+          "status": "tabsHelper",
+          "control": "sidebarBrowsers",
+          "cli": "betterlink tabs setup --browser \"Google Chrome\"",
+          "covers": {
+            "commands": ["tabs.helper"],
+            "permissions": ["native-messaging"],
+            "settings": ["SidebarPage.sidebar.attachTo.contains"]
+          }
+        },
+        {
+          "id": "sidebar-extension",
+          "revision": 1,
+          "title": "Add the Tabs extension",
+          "body": "The extension tells betterlink about tabs the moment they change. In the browser, open chrome://extensions, turn on Developer mode, then drag the extension's folder from Finder onto the page. Do this once per browser profile, and leave Developer mode on.",
+          "status": "tabsExtension",
+          "control": "showExtension",
+          "cli": "betterlink tabs extension",
+          "covers": {
+            "permissions": ["browser-extension"]
+          }
+        },
+        {
+          "id": "sidebar-accessibility",
+          "revision": 1,
+          "title": "Let betterlink follow your browser windows",
+          "body": "The sidebar stays against the browser window as you move and resize it. For that, macOS needs you to allow betterlink under Accessibility. betterlink uses it to follow and resize browser windows and to collapse the browser's own tab strip.",
+          "status": "accessibility",
+          "control": "allowAccessibility",
+          "cliWhy": "macOS grants Accessibility only in System Settings.",
+          "covers": {
+            "permissions": ["accessibility"]
+          }
+        },
+        {
+          "id": "sidebar-show",
+          "revision": 1,
+          "title": "Show the sidebar",
+          "body": "Turn the sidebar on and it attaches to the front browser window. Press its shortcut (⌃⌥S unless you change it) while the browser is in front to hide or show it. Its side, shortcut and whether it replaces the browser's tab strip are on the Sidebar page.",
+          "status": "sidebar",
+          "control": "showSidebar",
+          "cli": "betterlink sidebar settings set --enabled on",
+          "covers": {
+            "commands": ["sidebar.settings"],
+            "settings": [
+              "SidebarPage.sidebar.enabled",
+              "SidebarPage.sidebar.side",
+              "SidebarPage.sidebar.shortcut",
+              "SidebarPage.sidebar.takeOverTabs"
+            ]
+          }
+        },
+        {
+          "id": "sidebar-library",
+          "revision": 1,
+          "title": "Favorites, folders and Sidebar Profiles",
+          "body": "Drag a tab onto the Favorites grid or a folder to save it. A saved link keeps its tab, like a pinned tab in Arc. Each Sidebar Profile holds its own Favorites and folders, and the cog at the top picks which one a browser profile shows. Import from Arc or your bookmarks on the Sidebar page.",
+          "cli": "betterlink sidebar list",
+          "covers": {
+            "commands": ["sidebar", "sidebar.profiles", "sidebar.folders", "sidebar.links", "sidebar.items"],
+            "settings": ["SidebarImportSection.target?.id"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "sync",
+      "title": "Sync between Macs",
+      "summary": "Share rules and Sidebar Profiles through a folder your cloud drive syncs.",
+      "symbol": "arrow.triangle.2.circlepath",
+      "tile": "accent",
+      "tier": "more",
+      "page": "general",
+      "steps": [
+        {
+          "id": "sync-folder",
+          "revision": 1,
+          "title": "Sync your setup between Macs",
+          "body": "Pick a folder that Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes its own file there and reads the others', so edits made on two Macs both land. Permissions, and which browser profile shows which Sidebar Profile, stay on each Mac.",
+          "status": "syncFolder",
+          "control": "chooseSyncFolder",
+          "cli": "betterlink sync set --folder ~/Dropbox/betterlink",
+          "covers": {
+            "commands": ["sync"],
+            "permissions": ["files-and-folders"],
+            "settings": ["SyncSettings.sync.selection.global", "SyncSettings.on"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "agents",
+      "title": "Agents and the command",
+      "summary": "Let Claude Code or Codex set up betterlink with its command-line tool.",
+      "symbol": "terminal.fill",
+      "tile": "tileViolet",
+      "tier": "more",
+      "page": "agents",
+      "steps": [
+        {
+          "id": "command",
+          "revision": 1,
+          "title": "Install the betterlink command",
+          "body": "Everything this window can change, the betterlink command can change too, so a coding agent can set up your rules for you. Install links it into ~/.local/bin. Then copy the prompt on the Agents page into your agent's chat.",
+          "status": "command",
+          "control": "installCommand",
+          "cliWhy": "This step installs the command itself.",
+          "covers": {
+            "pages": ["agents"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "dia",
+      "title": "Dia spaces",
+      "summary": "Open links in the right Dia space.",
+      "symbol": "square.on.square",
+      "tile": "coral",
+      "tier": "more",
+      "page": "profiles",
+      "requires": "dia",
+      "steps": [
+        {
+          "id": "dia-automation",
+          "revision": 1,
+          "title": "Let betterlink switch Dia's spaces",
+          "body": "Dia runs as one app and calls its profiles spaces, so betterlink switches Dia to the right space before handing it a link. The first time, macOS asks whether betterlink may control Dia. Without that, Dia links open in your fallback.",
+          "status": "automationDia",
+          "control": "askDiaAutomation",
+          "cliWhy": "macOS asks in its own dialog, and only the app can be the one asking.",
+          "covers": {
+            "permissions": ["automation"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "config",
+      "title": "config.ts",
+      "summary": "Route with TypeScript when rules aren't enough.",
+      "symbol": "chevron.left.forwardslash.chevron.right",
+      "tile": "tileInk",
+      "tier": "more",
+      "page": "config",
+      "steps": [
+        {
+          "id": "config-ts",
+          "revision": 1,
+          "title": "Route with TypeScript",
+          "body": "For anything Link Rules can't express, config.ts is a small function that sees each link, the app it came from and the keys held, and returns a profile. betterlink type-checks it when you save, and keeps the last version that worked.",
+          "status": "config",
+          "control": "createConfig",
+          "cli": "betterlink config init",
+          "covers": {
+            "pages": ["config"],
+            "commands": ["config"]
+          }
+        }
+      ]
+    },
+    {
+      "id": "updates",
+      "title": "Updates",
+      "summary": "betterlink checks once a day, and asks before installing.",
+      "symbol": "arrow.down.circle.fill",
+      "tile": "tileNeutral",
+      "tier": "more",
+      "page": "general",
+      "steps": [
+        {
+          "id": "updates",
+          "revision": 1,
+          "title": "betterlink keeps itself up to date",
+          "body": "Once a day it asks GitHub whether a newer version is out, and sends nothing about you or your links. It asks before installing. After an update, What's New shows only the steps that are new since you last looked.",
+          "control": "automaticUpdates",
+          "cli": "betterlink updates set --automatic on",
+          "covers": {
+            "commands": ["updates"],
+            "settings": ["Pages.updater.automaticallyChecks"]
+          }
+        }
+      ]
+    }
+  ],
+  "retired": [],
+  "exempt": {
+    "pages": {
+      "about": "Names the app and its licenses, and holds the button that replays this tour."
+    },
+    "commands": {
+      "status": "A read-only overview of what the other steps set up.",
+      "browsers": "A read-only list of installed browsers.",
+      "folder": "Moving the settings folder is for people who manage their own dotfiles; General explains it, and Sync is the guided way to share settings.",
+      "tour": "The tour's own commands."
+    },
+    "settings": {}
+  }
+}

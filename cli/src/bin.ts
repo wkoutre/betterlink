@@ -388,6 +388,19 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     description: 'Where the Tabs extension is on this Mac, for Load unpacked in a browser (it updates with betterlink)',
     run: () => core('tabs.extension'),
   })
+  .command('helpers', {
+    description: 'Each installed browser the sidebar can attach to, and whether its tab helper is set up',
+    run: () => core('tabs.helper.list'),
+  })
+  .command('setup', {
+    description:
+      "Set up a browser's tab helper: writes one file into the browser's NativeMessagingHosts folder so it can start betterlink's helper (the Sidebar page's Set Up)",
+    options: z.object({
+      browser: z.string().describe('Browser name ("Google Chrome") or bundle id, from tabs helpers'),
+      remove: onOff('remove the file instead (the Sidebar page\'s Uninstall)').optional(),
+    }),
+    run: (c) => core('tabs.helper.set', { browser: c.options.browser, remove: c.options.remove && isOn(c.options.remove) }),
+  })
   .command('open', {
     description: 'Open a page in a new tab',
     args: z.object({ url: z.string() }),
@@ -436,11 +449,70 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     run: (c) => core('tabs.close-below', c.options),
   })
 
+const sync = Cli.create('sync', {
+  description: 'Sync between Macs through a folder your cloud drive keeps in sync (this Mac only: each Mac picks its own folder)',
+})
+  .command('get', { description: 'Show the sync folder and what this Mac syncs', run: () => core('sync.get') })
+  .command('set', {
+    description: 'Choose the sync folder, turn Sync off, or choose what syncs; a running betterlink starts at once',
+    options: z.object({
+      folder: z.string().optional().describe('A folder that exists, inside Dropbox, Google Drive or iCloud Drive'),
+      off: onOff('turn Sync off on this Mac (its file stays in the folder)').optional(),
+      global: onOff('sync Link Rules, modifier keys, the fallback, Show log and config.ts').optional(),
+      profile: z.string().optional().describe('A Sidebar Profile, by name or id (sidebar list); give parts with it'),
+      parts: z.string().optional().describe('What of that Sidebar Profile syncs, comma separated: favorites, folders, name. "none" keeps it on this Mac'),
+    }),
+    run: (c) => {
+      const o = c.options
+      return core('sync.set', {
+        folder: o.folder,
+        off: o.off && isOn(o.off),
+        global: o.global && isOn(o.global),
+        profile: o.profile,
+        parts: o.parts === undefined ? undefined : o.parts === 'none' ? [] : o.parts.split(',').map((p) => p.trim()).filter(Boolean),
+      })
+    },
+  })
+
+// The tour: the first-run flow and What's New (docs/tour.md). Step and topic
+// ids come from `tour status`.
+const tourTarget = {
+  step: z.string().optional().describe('One step, by id (tour status)'),
+  topic: z.string().optional().describe("One topic's steps, by id (tour status)"),
+}
+const tour = Cli.create('tour', {
+  description: "betterlink's tour: the first-run flow and What's New. See what has been seen, show it, or put it back (this Mac only)",
+})
+  .command('status', {
+    description: 'Every topic and step, which were seen, what is new, and the command that does what each step does',
+    run: () => core('tour.status'),
+  })
+  .command('show', {
+    description: "Open betterlink's window on the whole tour, or on one topic",
+    options: z.object({ topic: z.string().optional().describe('Only this topic, by id (tour status)') }),
+    run: (c) => core('tour.show', { topic: c.options.topic }),
+  })
+  .command('new', {
+    description: "Open betterlink's window on What's New: only the steps added or changed since the tour was last seen",
+    run: () => core('tour.show', { only: 'new' }),
+  })
+  .command('done', {
+    description: 'Mark the tour seen without showing it: all of it, one topic or one step',
+    options: z.object(tourTarget),
+    run: (c) => core('tour.done', c.options),
+  })
+  .command('reset', {
+    description: 'Forget what was seen, so it shows again: all of it (the first run comes back), one topic or one step',
+    options: z.object(tourTarget),
+    run: (c) => core('tour.reset', c.options),
+  })
+
 export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
     'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders, saved links, imports and settings; ' +
-    'and open tabs in browsers with the Tabs extension. (The app keeps its log in memory only, so it is not here.)',
+    "and open tabs in browsers with the Tabs extension; Sync between Macs; and the tour (the first-run flow and What's New). " +
+    '(The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).
   version: process.env.BETTERLINK_VERSION ?? 'dev',
   update: false,
@@ -467,5 +539,7 @@ export const cli = Cli.create('betterlink', {
   .command(updates)
   .command(sidebar)
   .command(tabs)
+  .command(sync)
+  .command(tour)
 
 if (import.meta.main) cli.serve()
