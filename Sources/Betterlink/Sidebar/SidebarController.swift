@@ -486,7 +486,7 @@ final class SidebarController: ObservableObject {
     private var takingOver: Set<Int> = []
 
     private func takeOverLook(_ t: WindowTracker.Target, look: Int, flow: TabStripTakeoverFlow) {
-        guard look < 16 else { takingOver.remove(t.windowHash); return }
+        guard look < 20 else { takingOver.remove(t.windowHash); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
             // Left the window, or the setting went off: the run ends here, and
@@ -498,9 +498,10 @@ final class SidebarController: ObservableObject {
             var flow = flow
             let began = CACurrentMediaTime()
             let reading = TabStripTakeover.read(pid: t.pid, window: window)
-            DragTrace.log(String(format: "takeover: look %d read in %.1f ms: %@ %@", look, (CACurrentMediaTime() - began) * 1000,
-                                 "\(reading.layout)", "\(reading.column)"))
-            switch flow.step(reading) {
+            let step = flow.step(reading)
+            DragTrace.log(String(format: "takeover: look %d read in %.1f ms: %@ -> %@", look, (CACurrentMediaTime() - began) * 1000,
+                                 reading.summary, "\(step)"))
+            switch step {
             case .press(let item):
                 // An item that can't be pressed after all: nothing more for this window.
                 guard TabStripTakeover.press(item, pid: t.pid) else { return self.finishTakeover(t) }
@@ -515,6 +516,8 @@ final class SidebarController: ObservableObject {
                 self.takeOverLook(t, look: look + 1, flow: flow)
             case .done:
                 self.finishTakeover(t) // as wanted, or can't be told
+            case .undecided:
+                self.takingOver.remove(t.windowHash) // not written off: its next time in front looks again
             }
         }
     }

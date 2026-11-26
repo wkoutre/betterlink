@@ -72,6 +72,23 @@ public struct TabStripReading: Equatable, Sendable {
     }
 
     public func shows(_ press: Press) -> Bool { result(of: press) == .shown }
+
+    /// The window is seen in a state its item could change, and the item is
+    /// enabled, but the item's checkmark says the window is already there.
+    public var disagrees: Bool {
+        func on(_ i: Item?) -> Bool { i?.enabled == true && !(i?.mark ?? "").isEmpty }
+        switch layout {
+        case .horizontal: return on(show)
+        case .vertical: return column == .expanded && on(collapse)
+        case .unknown: return false
+        }
+    }
+
+    /// One line for the trace: what the window shows and what the menu says.
+    public var summary: String {
+        func item(_ i: Item?) -> String { i.map { $0.enabled == true ? (($0.mark ?? "").isEmpty ? "off" : $0.mark!) : "disabled" } ?? "none" }
+        return "\(layout) \(column), show \(item(show)) collapse \(item(collapse))"
+    }
 }
 
 /// One window's takeover, one look at a time: what to do after each reading.
@@ -84,11 +101,19 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
         /// browser's tabs alone.
         case pressBack(TabStripReading.Press)
         case lookAgain
+        /// This window is finished with for this launch.
         case done
+        /// Window and menu never agreed in this run: nothing pressed; the
+        /// window's next time in front starts a new run.
+        case undecided
     }
-    /// How many looks a press gets to show in the window, and a window not
-    /// yet as wanted gets to become pressable, before that is how things are.
+    /// How many looks a press gets to show in the window before it is pressed
+    /// back (measured: it shows within 0.15 s; looks are 0.35 s apart).
     public static let patience = 4
+    /// How many looks a window not yet as wanted gets to become pressable.
+    /// Chrome's menu was measured to follow the focused window by 0.5 to
+    /// 0.75 s; this is about three times that.
+    public static let settling = 6
     private var pressed: TabStripReading.Press?
     private var presses = 0, looks = 0
 
@@ -115,7 +140,8 @@ public struct TabStripTakeoverFlow: Equatable, Sendable {
             // Anything else may yet change: a window still opening shows no
             // tabs, the menu follows the focused window a moment late, and a
             // browser that can collapse offers it a moment after going vertical.
-            return looks < Self.patience ? .lookAgain : .done
+            if looks < Self.settling { return .lookAgain }
+            return r.disagrees ? .undecided : .done
         }
         pressed = next; presses += 1; looks = 0
         return .press(next)

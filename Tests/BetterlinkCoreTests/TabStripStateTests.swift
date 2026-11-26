@@ -86,7 +86,7 @@ import Testing
         var flow = Flow(), steps: [Flow.Step] = []
         for r in looks {
             steps.append(flow.step(r))
-            if steps.last == .done || steps.last.map({ if case .pressBack = $0 { true } else { false } }) == true { break }
+            if steps.last == .done || steps.last == .undecided || steps.last.map({ if case .pressBack = $0 { true } else { false } }) == true { break }
         }
         return steps
     }
@@ -98,7 +98,7 @@ import Testing
     /// Brave with vertical tabs (Nick's report): looked at a few times in case
     /// the browser comes to offer Collapse, and never pressed.
     @Test func braveWithVerticalTabsIsLookedAtAndNeverPressed() {
-        #expect(run(Array(repeating: braveVertical, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+        #expect(run(Array(repeating: braveVertical, count: Flow.settling + 2)) == Array(repeating: .lookAgain, count: Flow.settling - 1) + [.done])
     }
 
     /// The browser's menu follows the focused window a moment late: a window
@@ -110,7 +110,15 @@ import Testing
         var staleTop = chromeTop; staleTop.show = marked
         #expect(run([staleTop, chromeTop, chromeCollapsed]) == [.lookAgain, .press(.showVertically), .done])
         // They never agree: left as it is, nothing pressed.
-        #expect(run(Array(repeating: stale, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+        // They never agree in this run: nothing pressed, and the window is not
+        // written off: its next time in front gets a new run.
+        #expect(run(Array(repeating: stale, count: Flow.settling + 2)) == Array(repeating: .lookAgain, count: Flow.settling - 1) + [.undecided])
+        #expect(run(Array(repeating: staleTop, count: Flow.settling + 2)).last == .undecided)
+        // The menu was measured to catch up 0.5 to 0.75 s after a window comes
+        // forward: the wait is about three times that, and its own number.
+        #expect(Flow.settling >= 6 && Flow.settling != Flow.patience)
+        #expect(stale.summary == "vertical expanded, show ✓ collapse ✓")
+        #expect(chromeTop.summary == "horizontal unknown, show off collapse none")
     }
 
     /// A window still opening has no tabs to see yet: it is looked at again
@@ -118,14 +126,14 @@ import Testing
     /// browser with no such menu item (Arc, Dia) is done at the first look.
     @Test func aWindowNotYetReadableIsLookedAtAgain() {
         var unseen = chromeTop; unseen.tabs = nil
-        #expect(run(Array(repeating: unseen, count: Flow.patience + 2)) == Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+        #expect(run(Array(repeating: unseen, count: Flow.settling + 2)) == Array(repeating: .lookAgain, count: Flow.settling - 1) + [.done])
         #expect(run([unseen, chromeTop, chromeCollapsed]) == [.lookAgain, .press(.showVertically), .done])
         #expect(run([R(tabs: nil, toolbar: nil, tabHeight: nil, show: nil, collapse: nil)]) == [.done])
     }
 
     /// Brave has no Collapse item: one press, seen to have worked, then done.
     @Test func braveAcrossTheTopIsSwitchedOnce() {
-        #expect(run([braveTop] + Array(repeating: braveVertical, count: Flow.patience + 1)) == [.press(.showVertically)] + Array(repeating: .lookAgain, count: Flow.patience - 1) + [.done])
+        #expect(run([braveTop] + Array(repeating: braveVertical, count: Flow.settling + 1)) == [.press(.showVertically)] + Array(repeating: .lookAgain, count: Flow.settling - 1) + [.done])
     }
 
     /// Chrome offers Collapse a moment after it goes vertical, and the column
