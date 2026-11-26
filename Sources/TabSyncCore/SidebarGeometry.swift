@@ -20,6 +20,8 @@ public struct SidebarPlacement: Equatable, Sendable {
     /// True when the sidebar sits over the window's edge instead of beside it
     /// (only when the browser refused to make room).
     public var overlaps: Bool
+    /// The pixels per point of the screen it was placed on.
+    public var scale: CGFloat
 }
 
 public enum SidebarGeometry {
@@ -36,19 +38,23 @@ public enum SidebarGeometry {
 
     /// Places a `width`-wide sidebar flush against the outside of `window`'s
     /// edge, the full height of the window. The pair moves like one window, so
-    /// while it is dragged the sidebar may run off the screen. With
+    /// the sidebar goes wherever the window does, off the screen too. With
     /// `keepOnScreen` (the browser refused to make room) it covers the
     /// window's edge instead.
+    ///
+    /// Each edge goes to the nearest pixel of a screen with `scale` pixels
+    /// per point, the window's edges on their own: the sidebar's top, bottom
+    /// and seam are the window's, to the pixel, on any scale.
     public static func place(window: CGRect, screen: CGRect, width: CGFloat,
-                             side: SidebarSide, keepOnScreen: Bool = false) -> SidebarPlacement {
-        let w = window.integral
-        // Clip the vertical span so the sidebar never runs under the menu bar or the Dock.
-        let minY = max(w.minY, screen.minY)
-        let height = max(0, min(w.maxY, screen.maxY) - minY)
-        let outside = side == .left ? w.minX - width : w.maxX
-        let x = keepOnScreen ? min(max(outside, screen.minX), screen.maxX - width) : outside
-        return SidebarPlacement(sidebar: CGRect(x: x, y: minY, width: width, height: height),
-                                side: side, overlaps: x != outside)
+                             side: SidebarSide, keepOnScreen: Bool = false, scale: CGFloat = 1) -> SidebarPlacement {
+        let px = { (v: CGFloat) in SidebarSeam.aligned(v, scale: scale) }
+        let minY = px(window.minY), maxY = px(window.maxY)
+        let edge = px(side == .left ? window.minX : window.maxX)
+        let outside = side == .left ? px(edge - width) : edge
+        let w = side == .left ? edge - outside : px(edge + width) - edge
+        let x = keepOnScreen ? min(max(outside, screen.minX), screen.maxX - w) : outside
+        return SidebarPlacement(sidebar: CGRect(x: x, y: minY, width: w, height: max(0, maxY - minY)),
+                                side: side, overlaps: x != outside, scale: scale)
     }
 
     /// The free width beside the window on the sidebar's side.

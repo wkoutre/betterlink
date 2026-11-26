@@ -60,6 +60,11 @@ struct SidebarPage: View {
                     .foregroundStyle(DS.Palette.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if !sidebar.readsWindowCorners {
+                Text("betterlink can't read each browser window's corner radius on this Mac, so every sidebar is cut for a 20 pt corner (Chrome's). Beside another browser its corners may not match the window's.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             if sidebar.enabled && !sidebar.trusted {
                 HStack {
                     Text("betterlink needs Accessibility access to follow your browser windows.")

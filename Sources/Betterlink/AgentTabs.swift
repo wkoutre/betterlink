@@ -314,6 +314,9 @@ extension AgentCommand {
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
             // False: this macOS no longer says which browser window is which, and no window gets a sidebar.
             "canTellWindowsApart": AXWindow.numbersWindows,
+            // False: betterlink can't read a window's corner radius on this Mac (its macOS wasn't checked,
+            // or lacks the call), and every sidebar is cut for a 20 pt corner (SidebarSeam.fallbackRadius).
+            "readsWindowCorners": WindowServer.readsCorners,
             "browsers": (d.array(forKey: "sidebar.browsers") as? [String]).map { Browser.sidebarHosts($0).sorted() }
                 // Until changed, every installed browser the sidebar can attach to (SidebarController.defaultBrowsers).
                 ?? Browser.known.filter { $0.hostsSidebar

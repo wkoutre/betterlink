@@ -2,20 +2,33 @@ import Testing
 @testable import TabSyncCore
 
 struct SidebarPresenceTests {
-    private func decide(panel: UInt32? = 99, onScreen: [UInt32], hidden: Bool = false,
+    private func decide(panel: UInt32? = 99, onScreen: [UInt32], hidden: Bool = false, attached: Bool = true,
                         settled: Bool = false) -> SidebarPresence.Decision {
-        SidebarPresence.decide(window: 10, panel: panel, onScreen: onScreen, hidden: hidden, attached: true, settled: settled)
+        SidebarPresence.decide(window: 10, panel: panel, onScreen: onScreen, hidden: hidden, attached: attached, settled: settled)
+    }
+
+    /// Beside its window or covering its edge, the panel is directly above
+    /// it: under the window, the window's shadow would fall across the
+    /// sidebar (measured 15 to 32 percent darker along the seam), and the two
+    /// would no longer read as one window.
+    @Test func thePanelIsAboveItsWindowBesideItAndCoveringItsEdge() {
+        #expect(SidebarPresence.relation(attached: true) == .above)
+        #expect(SidebarPresence.relation(attached: false) == .above)
     }
 
     @Test func aWindowOnScreenShowsItsSidebarWhateverIsInFront() {
         #expect(decide(onScreen: [1, 2, 99, 10, 3]) == .shown(rehome: false, reorder: false))
+        #expect(decide(onScreen: [1, 2, 99, 10, 3], attached: false) == .shown(rehome: false, reorder: false))
     }
 
     @Test func theSidebarStaysDirectlyAboveItsWindow() {
-        // Left in front of another app's window by a click in it.
-        #expect(decide(onScreen: [99, 1, 10]) == .shown(rehome: false, reorder: true))
-        // Its window was raised past it.
-        #expect(decide(onScreen: [10, 99, 1]) == .shown(rehome: false, reorder: true))
+        for attached in [true, false] {
+            // Left in front of another app's window by a click in it.
+            #expect(decide(onScreen: [99, 1, 10], attached: attached) == .shown(rehome: false, reorder: true))
+            // Its window was raised past it.
+            #expect(decide(onScreen: [10, 99, 1], attached: attached) == .shown(rehome: false, reorder: true))
+            #expect(decide(onScreen: [1, 10, 99, 3], attached: attached) == .shown(rehome: false, reorder: true))
+        }
     }
 
     @Test func notOrderedInYet() {
