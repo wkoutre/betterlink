@@ -105,10 +105,10 @@ public enum TourRegistry {
         TourTopic(id: "link-rules", title: "Link Rules",
                   summary: "Send a site to a profile.",
                   symbol: "arrow.triangle.branch", tile: .accent, tier: .essential, page: "rules", steps: [
-            TourStep(id: "link-rules", revision: 1,
+            TourStep(id: "link-rules", revision: 2,
                      title: "Send a site to a profile",
-                     body: "A Link Rule reads \"Open domains matching example.com in Work\". Rules are checked top to bottom and the first match wins. Add one now, or later under Link Rules, where you can also test any link.",
-                     changed: nil, symbol: "arrow.triangle.branch",
+                     body: "A Link Rule reads \"Open domains matching example.com in Work\". Rules are checked top to bottom and the first match wins. Add one now, or later under Link Rules, which lists your rules by profile and can test any link.",
+                     changed: "Link Rules now lists the profiles that have rules. Click one to see and edit only its rules, with a note wherever a rule for another profile is checked first.", symbol: "arrow.triangle.branch",
                      status: nil, control: .firstRule, requires: nil,
                      cli: "betterlink rules add --kind domain --pattern example.com --profile Work", cliWhy: nil),
         ]),

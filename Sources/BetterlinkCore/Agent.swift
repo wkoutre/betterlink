@@ -45,7 +45,7 @@ public struct AgentResponse {
 public enum Agent {
     public static let commands: [String] = [
         "status", "browsers.list",
-        "rules.list", "rules.add", "rules.update", "rules.remove", "rules.move",
+        "rules.list", "rules.profiles", "rules.add", "rules.update", "rules.remove", "rules.move",
         "keys.list", "keys.add", "keys.update", "keys.remove",
         "fallback.get", "fallback.set",
         "profiles.list", "profiles.add", "profiles.update", "profiles.remove", "profiles.import",
@@ -59,7 +59,8 @@ public enum Agent {
             switch command {
             case "status": return try status(env)
             case "browsers.list": return .success(env.installed.map(describe))
-            case "rules.list": return try .success(rulesList(env))
+            case "rules.list": return try .success(rulesList(input, env))
+            case "rules.profiles": return try .success(rulesProfiles(env))
             case "rules.add": return try rulesAdd(input, env)
             case "rules.update": return try rulesUpdate(input, env)
             case "rules.remove": return try rulesRemove(input, env)
@@ -184,15 +185,56 @@ public enum Agent {
 
     // MARK: Rules
 
-    private static func rulesList(_ env: AgentEnvironment) throws -> [[String: Any]] {
+    /// Every rule in the order they are checked, or one profile's rules
+    /// (still numbered by their place in the full list). Each rule says
+    /// which rules for other profiles can take the same links: `checkedAfter`
+    /// lists rules above it, `checkedBefore` rules below it, and `hiddenBy`
+    /// names the first rule above that takes the very link it is written for.
+    private static func rulesList(_ input: [String: Any], _ env: AgentEnvironment) throws -> [[String: Any]] {
         let c = try store(env).load()
         let cat = try catalog(env, c)
-        return c.rules.enumerated().map { i, r in
+        var only: ProfileRef?
+        if let name = try string(input, "profile") {
+            only = try resolveProfile(browser: try string(input, "browser"), profile: name, in: cat).ref
+        } else if try string(input, "browser") != nil {
+            throw fail("--browser narrows --profile: give a profile too.")
+        }
+        let crossings = RuleGroups.crossings(c.rules)
+        func brief(_ i: Int) -> [String: Any] {
+            let r = c.rules[i]
+            return ["id": r.id.uuidString, "position": i + 1, "pattern": r.pattern,
+                    "profile": r.profile, "profileName": cat.profile(r.target)?.name ?? NSNull()]
+        }
+        return c.rules.enumerated().compactMap { i, r -> [String: Any]? in
+            if let only, r.target != only { return nil }
             let p = cat.profile(r.target)
+            let above = crossings.filter { $0.later == i }, below = crossings.filter { $0.earlier == i }
             return ["id": r.id.uuidString, "position": i + 1, "kind": r.kind.rawValue, "kindLabel": r.kind.label,
                     "pattern": r.pattern, "browser": r.browser,
                     "browserName": Browser.known(bundleId: r.browser)?.name ?? r.browser,
-                    "profile": r.profile, "profileName": p?.name ?? NSNull(), "problem": r.problem ?? NSNull()]
+                    "profile": r.profile, "profileName": p?.name ?? NSNull(), "problem": r.problem ?? NSNull(),
+                    "hiddenBy": above.first(where: \.hidesLater).map { x -> Any in
+                        var b = brief(x.earlier); b["example"] = x.example; return b
+                    } ?? NSNull(),
+                    "checkedAfter": above.map { brief($0.earlier) },
+                    "checkedBefore": below.map { brief($0.later) }]
+        }
+    }
+
+    /// The profiles that have rules, as the Link Rules page lists them:
+    /// how many rules each has, where they sit, and how many of them a
+    /// rule for another profile hides.
+    private static func rulesProfiles(_ env: AgentEnvironment) throws -> [[String: Any]] {
+        let c = try store(env).load()
+        let cat = try catalog(env, c)
+        let hidden = Set(RuleGroups.crossings(c.rules).filter(\.hidesLater).map(\.later))
+        return RuleGroups.groups(c.rules, order: cat.profiles.map(\.ref)).map { g -> [String: Any] in
+            let p = cat.profile(g.target)
+            return ["browser": g.target.browser,
+                    "browserName": Browser.known(bundleId: g.target.browser)?.name ?? g.target.browser,
+                    "profile": g.target.directory, "profileName": p?.name ?? NSNull(), "color": hex(p?.color),
+                    "rules": g.positions.count, "positions": g.positions.map { $0 + 1 },
+                    "hidden": g.positions.filter(hidden.contains).count]
         }
     }
 

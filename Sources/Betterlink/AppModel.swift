@@ -340,6 +340,16 @@ final class AppModel: ObservableObject {
         save(note: "Link Rules saved.") { $0.rules = ListMerge.merge(base: base, mine: new, theirs: $0.rules) }
     }
 
+    /// Moves a rule to just above another, by id, in the rules on disk now.
+    func moveRule(_ id: UUID, above other: UUID) {
+        save(note: "Rule moved.") { c in
+            guard let from = c.rules.firstIndex(where: { $0.id == id }) else { return }
+            let r = c.rules.remove(at: from)
+            let to = c.rules.firstIndex(where: { $0.id == other }) ?? from
+            c.rules.insert(r, at: to)
+        }
+    }
+
     func saveModifierRules(_ new: [ModifierRule], from base: [ModifierRule]) {
         save(note: "Modifier keys saved.") {
             let merged = ListMerge.merge(base: base, mine: new, theirs: $0.modifierRules ?? [])

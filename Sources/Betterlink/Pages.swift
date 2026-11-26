@@ -109,9 +109,26 @@ private struct CardShadow: ViewModifier {
 
 // MARK: Link Rules
 
+/// What Link Rules shows: the profiles that have rules, one profile's rules,
+/// or every rule in the order they are checked.
+enum RulesView: Hashable {
+    case profiles
+    case profile(ProfileRef)
+    case all
+}
+
+/// What the rules sheet edits: one profile's rules, or all of them (nil).
+struct RulesSheet: Identifiable {
+    let id = UUID()
+    var profile: ProfileRef?
+    /// Opens with one new rule, for a profile that has none yet.
+    var addOne = false
+}
+
 struct RulesPage: View {
     @EnvironmentObject var model: AppModel
-    @State private var editing = ProcessInfo.processInfo.environment["BETTERLINK_SHEET"] == "rules"
+    @State private var view: RulesView = .profiles
+    @State private var sheet: RulesSheet? = ProcessInfo.processInfo.environment["BETTERLINK_SHEET"] == "rules" ? RulesSheet() : nil
     @State private var editingKeys = ProcessInfo.processInfo.environment["BETTERLINK_SHEET"] == "keys"
     /// Keys the link tester pretends are held.
     @State private var testKeys: ModifierKeys = []
@@ -120,58 +137,14 @@ struct RulesPage: View {
 
     var body: some View {
         PageForm {
-            PageHeader(title: "Link Rules",
-                           subtitle: "Each link opens in the first rule that matches, top to bottom. Everything else opens in the profile below.")
-            if let err = model.rulesError {
-                Banner(text: err, style: .error)
-            }
-            DSSection {
-                if model.rules.isEmpty {
-                    VStack(alignment: .leading, spacing: DS.Space.space1) {
-                        Text("No rules yet").font(DS.TextStyle.bodyStrong)
-                        Text("Add one to send a site to a profile, such as domains matching example.com in Work.")
-                            .foregroundStyle(DS.Palette.textSecondary)
-                    }
-                    .padding(.vertical, DS.Space.space1)
-                }
-                ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
-                    RuleSentence(index: i, count: model.rules.count, rule: rule)
-                }
-                LabeledContent("Everything else opens in") {
-                    ProfileMenu(selection: $model.fallback)
-                }
-            } footer: {
-                HStack {
-                    Spacer()
-                    Button("Edit Rules…") { editing = true }
-                        .buttonStyle(.dsPrimary)
-                        .disabled(model.rulesError != nil)
-                        .keyboardShortcut("e", modifiers: .command)
-                }
-            }
-            DSSection {
-                if model.modifierRules.isEmpty {
-                    VStack(alignment: .leading, spacing: DS.Space.space1) {
-                        Text("No modifier keys").font(DS.TextStyle.bodyStrong)
-                        Text("Hold keys such as ⌃⌘ while you click a link to open it in a chosen profile, whatever the rules above say.")
-                            .foregroundStyle(DS.Palette.textSecondary)
-                    }
-                    .padding(.vertical, DS.Space.space1)
-                }
-                ForEach(model.modifierRules) { rule in
-                    KeysSentence(rule: rule)
-                }
-            } header: {
-                Text("Modifier keys")
-            } footer: {
-                HStack {
-                    Text("Checked first, before config.ts and Link Rules.").font(DS.TextStyle.caption)
-                        .foregroundStyle(DS.Palette.textTertiary)
-                    Spacer()
-                    Button("Edit Keys…") { editingKeys = true }
-                        .buttonStyle(.dsSecondary)
-                        .disabled(model.rulesError != nil)
-                }
+            switch view {
+            case .profiles:
+                overview
+            case .profile(let ref):
+                ProfileRulesDetail(target: ref, back: { view = .profiles },
+                                   edit: { sheet = RulesSheet(profile: ref) }, showAll: { view = .all })
+            case .all:
+                allRules
             }
             DSSection("Test a link") {
                 DSTextField(label: "Link to test", text: $testLink, prompt: "Paste a link to see where it would open", monospaced: true)
@@ -181,11 +154,106 @@ struct RulesPage: View {
                 if !testLink.isEmpty { TestResult(decision: model.preview(testLink, modifiers: testKeys)) }
             }
         }
-        .sheet(isPresented: $editing) {
-            RulesEditor(initial: model.rules) { editing = false }.environmentObject(model)
+        // Each view starts at the top.
+        .id(view)
+        .sheet(item: $sheet) { s in
+            RulesEditor(initial: model.rules, profile: s.profile, addOne: s.addOne) { sheet = nil }.environmentObject(model)
         }
         .sheet(isPresented: $editingKeys) {
             KeysEditor(initial: model.modifierRules) { editingKeys = false }.environmentObject(model)
+        }
+        // A profile whose last rule went away (here, from the CLI or another Mac) has no page.
+        .onChange(of: model.rules) {
+            if case .profile(let ref) = view, !model.rules.contains(where: { $0.target == ref }) { view = .profiles }
+        }
+        .onAppear(perform: openRequestedView)
+    }
+
+    /// BETTERLINK_RULES_VIEW=all, or a profile's name, opens that view (a
+    /// development aid for screenshots).
+    private func openRequestedView() {
+        guard let want = ProcessInfo.processInfo.environment["BETTERLINK_RULES_VIEW"], view == .profiles else { return }
+        if want == "all" { view = .all }
+        else if let p = model.catalog.profiles.first(where: { $0.name == want }) { view = .profile(p.ref) }
+    }
+
+    @ViewBuilder private var overview: some View {
+        let groups = RuleGroups.groups(model.rules, order: model.catalog.profiles.map(\.ref))
+        let hidden = Set(RuleGroups.crossings(model.rules).filter(\.hidesLater).map(\.later))
+        PageHeader(title: "Link Rules",
+                   subtitle: "Each link opens in the first rule that matches, checked top to bottom across every profile. Pick a profile to see and edit its rules. Everything else opens in the profile below.")
+        if let err = model.rulesError {
+            Banner(text: err, style: .error)
+        }
+        DSSection {
+            if groups.isEmpty {
+                VStack(alignment: .leading, spacing: DS.Space.space1) {
+                    Text("No rules yet").font(DS.TextStyle.bodyStrong)
+                    Text("Add one to send a site to a profile, such as domains matching example.com in Work.")
+                        .foregroundStyle(DS.Palette.textSecondary)
+                }
+                .padding(.vertical, DS.Space.space1)
+            }
+            ForEach(groups, id: \.target) { g in
+                ProfileRulesRow(group: g, hidden: g.positions.filter(hidden.contains).count) { view = .profile(g.target) }
+            }
+            LabeledContent("Everything else opens in") {
+                ProfileMenu(selection: $model.fallback)
+            }
+        } footer: {
+            HStack {
+                AddRulesMenu(without: Set(groups.map(\.target))) { sheet = RulesSheet(profile: $0, addOne: true) }
+                    .disabled(model.rulesError != nil)
+                Spacer()
+                Button("All Rules in Order") { view = .all }
+                    .buttonStyle(.dsSecondary)
+                    .disabled(model.rules.isEmpty)
+            }
+        }
+        DSSection {
+            if model.modifierRules.isEmpty {
+                VStack(alignment: .leading, spacing: DS.Space.space1) {
+                    Text("No modifier keys").font(DS.TextStyle.bodyStrong)
+                    Text("Hold keys such as ⌃⌘ while you click a link to open it in a chosen profile, whatever the rules above say.")
+                        .foregroundStyle(DS.Palette.textSecondary)
+                }
+                .padding(.vertical, DS.Space.space1)
+            }
+            ForEach(model.modifierRules) { rule in
+                KeysSentence(rule: rule)
+            }
+        } header: {
+            Text("Modifier keys")
+        } footer: {
+            HStack {
+                Text("Checked first, before config.ts and Link Rules.").font(DS.TextStyle.caption)
+                    .foregroundStyle(DS.Palette.textTertiary)
+                Spacer()
+                Button("Edit Keys…") { editingKeys = true }
+                    .buttonStyle(.dsSecondary)
+                    .disabled(model.rulesError != nil)
+            }
+        }
+    }
+
+    @ViewBuilder private var allRules: some View {
+        let hidden = Set(RuleGroups.crossings(model.rules).filter(\.hidesLater).map(\.later))
+        BackHeader(title: "All Link Rules", back: { view = .profiles })
+        Text("Every rule in the order they are checked. The first rule that matches a link decides where it opens.")
+            .foregroundStyle(DS.Palette.textSecondary)
+            .padding(.top, -DS.Space.space4)
+        DSSection {
+            ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
+                RuleSentence(index: i, count: model.rules.count, rule: rule, hidden: hidden.contains(i))
+            }
+        } footer: {
+            HStack {
+                Spacer()
+                Button("Edit Rules…") { sheet = RulesSheet() }
+                    .buttonStyle(.dsPrimary)
+                    .disabled(model.rulesError != nil)
+                    .keyboardShortcut("e", modifiers: .command)
+            }
         }
     }
 }
@@ -195,6 +263,7 @@ private struct RuleSentence: View {
     let index: Int
     let count: Int
     let rule: Rule
+    var hidden = false
     var body: some View {
         HStack(spacing: DS.Space.space2) {
             RuleNumber(number: index + 1, count: count)
@@ -203,6 +272,11 @@ private struct RuleSentence: View {
             Text("in").foregroundStyle(DS.Palette.textSecondary)
             ProfileLabel(ref: rule.target)
             Spacer(minLength: 0)
+            if hidden {
+                Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DS.Palette.warning)
+                    .help("A rule above, for another profile, takes the links this rule is written for.")
+                    .accessibilityLabel("Hidden by a rule above")
+            }
         }
         .accessibilityElement(children: .combine)
     }
@@ -714,7 +788,7 @@ struct AgentsPage: View {
     }
 
     private var capabilities: [(String, String)] {
-        [("rules", "List, add, change, reorder and remove Link Rules."),
+        [("rules", "List, add, change, reorder and remove Link Rules, all at once or one profile at a time."),
          ("keys", "Choose modifier keys, such as ⌃⌘, that open a clicked link in a profile."),
          ("fallback", "Choose where links that match no rule open."),
          ("profiles", "List, add, rename and recolour profiles, or import them from your browsers."),
