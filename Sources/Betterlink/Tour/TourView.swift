@@ -382,12 +382,22 @@ struct TourAboutSection: View {
                 if !tour.news.isEmpty {
                     Button("What's New") { tour.start(.whatsNew) }.buttonStyle(.dsPrimary)
                 }
-                Menu("Open a Topic") {
+                // The window's button style draws no menu arrow (menuIndicator
+                // does nothing under it), so the label carries one, as DSSelect's does.
+                Menu {
                     ForEach(TourRegistry.topics.filter { topic in topic.steps.contains { $0.requires.map(tour.met.contains) ?? true } }) { topic in
                         Button(topic.title) { tour.start(.topic, topic: topic.id) }
                     }
+                } label: {
+                    HStack(spacing: DS.Space.space1) {
+                        Text("Open a Topic")
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(DS.Palette.textTertiary)
+                    }
                 }
-                .menuIndicator(.visible)
+                .menuIndicator(.hidden)
+                .accessibilityLabel("Open a Topic")
                 .fixedSize()
                 Button("Show the Tour") { tour.start(.replay) }
             }
