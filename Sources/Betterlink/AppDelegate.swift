@@ -12,7 +12,7 @@ private let keyLaunchProperty = AEKeyword(0x70726474)       // 'prdt'
 private let kLaunchedAsLoginItem = OSType(0x6C676974)       // 'lgit'
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     let model = AppModel()
     private var statusItem: NSStatusItem?
     private var window: NSWindow?
@@ -131,9 +131,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             host.sizingOptions = []  // the window, not the content, sets the size
             w.contentViewController = host
             w.setContentSize(BetterlinkWindow.defaultSize)
-            // After the content is in: set before it, the minimum didn't hold, and
-            // a window dragged smaller clips the page's edges (and the tour's buttons).
-            w.contentMinSize = BetterlinkWindow.minSize
+            // The smallest size is held in windowWillResize, below.
+            w.delegate = self
             // Closing the window on the tour ends the tour, like Skip.
             // The window lives as long as the app, so the observer is never removed.
             _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
@@ -149,6 +148,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
         TourModel.shared.windowOpened(offer: offerTour)
+    }
+
+    /// Holds the window's smallest size: dragged smaller, it clips the page's
+    /// edges (and the tour's buttons). `contentMinSize` can't hold it: the
+    /// hosting view writes the window's size limits from its own on its first
+    /// layout, and with `sizingOptions = []` those are zero.
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        let least = sender.frameRect(forContentRect: NSRect(origin: .zero, size: BetterlinkWindow.minSize)).size
+        return NSSize(width: max(frameSize.width, least.width), height: max(frameSize.height, least.height))
     }
 
     // MARK: Keyboard menu
