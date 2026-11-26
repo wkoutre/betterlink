@@ -298,7 +298,7 @@ public enum SyncModel {
                 .sorted { ($0.value["position"]?.value.string ?? "", $0.key.uuidString) < ($1.value["position"]?.value.string ?? "", $1.key.uuidString) }
                 .compactMap { u, f -> SidebarItem? in
                     if f["kind"]?.value.string == "folder" {
-                        let icon = f["icon"].map { $0.value.string.map(FolderIcon.init(raw:)) } ?? icons[u]
+                        let icon: FolderIcon? = f["icon"].map { $0.value.string.map(FolderIcon.init(raw:)) } ?? icons[u]
                         return .folder(SidebarFolder(id: u, name: f["title"]?.value.string ?? "Folder", expanded: expanded[u] ?? true,
                                                      items: children(of: u), icon: icon))
                     }
