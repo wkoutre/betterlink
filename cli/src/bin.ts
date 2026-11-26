@@ -76,7 +76,18 @@ const kind = z.enum(['domain', 'startsWith', 'contains'])
   .describe('domain: the site and its subdomains; startsWith: a link prefix; contains: text anywhere in the link')
 
 const rules = Cli.create('rules', { description: 'Link Rules: the first rule that matches a link decides where it opens' })
-  .command('list', { description: 'List rules in order', run: () => core('rules.list') })
+  .command('list', {
+    description: 'List rules in the order they are checked, each with the rules for other profiles that can take the same links',
+    options: z.object({
+      profile: z.string().optional().describe('Only this profile\'s rules, still numbered by their place in the full list'),
+      browser: z.string().optional().describe('Browser name or bundle id, with --profile, when two browsers have the profile'),
+    }),
+    run: (c) => core('rules.list', c.options),
+  })
+  .command('profiles', {
+    description: 'List the profiles that have rules, as the Link Rules page does: rule count, positions, and how many another profile\'s rule hides',
+    run: () => core('rules.profiles'),
+  })
   .command('add', {
     description: 'Add a rule',
     options: z.object({
