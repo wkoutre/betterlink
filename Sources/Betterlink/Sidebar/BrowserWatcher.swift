@@ -69,8 +69,13 @@ final class BrowserWatcher {
         name = app.localizedName ?? "Browser"
         element = AXUIElementCreateApplication(pid)
         // A hung browser in the background must not hold everything up.
-        AXUIElementSetMessagingTimeout(element, 1)
+        AXWindow.limitWaiting(on: element)
     }
+
+    /// The browser did not answer in time. Until it is heard from again (any
+    /// event), it is not asked on Space and display changes: each call would
+    /// wait out its time on the main thread.
+    private(set) var isStalled = false
 
     /// Starts watching, again when an earlier try failed: a browser that has
     /// only just launched may not answer yet, so a failed try is repeated a few
@@ -123,7 +128,11 @@ final class BrowserWatcher {
     /// on a Space that is showing, so a window missing from the list isn't gone.
     func scan() {
         guard observer != nil else { return }
-        for w in AXWindow.copy(element, kAXWindowsAttribute) as [AXUIElement]? ?? [] { follow(w) }
+        guard let all: [AXUIElement] = AXWindow.copy(element, kAXWindowsAttribute) else {
+            if AXWindow.timedOut { isStalled = true }
+            return
+        }
+        for w in all { follow(w) }
         updateFocus()
     }
 
@@ -132,17 +141,23 @@ final class BrowserWatcher {
         for w in windows where !all.contains(w.number) { remove(w) }
     }
 
-    func refresh() { for w in windows { refresh(w) } }
+    /// Reads every window again, as far as the browser answers.
+    func refresh() { for w in windows where !isStalled { refresh(w) } }
 
     /// Reads a window again, and reports it if anything changed.
     func refresh(_ w: TrackedWindow) {
         let old = w.target
-        if w.read(), w.target != old { tracker.onChange?(w.target) }
+        guard w.read() else {
+            if AXWindow.timedOut { isStalled = true }
+            return
+        }
+        if w.target != old { tracker.onChange?(w.target) }
     }
 
     @discardableResult
     private func follow(_ win: AXUIElement) -> TrackedWindow? {
         if let known = tracked(win) { return known }
+        AXWindow.limitWaiting(on: win) // kept below as the window's element
         guard AXWindow.isMain(win), let number = AXWindow.number(of: win) else { return nil }
         let w = TrackedWindow(element: win, number: number, watcher: self)
         guard w.read() else { return nil }
@@ -193,6 +208,8 @@ final class BrowserWatcher {
     // MARK: - Events
 
     private func event(_ name: String, _ el: AXUIElement) {
+        // It speaks again: look for what was missed meanwhile.
+        if isStalled { isStalled = false; scan() }
         switch name {
         case kAXFocusedWindowChangedNotification, kAXMainWindowChangedNotification:
             updateFocus()

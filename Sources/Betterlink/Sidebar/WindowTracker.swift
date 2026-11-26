@@ -91,12 +91,12 @@ final class WindowTracker: NSObject {
             let all = WindowServer.all()
             for w in t.watchers.values {
                 w.drop(missingFrom: all)
-                w.scan() // the windows of the Space that shows now
+                if !w.isStalled { w.scan() } // the windows of the Space that shows now
             }
             t.orderMayHaveChanged()
         }
         listen(.default, NSApplication.didChangeScreenParametersNotification) { t, _ in
-            t.watchers.values.forEach { $0.refresh() }
+            t.watchers.values.forEach { $0.refresh() } // not a browser that isn't answering
             t.orderMayHaveChanged()
         }
         watchRunning()
@@ -153,6 +153,9 @@ final class WindowTracker: NSObject {
     private var frontWatcher: BrowserWatcher? {
         (NSWorkspace.shared.frontmostApplication?.processIdentifier).flatMap { watchers[$0] }
     }
+
+    /// Whether an attached browser is the front app.
+    var browserInFront: Bool { frontWatcher != nil }
 
     /// The focused window of the attached browser in front, if one is.
     var frontWindow: TrackedWindow? { frontWatcher?.focused }

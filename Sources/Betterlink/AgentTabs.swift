@@ -252,6 +252,8 @@ extension AgentCommand {
             "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
+            // False: this macOS no longer says which browser window is which, and no window gets a sidebar.
+            "canTellWindowsApart": AXWindow.numbersWindows,
             // False: this macOS doesn't tell a window's corner radius (or wasn't checked to), and every
             // sidebar is cut for a 20 pt corner (SidebarSeam.fallbackRadius).
             "readsWindowCorners": WindowServer.readsCorners,

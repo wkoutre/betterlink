@@ -62,10 +62,11 @@ final class TabsModel: ObservableObject {
         hub.start()
     }
 
-    /// Whether a sidebar is on screen: the tab lists are worth keeping to the
-    /// moment. With none to be seen, what tabs show can wait.
-    var isWatched = false {
-        didSet { if isWatched, !oldValue, latest != nil { publish() } }
+    /// How often, at most, what tabs show goes on while it keeps changing
+    /// (`PublishPacer.interval`; the sidebar says which). When it gets
+    /// shorter, what was held back goes on at once.
+    var interval = PublishPacer.interval(sidebarOnScreen: false, browserInFront: false) {
+        didSet { if interval < oldValue, latest != nil { publish() } }
     }
     /// The newest tab lists, when not published yet.
     private var latest: [BrowserSession]?
@@ -77,7 +78,7 @@ final class TabsModel: ObservableObject {
 
     private func changed(_ s: [BrowserSession], urgent: Bool) {
         latest = s
-        switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: isWatched ? 0.1 : 2) {
+        switch pacer.changed(urgent: urgent, now: CACurrentMediaTime(), interval: interval) {
         case .now: publish()
         case .after(let seconds):
             let work = DispatchWorkItem { [weak self] in self?.publish() }

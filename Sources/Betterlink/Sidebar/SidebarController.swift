@@ -35,6 +35,9 @@ final class SidebarController: ObservableObject {
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
+    /// False when this macOS no longer says which window is which
+    /// (`AXWindow.number`): then no window gets a sidebar.
+    let canTellWindowsApart = AXWindow.numbersWindows
     /// Why the shortcut couldn't be registered, for the setting.
     @Published private(set) var hotKeyProblem: String?
 
@@ -222,8 +225,15 @@ final class SidebarController: ObservableObject {
     }
 
     /// Gives every window the sidebar narrowed its space back, if it is still
-    /// as narrowed. Called when the app quits.
-    func giveSpaceBack() { instances.values.forEach { $0.giveSpaceBack() } }
+    /// as narrowed. Called when the app quits. A browser that doesn't answer
+    /// for one window isn't asked about its others (they keep their records):
+    /// each would wait out its time while the app is quitting.
+    func giveSpaceBack() {
+        var hung: Set<pid_t> = []
+        for i in instances.values where !hung.contains(i.window.target.pid) {
+            if !i.giveSpaceBack(), AXWindow.timedOut { hung.insert(i.window.target.pid) }
+        }
+    }
 
     private func trustMayHaveChanged() {
         let now = WindowTracker.isTrusted
@@ -278,8 +288,7 @@ final class SidebarController: ObservableObject {
         guard let i = instances[t.id] else { return }
         let was = i.reported
         i.reported = t
-        // A window paired for certain stays so whatever its title becomes.
-        if was.title != t.title, !pairing.isCertain(t.id) { pair() }
+        if was.title != t.title { pair() }
         // Minimized, full screen or hidden, or back: its sidebar goes or comes.
         // Else it only moved, and the panel with it.
         if was.fullScreen != t.fullScreen || was.minimized != t.minimized || was.appHidden != t.appHidden {
@@ -293,7 +302,7 @@ final class SidebarController: ObservableObject {
     private func settled(_ t: WindowTracker.Target) {
         guard let i = instances[t.id] else { return }
         i.settle(t)
-        if !pairing.isCertain(t.id) { pair() } // by where it rests now
+        pair() // by where it rests now
     }
 
     private func focusChanged() {
@@ -333,9 +342,12 @@ final class SidebarController: ObservableObject {
 
     private var pairing = WindowPairing()
     private var found: [Int: WindowPairing.Found] = [:]
+    private var pairAgain: DispatchWorkItem?
 
     /// Works out again which of the browsers' own windows each window is
-    /// (WindowPairing), then what each sidebar shows.
+    /// (WindowPairing), then what each sidebar shows: whenever either side
+    /// says something new (the tab lists, a window's title, its resting
+    /// place, the focus, a window coming or going).
     private func pair() {
         guard let h = NSScreen.screens.first?.frame.height else { return }
         let windows = instances.values.sorted { $0.window.id < $1.window.id }.map { i -> WindowPairing.Window in
@@ -345,8 +357,15 @@ final class SidebarController: ObservableObject {
                          frame: WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height),
                          title: t.title, focused: i.window.isFocused)
         }
-        found = pairing.update(windows, in: sessions)
+        found = pairing.update(windows, in: sessions, now: CACurrentMediaTime())
         refreshLooks()
+        // A word on the focus counts once it has held: one more look then.
+        pairAgain?.cancel()
+        pairAgain = pairing.settlesAt.map { at in
+            let work = DispatchWorkItem { [weak self] in self?.pair() }
+            DispatchQueue.main.asyncAfter(deadline: .now() + max(0, at - CACurrentMediaTime()) + 0.01, execute: work)
+            return work
+        }
     }
 
     /// Only the sidebars on screen, and each only when what it shows differs:
@@ -371,9 +390,10 @@ final class SidebarController: ObservableObject {
             let onScreen = WindowServer.onScreen()
             for i in instances.values { i.present(onScreen: onScreen, settled: settled) }
         }
-        // The tab lists keep to the moment only while a sidebar can be seen.
-        let watched = instances.values.contains(where: \.isShown)
-        if TabsModel.shared.isWatched != watched { TabsModel.shared.isWatched = watched }
+        // What tabs show keeps to the moment only while someone can be
+        // watching it change: a sidebar on screen and a browser in front.
+        let interval = PublishPacer.interval(sidebarOnScreen: instances.values.contains(where: \.isShown), browserInFront: tracker.browserInFront)
+        if TabsModel.shared.interval != interval { TabsModel.shared.interval = interval }
         refreshLooks()
         updateHotKey()
     }
@@ -421,7 +441,7 @@ final class SidebarController: ObservableObject {
 
     private func takeOverLook(_ w: TrackedWindow, look: Int, flow: TabStripTakeoverFlow) {
         let id = w.id
-        guard look < 16 else { takingOver.remove(id); return }
+        guard look < 20 else { takingOver.remove(id); return }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self, weak w] in
             guard let self else { return }
             // Another window or app came forward, this one closed, or the
@@ -433,9 +453,10 @@ final class SidebarController: ObservableObject {
             var flow = flow
             let began = CACurrentMediaTime()
             let reading = TabStripTakeover.read(pid: t.pid, window: w.element)
-            DragTrace.log(String(format: "takeover: look %d read in %.1f ms: %@ %@", look, (CACurrentMediaTime() - began) * 1000,
-                                 "\(reading.layout)", "\(reading.column)"))
-            switch flow.step(reading) {
+            let step = flow.step(reading)
+            DragTrace.log(String(format: "takeover: look %d read in %.1f ms: %@ -> %@", look, (CACurrentMediaTime() - began) * 1000,
+                                 reading.summary, "\(step)"))
+            switch step {
             case .press(let item):
                 // An item that can't be pressed after all: nothing more for this window.
                 guard TabStripTakeover.press(item, pid: t.pid) else { return self.finishTakeover(id) }
@@ -450,6 +471,8 @@ final class SidebarController: ObservableObject {
                 self.takeOverLook(w, look: look + 1, flow: flow)
             case .done:
                 self.finishTakeover(id) // as wanted, or can't be told
+            case .undecided:
+                self.takingOver.remove(id) // not written off: its next time in front looks again
             }
         }
     }
