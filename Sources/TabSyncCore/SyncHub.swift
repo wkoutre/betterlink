@@ -33,6 +33,14 @@ public struct BrowserSession: Identifiable, Sendable {
     /// with what it has; the sidebar offers only what will happen.
     public func can(_ op: Command.Op) -> Bool { ops.contains(op.rawValue) }
 
+    /// The session with its browser's normal windows only: the ones a window
+    /// with a sidebar can be (what `WindowPairing` is handed).
+    public var normalWindowsOnly: BrowserSession {
+        var s = self
+        s.store = store.normalWindowsOnly
+        return s
+    }
+
     /// Takes in the extension's hello.
     public mutating func greet(_ m: Inbound) {
         brands = m.brands ?? []

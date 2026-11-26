@@ -45,15 +45,17 @@ public struct SnapshotWindow: Codable, Equatable, Sendable {
     public var id: Int
     public var focused: Bool
     public var incognito: Bool?
+    /// "normal", "popup" or "app" (extension 0.3.2 and later).
+    public var windowType: String?
     public var tabs: [Tab]
     public var left: Double?
     public var top: Double?
     public var width: Double?
     public var height: Double?
 
-    public init(id: Int, focused: Bool, incognito: Bool? = nil, tabs: [Tab],
+    public init(id: Int, focused: Bool, incognito: Bool? = nil, windowType: String? = nil, tabs: [Tab],
                 left: Double? = nil, top: Double? = nil, width: Double? = nil, height: Double? = nil) {
-        self.id = id; self.focused = focused; self.incognito = incognito; self.tabs = tabs
+        self.id = id; self.focused = focused; self.incognito = incognito; self.windowType = windowType; self.tabs = tabs
         self.left = left; self.top = top; self.width = width; self.height = height
     }
 
@@ -96,6 +98,8 @@ public struct Inbound: Codable, Sendable {
     public var isWindowClosing: Bool?
     public var focused: Bool?
     public var incognito: Bool?
+    /// windowCreated: "normal", "popup" or "app" (`type` is the message's own).
+    public var windowType: String?
     public var windows: [SnapshotWindow]?
     // windowCreated / windowBounds
     public var left: Double?
@@ -126,7 +130,7 @@ public struct Inbound: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey {
         case type, kind, seq, t, tab, tabId, removedTabId, windowId, fromIndex, toIndex,
-             isWindowClosing, focused, incognito, windows, left, top, width, height, instance, changes, favicon, ops, userAgent, brands, id, ok, error, browser, pid, browserPid
+             isWindowClosing, focused, incognito, windowType, windows, left, top, width, height, instance, changes, favicon, ops, userAgent, brands, id, ok, error, browser, pid, browserPid
         case protocolVersion = "protocol"
         case extensionVersion = "extension"
     }

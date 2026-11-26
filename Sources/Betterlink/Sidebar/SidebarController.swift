@@ -353,7 +353,8 @@ final class SidebarController: ObservableObject {
                          frame: WindowBounds(left: ax.minX, top: ax.minY, width: ax.width, height: ax.height),
                          title: t.title, focused: i.window.isFocused)
         }
-        found = pairing.update(windows, in: sessions)
+        // A popup or an app window the extension reports is never the window beside a sidebar.
+        found = pairing.update(windows, in: sessions.map(\.normalWindowsOnly))
         refreshLooks()
     }
 

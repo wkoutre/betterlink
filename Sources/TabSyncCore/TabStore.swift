@@ -7,6 +7,13 @@ public struct BrowserWindow: Equatable, Identifiable, Sendable {
     public var tabIds: [Int]
     /// Where it is on screen, when the extension reports it.
     public var bounds: WindowBounds?
+    /// The browser's own word for what it is: "normal", "popup" or "app"
+    /// (`chrome.windows`). Nil from an extension older than 0.3.2.
+    public var type: String?
+
+    /// A normal window, the only kind that has a sidebar. One the extension
+    /// gave no type for counts as normal.
+    public var isNormal: Bool { type == nil || type == "normal" }
 }
 
 /// The app's mirror of one browser's tabs. It is a pure reducer: feed it the
@@ -72,6 +79,18 @@ public struct TabStore: Equatable, Sendable {
 
     public var tabCount: Int { tabs.count }
 
+    /// The store with the browser's normal windows only: a popup or an app
+    /// window is left out, with its tabs.
+    public var normalWindowsOnly: TabStore {
+        var s = self
+        for (id, w) in windows where !w.isNormal {
+            for tab in w.tabIds { s.tabs[tab] = nil }
+            s.windows[id] = nil
+            s.windowOrder.removeAll { $0 == id }
+        }
+        return s
+    }
+
     // MARK: - internals
 
     private mutating func loadSnapshot(_ wins: [SnapshotWindow]) {
@@ -79,7 +98,7 @@ public struct TabStore: Equatable, Sendable {
         for w in wins {
             let sorted = w.tabs.sorted { $0.index < $1.index }
             windows[w.id] = BrowserWindow(id: w.id, focused: w.focused, incognito: w.incognito ?? false, tabIds: sorted.map(\.id),
-                                          bounds: w.bounds)
+                                          bounds: w.bounds, type: w.windowType)
             windowOrder.append(w.id)
             for t in sorted { tabs[t.id] = t }
         }
@@ -160,6 +179,7 @@ public struct TabStore: Equatable, Sendable {
             guard let wid = m.windowId else { return }
             ensureWindow(wid)
             windows[wid]!.incognito = m.incognito ?? false
+            windows[wid]!.type = m.windowType
             if let b = WindowBounds(left: m.left, top: m.top, width: m.width, height: m.height) { windows[wid]!.bounds = b }
         case "windowBounds":
             guard let wid = m.windowId, windows[wid] != nil,

@@ -179,6 +179,23 @@ test("window frames ride along in the snapshot and on every move, for profile ma
   assert.equal(moved.left, 1028);
 });
 
+test("each window's type rides along in the snapshot and when a window opens", async () => {
+  const chrome = fakeChrome();
+  const all = await chrome.windows.getAll();
+  all[0].type = "normal";
+  all.push({ id: 2, type: "popup", focused: false, incognito: false, tabs: [] });
+  const out = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1234);
+  b.attach();
+  await b.snapshot();
+  assert.deepEqual(out[0].windows.map((w) => w.windowType), ["normal", "popup"]);
+  chrome.windows.onCreated.fire({ id: 3, type: "app", focused: true, incognito: false });
+  const opened = out.find((m) => m.kind === "windowCreated");
+  // The message's own `type` is taken: the window's goes as `windowType`.
+  assert.equal(opened.type, "event");
+  assert.equal(opened.windowType, "app");
+});
+
 test("move, mute, duplicate, reload and newWindow drive the real tab API", async () => {
   const { chrome, out, b } = setup();
   await b.handle({ type: "cmd", id: "m1", op: "move", tabId: 10, index: 3 });

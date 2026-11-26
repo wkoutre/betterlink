@@ -59,6 +59,8 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     if (data) emit("tabFavicon", { tabId: tab.id, favicon: data });
   }
 
+  // Each window goes with the browser's own word for what it is (`windowType`:
+  // normal, popup or app), so the app pairs a sidebar only with a normal one.
   async function snapshot() {
     const wins = await chrome.windows.getAll({ populate: true, windowTypes: ["normal", "popup", "app"] });
     // seq is assigned AFTER the await so no event can slip between the
@@ -71,6 +73,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
         id: w.id,
         focused: !!w.focused,
         incognito: !!w.incognito,
+        windowType: w.type || null,
         ...bounds(w),
         tabs: (w.tabs || []).map(serializeTab),
       })),
@@ -108,7 +111,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
       try { tab = serializeTab(await chrome.tabs.get(addedTabId)); } catch {}
       emit("tabReplaced", { tabId: addedTabId, removedTabId, tab });
     }],
-    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, ...bounds(w) })],
+    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, windowType: w.type || null, ...bounds(w) })],
     [chrome.windows.onRemoved, (windowId) => emit("windowRemoved", { windowId })],
     [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId })],
   ];
