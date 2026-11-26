@@ -8,7 +8,7 @@ One Swift build at a time, always through make: `make test`, `make build`. The M
 
 ## The changelog
 
-The Changelog page, `betterlink changelog list` and each GitHub Release's notes are one list, and nobody writes it: `scripts/gen-changelog.py` reads it from git history when the app is built. A release is a `vX.Y.Z` tag; its changes are the squash commits merged since the tag before, minus version bumps and commits that touch only what the release workflow's `paths-ignore` skips (docs, tests, CI). So:
+The Changelog page, `betterlink changelog list` and each GitHub Release's notes are one list, and nobody writes it: `scripts/gen-changelog.py` reads it from git history when the app is built. A release is a `vX.Y.Z` tag; its changes are the squash commits merged since the tag before, minus version bumps, Dependabot's dependency updates, and commits that touch only what the release workflow's `paths-ignore` skips (docs, tests, CI). So:
 
 - Never add a CHANGELOG file or a hand kept list of changes. It would drift from the tags.
 - The PR title becomes the line. Write it as a person who uses betterlink would want to read it, and keep the `(#123)` GitHub adds.

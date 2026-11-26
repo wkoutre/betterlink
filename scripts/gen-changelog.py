@@ -9,7 +9,8 @@ its tag and the one before, and this script reads them:
 - A commit that only touches what the release workflow ignores (its
   `paths-ignore`: docs, tests, CI) changed nothing anyone runs, so it is left
   out. That list is read from .github/workflows/release.yml, not repeated here.
-- The release bot's version bumps ("betterlink 0.3.22") are left out.
+- The release bot's version bumps ("betterlink 0.3.22") and Dependabot's
+  dependency updates ("Bump x from 1 to 2") are left out.
 - The line is the commit's subject, with its "(#123)" kept as the pull
   request's number. A "Changelog:" line in the commit message replaces it;
   "Changelog: none" leaves the commit out.
@@ -43,6 +44,8 @@ DEFAULT_REPO = "wkoutre/betterlink"
 
 TAG = re.compile(r"^v(\d+)\.(\d+)\.(\d+)$")
 BUMP = re.compile(r"^betterlink \d+\.\d+\.\d+(?: \[skip ci\])?$")
+# Dependabot's dependency updates: nothing a person notices on its own.
+DEPENDENCY = re.compile(r"^Bump \S+ from \S+ to \S+")
 PR = re.compile(r"\s*\(#(\d+)\)\s*$")
 TRAILER = re.compile(r"(?im)^Changelog:[ \t]*(.*?)[ \t]*$")
 HIDE = re.compile(r"^(none|skip|-)\.?$", re.I)
@@ -82,7 +85,7 @@ def version_key(tag):
 
 def entry(subject, body):
     """The changelog line for one commit, or None to leave it out."""
-    if BUMP.match(subject.strip()): return None
+    if BUMP.match(subject.strip()) or DEPENDENCY.match(subject.strip()): return None
     said = [t for t in TRAILER.findall(body or "") if t]
     pr = None
     m = PR.search(subject)
@@ -170,6 +173,7 @@ def self_test():
     expect("no number", entry("A plain commit", ""), {"text": "A plain commit", "pr": None})
     expect("bump", entry("betterlink 0.3.22 [skip ci]", ""), None)
     expect("old bump", entry("betterlink 0.3.11", ""), None)
+    expect("dependency update", entry("Bump typescript from 5.9.3 to 7.0.2 in /cli (#7)", ""), None)
     expect("a fix that names a version stays", entry("Permissions page: say why; betterlink 0.3.1 (#3)", "")["pr"], 3)
     expect("Changelog: rewords", entry("CI: idle cost (#70)", "Body.\n\nChangelog: Sidebar rows redraw less.\n"),
            {"text": "Sidebar rows redraw less.", "pr": 70})
