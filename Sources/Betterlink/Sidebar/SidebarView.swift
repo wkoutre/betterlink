@@ -17,6 +17,10 @@ struct SidebarView: View {
     private let holds = SidebarHoldsModel.shared
     @State private var newURL = ""
     @State private var renaming: UUID?
+    /// The folder whose icon is being typed, and which kind.
+    @State private var iconEditing: (id: UUID, kind: IconKind)?
+    @State private var iconDraft = ""
+    @FocusState private var iconFocused: Bool
     @State private var renamingProfile: UUID?
     /// The header's own field: a folder or link rename may be open too (review F2).
     @State private var profileDraft = ""
@@ -368,12 +372,17 @@ struct SidebarView: View {
         switch item {
         case .folder(let f):
             return AnyView(VStack(alignment: .leading, spacing: 1) {
-                SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)), editing: renaming == f.id,
+                SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)),
+                           editing: renaming == f.id || iconEditing?.id == f.id,
                            label: "Folder \(f.name), \(f.expanded ? "open" : "closed")") {
                     edit(p.id) { $0.toggleExpanded(f.id) }
                 } content: {
-                    Image(systemName: f.expanded ? "folder.fill" : "folder").foregroundStyle(pal.textSecondary).frame(width: 16)
-                    nameOrField(f.id, f.name, p)
+                    if let editing = iconEditing, editing.id == f.id {
+                        iconField(f, editing.kind, p)
+                    } else {
+                        FolderGlyph(icon: f.icon, expanded: f.expanded)
+                        nameOrField(f.id, f.name, p)
+                    }
                 }
                 .id(SidebarRowID.folder(f.id))
                 .onDrag { drag(Self.savedKey(f.id)) }
@@ -381,6 +390,7 @@ struct SidebarView: View {
                 .contextMenu {
                     Button("New Folder Inside") { newFolder(in: f.id, p) }
                     Button("Rename") { startRename(f.id, f.name) }
+                    iconMenu(f, p)
                     moveMenu(f.id, isFolder: true, inFavorites: false, p)
                     Divider()
                     Button("Delete Folder", role: .destructive) { deleteFolder(f, p) }
@@ -458,8 +468,89 @@ struct SidebarView: View {
 
     private func startRename(_ id: UUID, _ name: String) {
         renamingProfile = nil
+        iconEditing = nil
         draftName = name
         renaming = id
+    }
+
+    // MARK: - Folder icons
+
+    enum IconKind { case emoji, symbol }
+
+    /// Icon in a folder's menu: an emoji, a built-in symbol, or the folder
+    /// glyph again. Each is typed in the row, as a rename is.
+    private func iconMenu(_ f: SidebarFolder, _ p: SidebarProfile) -> some View {
+        Menu("Icon") {
+            Button("Choose Emoji…") { startIcon(f, .emoji) }
+            Button("Choose Symbol…") { startIcon(f, .symbol) }
+            if f.icon != nil {
+                Divider()
+                Button("Remove Icon") { edit(p.id) { $0.setIcon(f.id, to: nil) } }
+            }
+        }
+    }
+
+    private func startIcon(_ f: SidebarFolder, _ kind: IconKind) {
+        renaming = nil
+        renamingProfile = nil
+        // A symbol's name starts as the one it has, to change a little; an
+        // emoji starts empty, so the one picked is the only one there.
+        if kind == .symbol, case .symbol(let name)? = f.icon { iconDraft = name } else { iconDraft = "" }
+        iconEditing = (f.id, kind)
+    }
+
+    /// What `iconDraft` would set, or nil while it isn't one yet.
+    private func draftIcon(_ kind: IconKind) -> FolderIcon? {
+        switch kind {
+        case .emoji: return try? FolderIcon.checkedEmoji(iconDraft)
+        case .symbol: return try? FolderIcon.checkedSymbol(iconDraft, exists: SymbolCheck.exists)
+        }
+    }
+
+    /// The row while its icon is typed: a preview where the icon goes, then
+    /// the field. An emoji opens the Mac's emoji picker, and the first one
+    /// picked or typed is set; a symbol's name is set with Return, once the
+    /// preview shows it. Esc leaves the icon as it was.
+    @ViewBuilder
+    private func iconField(_ f: SidebarFolder, _ kind: IconKind, _ p: SidebarProfile) -> some View {
+        let draft = draftIcon(kind)
+        Group {
+            if let draft { FolderGlyph(icon: draft, expanded: f.expanded) }
+            else {
+                Image(systemName: "questionmark.square.dashed").foregroundStyle(pal.textTertiary).frame(width: 16)
+                    .accessibilityHidden(true)
+            }
+        }
+        TextField(kind == .emoji ? "Emoji" : "Symbol name, such as star.fill", text: $iconDraft)
+            .textFieldStyle(.plain)
+            .foregroundStyle(pal.text)
+            .font(DS.TextStyle.body)
+            .focused($iconFocused)
+            .accessibilityLabel(kind == .emoji ? "Emoji for \(f.name)" : "Symbol name for \(f.name)")
+            .onAppear {
+                iconFocused = true
+                // The picker types into the field that has the keyboard: open it once the field has it.
+                if kind == .emoji { DispatchQueue.main.async { NSApp.orderFrontCharacterPalette(nil) } }
+            }
+            .onChange(of: iconDraft) { _, _ in
+                if kind == .emoji, let icon = draftIcon(.emoji) { setIcon(f.id, icon, p) }
+            }
+            .onSubmit {
+                if let icon = draftIcon(kind) { setIcon(f.id, icon, p) } else { NSSound.beep() }
+            }
+            .onExitCommand { iconEditing = nil }
+        if kind == .emoji {
+            Button { NSApp.orderFrontCharacterPalette(nil) } label: { RowIcon("face.smiling") }
+                .buttonStyle(PressStyle())
+                .foregroundStyle(pal.textSecondary)
+                .help("Show Emoji & Symbols")
+                .accessibilityLabel("Show Emoji & Symbols")
+        }
+    }
+
+    private func setIcon(_ id: UUID, _ icon: FolderIcon, _ p: SidebarProfile) {
+        edit(p.id) { $0.setIcon(id, to: icon) }
+        iconEditing = nil
     }
 
     private func newFolder(in parent: UUID?, _ p: SidebarProfile) {
@@ -1074,6 +1165,31 @@ private struct RowIcon: View {
     init(_ symbol: String) { self.symbol = symbol }
     var body: some View {
         Image(systemName: symbol).font(DS.TextStyle.caption).frame(width: 20, height: 20).contentShape(Rectangle())
+    }
+}
+
+/// What a folder's row shows before its name: its icon when it has one, in
+/// place of the folder glyph, else the glyph (filled while open). A symbol
+/// this Mac doesn't draw (synced from a newer macOS) and a kind this
+/// betterlink doesn't know show the glyph.
+private struct FolderGlyph: View {
+    let icon: FolderIcon?
+    let expanded: Bool
+    @Environment(\.sidebarColors) private var pal
+
+    var body: some View {
+        Group {
+            switch icon {
+            case .emoji(let e)?:
+                Text(e).font(DS.TextStyle.body).lineLimit(1).minimumScaleFactor(0.5)
+            case .symbol(let name)? where SymbolCheck.exists(name):
+                Image(systemName: name).foregroundStyle(pal.textSecondary)
+            default:
+                Image(systemName: expanded ? "folder.fill" : "folder").foregroundStyle(pal.textSecondary)
+            }
+        }
+        .frame(width: 16)
+        .accessibilityHidden(true)
     }
 }
 
