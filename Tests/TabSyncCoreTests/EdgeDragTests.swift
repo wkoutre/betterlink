@@ -137,21 +137,9 @@ import Testing
             odd.size.width = 1200
             #expect(drag.width(delta: 0, beside: odd) == 200, "\(side)")
         }
-        // Never asked below the 500 pt browsers are assumed to stop at; a
-        // window already narrower is asked for no more.
-        #expect(start(.right, window: 520).ask(delta: 100)?.width == 500)
-        #expect(start(.left, window: 450).ask(delta: 100)?.width == 450)
-        #expect(start(.left, window: 450).ask(delta: -50)?.width == 500)
-    }
-
-    @Test func aSidebarCoveringItsWindowChangesAlone() {
-        let w = CGRect(x: 0, y: 0, width: 1440, height: 900)
-        for side in SidebarSide.allCases {
-            let drag = EdgeDrag(window: w, width: 280, side: side, covers: true)
-            #expect(drag.ask(delta: 60) == nil && drag.kept(w.offsetBy(dx: 30, dy: 0)) == nil, "\(side)")
-            #expect(drag.width(delta: 60, beside: w) == 340, "\(side)")
-            #expect(drag.width(delta: 900, beside: w) == 440 && drag.width(delta: -900, beside: w) == 200, "\(side)")
-        }
+        // No width is assumed for the browser: it is asked for what is left,
+        // and what it really takes is read off its window.
+        #expect(start(.right, window: 520).ask(delta: 100)?.width == 420)
     }
 
     /// From the review of the first version: one step from VoiceOver or the
@@ -176,8 +164,6 @@ import Testing
             // One that answers at once, or is asked nothing, is not waited for.
             var quick = Browser(frame: drag.window)
             #expect(step(drag, 10, &quick) == 290 && drag.answered(ask, by: quick.frame), "\(side)")
-            let covering = EdgeDrag(window: drag.window, width: 280, side: side, covers: true)
-            #expect(covering.answered(covering.ask(delta: 10), by: drag.window), "\(side)")
         }
         #expect(EdgeDrag.answerWait > 0 && EdgeDrag.answerWait <= 0.5)
     }
@@ -207,34 +193,22 @@ import Testing
             }
             #expect(wide == 160 && drag.stepped(wide, by: -10) == 150, "\(side)")
             #expect(narrow == -80 && drag.stepped(narrow, by: 10) == -70, "\(side)")
-            let covering = EdgeDrag(window: drag.window, width: 280, side: side, covers: true)
-            #expect(covering.stepped(covering.stepped(0, by: 10), by: 10) == 20, "\(side)")
         }
-        // Nor past what the window is asked for: one 520 wide gives 20.
-        #expect(start(.right, window: 520).stepped(20, by: 10) == 20)
     }
 
-    @Test func theLoanAtTheEndIsWhatTheWindowReallyLent() throws {
+    /// The width at the end is what the window really gave: asked for 80
+    /// more, it stops 50 on, and says so late.
+    @Test func theWidthAtTheEndIsWhatTheWindowReallyGave() {
         for side in SidebarSide.allCases {
-            // Snapped to the tile and narrowed by the sidebar's 280. Asked for
-            // 80 more, it stops 50 on, and says so late.
             let drag = start(side)
             var b = Browser(frame: drag.window)
+            let was = edges(side, b.frame, 280)
             _ = step(drag, 80, &b, answers: false)
             b.least = 950
             b.answer()
             if let at = drag.kept(b.frame) { b.frame = at }
-            let width = drag.width(delta: 80, beside: b.frame)
-            #expect(width == 330, "\(side)")
-            let loan = try #require(drag.loan(lent: tile, at: b.frame), "\(side)")
-            #expect(loan.phase == .lent && loan.outer == tile && loan.inner == b.frame && loan.side == side, "\(side)")
-            #expect(loan.taken == width, "\(side)")
-            #expect(loan.givenBack(from: b.frame, screen: tile) == tile, "\(side)")
-            // With room beside it, it had lent nothing: what the drag took is lent now.
-            let fresh = try #require(drag.loan(lent: nil, at: b.frame), "\(side)")
-            #expect(fresh.outer == drag.window && fresh.taken == 50, "\(side)")
-            // Nothing lent before and nothing given: no loan.
-            #expect(drag.loan(lent: nil, at: drag.window) == nil, "\(side)")
+            #expect(drag.width(delta: 80, beside: b.frame) == 330, "\(side)")
+            #expect(edges(side, b.frame, 330) == was, "\(side)")
         }
     }
 }

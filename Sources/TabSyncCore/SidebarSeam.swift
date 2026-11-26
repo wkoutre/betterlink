@@ -60,10 +60,9 @@ public enum SidebarSeam {
         return (CGFloat(WindowCorner.side(radius: radius, scale: scale)) / scale).rounded(.up)
     }
 
-    /// The reach for a sidebar placed at `p`. None when it covers the
-    /// window's edge: no corner of the window meets it there.
+    /// The reach for a sidebar placed at `p`.
     public static func reach(for p: SidebarPlacement, radius: CGFloat) -> CGFloat {
-        p.overlaps ? 0 : reach(radius: radius, scale: p.scale)
+        reach(radius: radius, scale: p.scale)
     }
 
     /// The panel's frame: the sidebar and, on the window's side, `reach`
@@ -85,21 +84,18 @@ public enum SidebarSeam {
     ///
     /// Beside a window: the sidebar's body, its two outer corners drawn as
     /// the window's own corner (`corner.window`), and at the seam the two
-    /// notches (`corner.notch`). Covering a window's edge (`side` nil): the
-    /// body, rounded all round. During a slide: only the strip from `reveal`
+    /// notches (`corner.notch`). During a slide: only the strip from `reveal`
     /// (x in pixels) to the outer edge, no notches. A panel too small for
     /// its corners is a plain rect.
-    public static func mask(width: Int, height: Int, side: SidebarSide?, reach: Int, corner: CornerPixels, reveal: CGFloat?) -> [CGRect] {
+    public static func mask(width: Int, height: Int, side: SidebarSide, reach: Int, corner: CornerPixels, reveal: CGFloat?) -> [CGRect] {
         let w = CGFloat(width), n = corner.side
-        // The body's span, and which of its ends are rounded.
+        // The body's span, and which of its ends (the outer one) is rounded.
         var x0: CGFloat = 0, x1 = w
-        var left = true, right = true
-        if let side {
-            if side == .right { x0 = CGFloat(reach); left = false } else { x1 = w - CGFloat(reach); right = false }
-            if let reveal {
-                if side == .right { x0 = min(max(reveal, 0), w) } else { x1 = min(max(reveal, 0), w) }
-                if x1 - x0 < 1 { return [] }
-            }
+        let left = side == .left, right = side == .right
+        if side == .right { x0 = CGFloat(reach) } else { x1 = w - CGFloat(reach) }
+        if let reveal {
+            if side == .right { x0 = min(max(reveal, 0), w) } else { x1 = min(max(reveal, 0), w) }
+            if x1 - x0 < 1 { return [] }
         }
         guard x1 > x0 else { return [] }
         guard n > 0, height >= 2 * n, x1 - x0 >= CGFloat((left ? n : 0) + (right ? n : 0)) || reveal != nil else {
@@ -143,7 +139,7 @@ public enum SidebarSeam {
         }
         if left { block(corner.window, within: x0, x1) { x0 + CGFloat($0) } }
         if right { block(corner.window, within: x0, x1) { x1 - 1 - CGFloat($0) } }
-        if let side, reveal == nil, reach >= n {
+        if reveal == nil, reach >= n {
             // Pixel `i` of the notch lies `i` pixels into the window from the seam.
             if side == .right { block(corner.notch, within: 0, x0) { x0 - 1 - CGFloat($0) } }
             else { block(corner.notch, within: x1, w) { x1 + CGFloat($0) } }

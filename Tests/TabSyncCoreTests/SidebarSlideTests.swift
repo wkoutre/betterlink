@@ -3,54 +3,13 @@ import Testing
 @testable import TabSyncCore
 
 struct SidebarSlideTests {
-    // Chrome snapped to the left half (0...1028); sidebar 280 on the right.
-    let tile = CGRect(x: 0, y: 0, width: 1028, height: 1259)
-    var shownRight: CGRect { CGRect(x: 0, y: 0, width: 748, height: 1259) }
-
-    @Test func theSeamIsTheComplementOnTheRight() {
+    /// The sidebar's inner edge opens from its outer edge by its width.
+    @Test func theInnerEdgeOpensFromTheOuterEdge() {
         for p in stride(from: 0.0, through: 1.0, by: 0.125) {
-            let f = SidebarSlide.frames(hiddenWindow: tile, shownWindow: shownRight, outerEdge: 1028, width: 280, side: .right, progress: p)
-            #expect(f.window.maxX == f.innerEdge)              // no gap, no overlap
-            #expect(f.window.minX == 0 && f.window.height == 1259)
-            #expect(abs((1028 - f.innerEdge) - 280 * CGFloat(p)) < 1e-9) // sidebar width grows with p
+            #expect(SidebarSlide.innerEdge(outerEdge: 1028, width: 280, side: .right, progress: p) == 1028 - 280 * CGFloat(p))
+            #expect(SidebarSlide.innerEdge(outerEdge: 1028, width: 280, side: .left, progress: p) == 1028 + 280 * CGFloat(p))
         }
-        #expect(SidebarSlide.frames(hiddenWindow: tile, shownWindow: shownRight, outerEdge: 1028, width: 280, side: .right, progress: 0).window == tile)
-        #expect(SidebarSlide.frames(hiddenWindow: tile, shownWindow: shownRight, outerEdge: 1028, width: 280, side: .right, progress: 1).window == shownRight)
-    }
-
-    @Test func theSeamIsTheComplementOnTheLeft() {
-        let right = CGRect(x: 1028, y: 0, width: 1028, height: 1259)  // snapped to the right half
-        let shown = CGRect(x: 1308, y: 0, width: 748, height: 1259)
-        for p in stride(from: 0.0, through: 1.0, by: 0.125) {
-            let f = SidebarSlide.frames(hiddenWindow: right, shownWindow: shown, outerEdge: 1028, width: 280, side: .left, progress: p)
-            #expect(f.window.minX == f.innerEdge)
-            #expect(f.window.maxX == 2056)                     // the window's far edge stays put
-        }
-    }
-
-    /// A window narrowed only to the least the sidebar asks of a browser
-    /// (500 pt) can't keep its far edge: the pair shifts to fit. The slide ends
-    /// exactly on that frame, never narrower than it, the seam tight all along.
-    @Test func aShiftedPairEndsOnTheShownFrame() {
-        let half = CGRect(x: 0, y: 0, width: 748, height: 859)
-        let shownLeft = CGRect(x: 280, y: 0, width: 500, height: 859)
-        let shownRight = CGRect(x: 716, y: 0, width: 500, height: 859)
-        let rightHalf = CGRect(x: 748, y: 0, width: 748, height: 859)
-        for p in stride(from: 0.0, through: 1.0, by: 0.125) {
-            let l = SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: p)
-            #expect(l.window.minX == l.innerEdge && l.window.width >= 500)
-            let r = SidebarSlide.frames(hiddenWindow: rightHalf, shownWindow: shownRight, outerEdge: 1496, width: 280, side: .right, progress: p)
-            #expect(r.window.maxX == r.innerEdge && r.window.width >= 500)
-        }
-        #expect(SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: 1).window == shownLeft)
-        #expect(SidebarSlide.frames(hiddenWindow: rightHalf, shownWindow: shownRight, outerEdge: 1496, width: 280, side: .right, progress: 1).window == shownRight)
-        #expect(SidebarSlide.frames(hiddenWindow: half, shownWindow: shownLeft, outerEdge: 0, width: 280, side: .left, progress: 0).window == half)
-    }
-
-    @Test func aWindowWithoutRoomStaysWhileTheSidebarOpens() {
-        let free = CGRect(x: 200, y: 100, width: 800, height: 700)
-        let f = SidebarSlide.frames(hiddenWindow: free, shownWindow: free, outerEdge: 1280, width: 280, side: .right, progress: 0.5)
-        #expect(f.window == free && f.innerEdge == 1140)
+        #expect(SidebarSlide.innerEdge(outerEdge: 0, width: 280, side: .left, progress: 2) == 280)
     }
 
     @Test func aSlideEasesFromZeroToOne() {

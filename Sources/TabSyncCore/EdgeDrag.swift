@@ -19,11 +19,9 @@ public struct EdgeDrag: Equatable, Sendable {
     public let window: CGRect
     public let width: CGFloat
     public let side: SidebarSide
-    /// The sidebar covers the window's edge: only the sidebar changes.
-    public let covers: Bool
 
-    public init(window: CGRect, width: CGFloat, side: SidebarSide, covers: Bool = false) {
-        self.window = window; self.width = width; self.side = side; self.covers = covers
+    public init(window: CGRect, width: CGFloat, side: SidebarSide) {
+        self.window = window; self.width = width; self.side = side
     }
 
     /// The window's edge away from the sidebar, kept where it is for as long
@@ -33,22 +31,16 @@ public struct EdgeDrag: Equatable, Sendable {
 
     /// The frame to ask the window for when the pointer wants the sidebar
     /// `delta` points wider than it was: the far edge where it is, the rest
-    /// of the pair's width (`SidebarGeometry.resized`). Never below
-    /// `minWindowWidth`, the width browsers are assumed to stop at; what this
-    /// browser does is read off its window. Nil when the window is left alone.
-    public func ask(delta: CGFloat, minWindowWidth: CGFloat = 500) -> CGRect? {
-        if covers { return nil }
-        return SidebarGeometry.resized(window: window, width: width, to: width + delta, side: side,
-                                       minWindowWidth: minWindowWidth).window
+    /// of the pair's width (`SidebarGeometry.resized`). What this browser
+    /// does with it is read off its window.
+    public func ask(delta: CGFloat) -> CGRect? {
+        SidebarGeometry.resized(window: window, width: width, to: width + delta, side: side).window
     }
 
     /// The sidebar's width with the window seen at `real`: the room the
     /// window has made, whatever it was asked, in whole points within the
     /// sidebar's limits.
     public func width(delta: CGFloat, beside real: CGRect) -> CGFloat {
-        if covers {
-            return SidebarGeometry.resized(window: window, width: width, to: width + delta, side: side, minWindowWidth: 0).width
-        }
         let limits = SidebarGeometry.widths
         return min(max((window.width + width - real.width).rounded(), limits.lowerBound), limits.upperBound)
     }
@@ -58,7 +50,6 @@ public struct EdgeDrag: Equatable, Sendable {
     /// left edge, and one that would not narrow may have moved instead. Nil
     /// when it is in place.
     public func kept(_ real: CGRect) -> CGRect? {
-        if covers { return nil }
         var at = real
         at.origin.x = side == .left ? farEdge - real.width : farEdge
         return abs(at.minX - real.minX) < 2 ? nil : at
@@ -79,24 +70,13 @@ public struct EdgeDrag: Equatable, Sendable {
     /// The delta after one more single step of `step` points on a resize
     /// that stands at `delta`: steps taken before the window has answered add
     /// up. Counted from what is asked now, so steps past the sidebar's limits
-    /// or the least width a window is asked for (`minWindowWidth`) don't pile
-    /// up beyond them and one step back is felt at once. A browser's own,
-    /// larger minimum isn't known here: steps past it add up until the wait
-    /// ends, and the next step starts from the window as it is.
-    public func stepped(_ delta: CGFloat, by step: CGFloat, minWindowWidth: CGFloat = 500) -> CGFloat {
+    /// don't pile up beyond them and one step back is felt at once. A
+    /// browser's own minimum isn't known here: steps past it add up until the
+    /// wait ends, and the next step starts from the window as it is.
+    public func stepped(_ delta: CGFloat, by step: CGFloat) -> CGFloat {
         func within(_ d: CGFloat) -> CGFloat {
-            SidebarGeometry.resized(window: window, width: width, to: width + d, side: side,
-                                    minWindowWidth: covers ? 0 : minWindowWidth).width - width
+            SidebarGeometry.resized(window: window, width: width, to: width + d, side: side).width - width
         }
         return within(within(delta) + step)
-    }
-
-    /// What the window has lent once the drag is over, seen at `real`. The
-    /// space it had before (`outer`, when it had lent some already) stays;
-    /// one that had lent nothing lends what the drag took. Nil: nothing
-    /// before, nothing now.
-    public func loan(lent outer: CGRect?, at real: CGRect) -> WidthLoan? {
-        guard outer != nil || real.width < window.width - 2 else { return nil }
-        return .lent(outer: outer ?? window, inner: real, side: side)
     }
 }

@@ -53,9 +53,8 @@ final class SidebarPanel: NSPanel {
     private let tint = NSView()
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
-    private var side: SidebarSide?
+    private var side = SidebarSide.right
     /// How far the panel reaches over the browser window now, in points.
-    /// None while it covers the window's edge.
     private(set) var reach: CGFloat = 0
     /// The corner radius of the window it is beside, and the pixels per point
     /// of the screen it is on.
@@ -114,12 +113,11 @@ final class SidebarPanel: NSPanel {
     }
 
     /// Which side of the browser window the panel is on, reaching `reach`
-    /// over the window, or nil when it covers the window's edge instead (all
-    /// four corners rounded, nothing to fill). `radius`: that window's corner
-    /// radius. `scale`: the pixels per point of its screen.
-    func attach(to side: SidebarSide?, reach: CGFloat, radius: CGFloat, scale: CGFloat) {
+    /// over the window. `radius`: that window's corner radius. `scale`: the
+    /// pixels per point of its screen.
+    func attach(to side: SidebarSide, reach: CGFloat, radius: CGFloat, scale: CGFloat) {
         self.side = side
-        self.reach = side == nil ? 0 : reach
+        self.reach = reach
         self.radius = radius
         self.scale = scale
         // The content keeps to the sidebar: none of it over the window.
@@ -160,7 +158,7 @@ final class SidebarPanel: NSPanel {
     /// The panel's outline in its own bounds, pixel by pixel on a screen with
     /// `scale` pixels per point (`SidebarSeam.mask` says what is in it).
     /// `reveal`: x in the bounds; the content stays anchored and isn't reflowed.
-    static func outline(in b: CGRect, scale: CGFloat, side: SidebarSide?, reach: CGFloat, radius: CGFloat, reveal: CGFloat?) -> CGPath {
+    static func outline(in b: CGRect, scale: CGFloat, side: SidebarSide, reach: CGFloat, radius: CGFloat, reveal: CGFloat?) -> CGPath {
         let key = "\(radius) \(scale)"
         let corner = corners[key] ?? WindowCorner.pixels(radius: radius, scale: scale)
         corners[key] = corner
@@ -185,8 +183,8 @@ final class SidebarPanel: NSPanel {
 
     private static var now: Double { CACurrentMediaTime() }
 
-    /// The side the panel is attached on, nil when it covers the window's edge.
-    var attachedSide: SidebarSide? { side }
+    /// The side of its window the panel is on.
+    var attachedSide: SidebarSide { side }
 
     /// A place among the windows: next to a browser window, by its number.
     struct Place {

@@ -369,27 +369,29 @@ final class SidebarController: ObservableObject {
         updateHotKey()
     }
 
-    /// Records what `window` has lent: only what was really lent (a window
-    /// asked and not narrowed is as it was), and nothing once it has it back.
-    func loanChanged(_ loan: WidthLoan?, of w: TrackedWindow) {
-        if let loan {
-            guard loan.phase == .lent else { return }
-            memory.record(.init(bundleId: w.target.bundleId, window: w.number, inner: loan.inner, outer: loan.outer))
-        } else {
-            memory.forget(window: w.number)
-        }
+    /// Records a window whose sidebar is open: where it is, and the pair's frame.
+    func paired(_ w: TrackedWindow, browser: CGRect, pair: CGRect) {
+        let e = FitMemory.Entry(bundleId: w.target.bundleId, window: w.number, inner: browser, outer: pair)
+        guard memory.fitted(browser, window: w.number) != e else { return }
+        memory.record(e)
         saveMemory()
     }
 
-    /// The record of a window narrowed before (this launch or an earlier one)
-    /// that is still exactly as narrowed.
+    /// The window's sidebar is closed: nothing narrowed to remember.
+    func unpaired(_ w: TrackedWindow) {
+        memory.forget(window: w.number)
+        saveMemory()
+    }
+
+    /// The record of a window whose sidebar was open (this launch or an
+    /// earlier one) that is still where it was.
     func narrowedBefore(_ w: TrackedWindow, at frame: CGRect) -> FitMemory.Entry? { memory.fitted(frame, window: w.number) }
 
     /// A drag gave one window's sidebar this width: windows still to come take
     /// it too, and the others keep theirs, across a relaunch as well.
     func widthChosen(_ w: Double, for i: SidebarInstance) {
         for other in Array(instances.values) + [i] {
-            chosen.set(width: other.width, window: other.window.number, pid: other.window.target.pid)
+            chosen.set(width: other.chosenWidth, window: other.window.number, pid: other.window.target.pid)
         }
         width = w
         defaults.set(w, forKey: "sidebar.width")

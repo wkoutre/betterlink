@@ -36,26 +36,47 @@ enum AXWindow {
         return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 
+    /// Sets only what differs: the size, the position, or (both differing)
+    /// the size and then the position. On macOS 27 each set is animated and
+    /// the next one cuts it short, so where both change and must land,
+    /// `WindowSteps` sends them one at a time instead.
     static func setFrame(_ frame: CGRect, of win: WindowHandle) {
         guard let h = Displays.primaryHeight else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
-        // Size, position, size: macOS limits each step to what fits on screen
-        // at that moment, so a move that needs the new size comes after it.
-        win.setSize(ax.size)
-        win.setPosition(ax.origin)
-        win.setSize(ax.size)
+        let now = Self.frame(of: win)
+        if now.map({ abs($0.width - frame.width) >= 0.5 || abs($0.height - frame.height) >= 0.5 }) ?? true { win.setSize(ax.size) }
+        if now.map({ abs($0.minX - frame.minX) >= 0.5 || abs($0.maxY - frame.maxY) >= 0.5 }) ?? true { win.setPosition(ax.origin) }
     }
 
-    /// One step of a slide, or a narrowing, that keeps the window's far edge
-    /// (the one away from the sidebar, on `side`) where `frame` has it: the
-    /// size, and the position too when it moves (`moveOrigin`), so a frame
-    /// costs one to three Accessibility calls. macOS limits each step to what
-    /// fits on screen, so a growing window moves first and a shrinking one
-    /// resizes first.
-    /// `wasWidth`: how wide the window was before this step, when known. A
-    /// window asked to narrow that hasn't yet isn't moved at all.
-    static func slide(_ win: WindowHandle, to frame: CGRect, side: SidebarSide, moveOrigin: Bool, growing: Bool,
-                      wasWidth: CGFloat? = nil) {
+    /// Sends one of `WindowSteps`' calls.
+    static func send(_ call: WindowSteps.Call, to win: WindowHandle) {
+        guard let h = Displays.primaryHeight else { return }
+        switch call {
+        case .size(let f): win.setSize(f.size)
+        case .position(let f): win.setPosition(SidebarGeometry.ax(fromCocoa: f, mainScreenHeight: h).origin)
+        }
+    }
+
+    /// Moves the window to `frame` one call at a time, each waited for on
+    /// screen, now: for when there is no later (the app quitting). At most
+    /// `WindowSteps.timeout` a call.
+    static func placeNow(_ win: WindowHandle, to frame: CGRect, keep side: SidebarSide?) {
+        var steps = WindowSteps(target: frame, keep: side)
+        let began = CACurrentMediaTime()
+        while !steps.done, CACurrentMediaTime() - began < 4 * WindowSteps.timeout {
+            guard let seen = shownFrame(of: win) ?? Self.frame(of: win) else { return }
+            if let call = steps.step(seen: seen, now: CACurrentMediaTime()) { send(call, to: win) }
+            usleep(10_000)
+        }
+    }
+
+    /// One step of a drag of the sidebar's edge, where the pointer leads each
+    /// step: keeps the window's far edge (the one away from the sidebar, on
+    /// `side`) where `frame` has it. The size, and the position too when it
+    /// moves (`moveOrigin`), so a step costs one to three Accessibility calls.
+    /// macOS limits each step to what fits on screen, so a growing window
+    /// moves first and a shrinking one resizes first.
+    static func slide(_ win: WindowHandle, to frame: CGRect, side: SidebarSide, moveOrigin: Bool, growing: Bool) {
         guard let h = Displays.primaryHeight else { return }
         let ax = SidebarGeometry.ax(fromCocoa: frame, mainScreenHeight: h)
         var origin = ax.origin
@@ -64,16 +85,14 @@ enum AXWindow {
         // The far edge must not move: the origin goes where the width the window
         // really has leaves it. A browser that is slow to narrow (or won't) is
         // then simply not moved yet, never pushed off the screen; one whose
-        // width can't be read now (busy, Accessibility timed out) isn't moved
-        // either. False then.
+        // width can't be read isn't moved either. False then.
         func keepFarEdge() -> Bool {
             guard moveOrigin else { return false }
-            // The far edge is the origin, where asked: only a window that hasn't
-            // narrowed yet keeps its place.
-            if side == .right, growing || wasWidth == nil { return true }
-            guard let real = win.size() else { return false }
-            if !growing, let was = wasWidth, ax.width < was - 0.5, real.width > was - 0.5 { return false }
-            if side == .left { origin.x = ax.maxX - real.width }
+            guard side == .left else { return true } // the far edge is the origin, where asked
+            // The width on screen: Accessibility can read back a size the
+            // browser never took (Nick's Brave on 0.3.18).
+            guard let real = win.shownBounds()?.size ?? win.size() else { return false }
+            origin.x = ax.maxX - real.width
             return true
         }
         if growing {
