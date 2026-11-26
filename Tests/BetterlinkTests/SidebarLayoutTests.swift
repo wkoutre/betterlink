@@ -213,6 +213,24 @@ private nonisolated(unsafe) var made: String?
         #expect(instance.title(of: drawn[5]).text == "Renamed 305")
     }
 
+    /// Saving a tab, from its menu or by dragging it, takes the tab its row
+    /// was made with; after new titles alone that row wasn't made again, and
+    /// the link is saved with the newest title.
+    @Test func aTabSavedAfterNewTitlesIsSavedWithTheNewTitle() throws {
+        try show(profile(favorites: 0))
+        let drawn = (0..<3).map {
+            BrowserTab(id: 400 + $0, windowId: 1, index: $0, title: "Page \($0)", url: "https://page\($0).example/", active: $0 == 0)
+        }
+        instance.show(look(drawn))
+        let renamed = drawn.map { t -> BrowserTab in var t = t; t.title = "Renamed \(t.id)"; return t }
+        instance.show(look(renamed))
+        #expect(instance.current(drawn[2]).title == "Renamed 402")
+        #expect(SidebarView.saved(instance.current(drawn[2])).title == "Renamed 402")
+        // A tab no longer in the window is as it was.
+        let gone = BrowserTab(id: 999, windowId: 1, index: 9, title: "Gone", url: "https://gone.example/")
+        #expect(instance.current(gone) == gone)
+    }
+
     private func look(_ tabs: [BrowserTab]) -> SidebarLook {
         var session = BrowserSession(socketPath: "/layout-test")
         var snapshot = Inbound(type: "snapshot")
