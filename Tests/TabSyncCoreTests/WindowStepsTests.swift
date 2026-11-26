@@ -90,7 +90,7 @@ import Testing
             }
             t += 1.0 / 120
         }
-        #expect(s.stoppedShort && calls.count == 1 && t < WindowSteps.still + 0.05, "\(calls) in \(t) s")
+        #expect(s.stoppedShort && t < 2 * WindowSteps.still + 0.05, "\(calls) in \(t) s")
     }
 
     /// Someone else moves the window while a call of a show or hide is out:
@@ -191,6 +191,42 @@ import Testing
         }
         #expect(w == full, "\(w)")
         #expect(t <= 2 * WindowSteps.timeout + 0.05, "the re-send waited \(t) s")
+    }
+
+    /// Review of 596bc4e, F1, the reviewer's probe: an animated narrowing
+    /// that stands still partway (2056 to 1900 in 0.1 s, still until
+    /// 0.35 s, on to 1776 by 0.45 s) has not stopped short: the steps end
+    /// where they were asked, not at 1900.
+    @Test func aHoldPartwayIsNotAStopShort() {
+        let target = CGRect(x: 280, y: 0, width: 1776, height: 1290)
+        var s = WindowSteps(target: target, keep: .left, widest: full.width - 200, deadline: 3)
+        var w = full, t = 0.0, sizeAt: Double?
+        while !s.done, t < 3.5 {
+            if let a = sizeAt {
+                let u = t - a
+                let width: CGFloat = u < 0.1 ? 2056 - 1560 * CGFloat(u) : (u < 0.35 ? 1900 : max(1776, 1900 - 1240 * CGFloat(u - 0.35)))
+                w.size.width = width.rounded()
+            }
+            if let c = s.step(seen: w, now: t) {
+                if case .size = c, sizeAt == nil { sizeAt = t }
+                if case .position(let f) = c { w.origin.x = f.minX; sizeAt = nil }
+            }
+            t += 1.0 / 120
+        }
+        #expect(!s.stoppedShort && !s.capped && w == target, "stopped short \(s.stoppedShort), at \(w)")
+    }
+
+    /// A size that stops short and stays there, sent once more, has stopped:
+    /// the steps end within two waits of `still`, never at the deadline.
+    @Test func aStopShortIsCheckedOnceThenTaken() {
+        let start = CGRect(x: 1256, y: 0, width: 800, height: 1259)
+        var s = WindowSteps(target: CGRect(x: 1536, y: 0, width: 520, height: 1259), keep: .left, widest: 600, deadline: 3)
+        var w = start, t = 0.0, sizes = 0
+        while !s.done, t < 3.5 {
+            if let c = s.step(seen: w, now: t), case .size(let f) = c { sizes += 1; w.size.width = max(615, f.width) }
+            t += 1.0 / 120
+        }
+        #expect(s.stoppedShort && sizes == 2 && t < 2 * WindowSteps.still + 0.05, "\(sizes) sizes, done at \(t)")
     }
 
     @Test func nothingToDoSendsNothing() {
