@@ -584,6 +584,27 @@ final class SidebarRig {
         rest()
     }
 
+    /// The person steps the sidebar's edge without a pointer (VoiceOver's
+    /// increment, or the keyboard): each of `steps` (points) `every` seconds
+    /// apart, the browser answering tick by tick meanwhile; then the step's
+    /// wait (`EdgeDrag.answerWait`) runs out, as its timer would, and the
+    /// window rests.
+    func personSteps(_ steps: [CGFloat], every: Double) {
+        fake.sliding = true
+        for s in steps {
+            instance.nudge(by: s)
+            let until = time + every
+            while time < until { tick() }
+        }
+        let until = time + EdgeDrag.answerWait
+        while time < until { tick() }
+        instance.dragEnded()
+        var frames = 0
+        while instance.sliding, frames < 2000 { tick(); frames += 1 }
+        fake.sliding = false
+        rest()
+    }
+
     /// The person (or a window-snapping tool) moves the sidebar itself by `dx`.
     func personMovesSidebar(by dx: CGFloat) {
         guard let panel = instance.panel else { return }
@@ -1249,6 +1270,32 @@ struct GuardCase: CustomStringConvertible {
                 let f = rig.fake.frame.offsetBy(dx: 40, dy: 0)
                 rig.personSets(f)
                 #expect(GuardFrames.same(rig.fake.frame, f), "\(b), moved at \(at) s, then to \(f): window at \(rig.fake.frame)")
+            }
+        }
+    }
+
+    /// PR 83's accessibility steps of the edge (VoiceOver's increment, 10 pt
+    /// each, about 55 ms apart, held past the limit), with the sidebar on the
+    /// left of a browser that takes 30 to 100 ms per call: each step adds to
+    /// the width last asked, none is lost to a call still out, and they reach
+    /// the 440 pt limit; one step back gives 430. Live at 9eb0125 they ended at
+    /// 360 (Chrome for Testing) and 390 (Brave) on the left, 440 on the right.
+    @Test func edgeStepsAddUpOnEitherSide() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let window = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        for side in SidebarSide.allCases {
+            let late = [0.03, 0.04, 0.05, 0.1].map { BrowserBehaviour(timing: .late, lateBy: $0) }
+            for b in late + [BrowserBehaviour(), BrowserBehaviour(animation: 0.25)] {
+                let rig = SidebarRig(displays: [screen], frame: window, side: side, width: 280, behaviour: b)
+                rig.toggle()
+                #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(side) \(b): \(rig.sidebarWidth)")
+                rig.personSteps(Array(repeating: 10, count: 18), every: 0.055)
+                #expect(abs(rig.sidebarWidth - 440) < 2, "\(side) \(b): 18 steps of 10 ended at \(rig.sidebarWidth)")
+                #expect(GuardFrames.same(rig.pair, window), "\(side) \(b): the pair at \(rig.pair)")
+                rig.personSteps([-10], every: 0.055)
+                #expect(abs(rig.sidebarWidth - 430) < 2, "\(side) \(b): one step back ended at \(rig.sidebarWidth)")
+                #expect(GuardFrames.same(rig.pair, window), "\(side) \(b): the pair at \(rig.pair)")
             }
         }
     }

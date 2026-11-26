@@ -18,13 +18,12 @@ final class SidebarNoticeWindow {
     func show(_ text: String, over window: CGRect) {
         generation += 1
         let mine = generation
-        let host = NSHostingView(rootView: SidebarNoticeView(text: text))
-        host.layoutSubtreeIfNeeded()
+        let host = Self.host(text)
         let p = panel ?? makePanel()
         p.contentView = host
         let display = NSScreen.screens.max { $0.frame.intersection(window).area < $1.frame.intersection(window).area }
         guard let visible = display?.visibleFrame else { return }
-        let final = SidebarNotice.frame(size: host.fittingSize, window: window, visible: visible)
+        let final = SidebarNotice.frame(size: Self.size(of: host), window: window, visible: visible)
         let still = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         p.setFrame(final.offsetBy(dx: 0, dy: still ? 0 : 6), display: false)
         p.alphaValue = 0
@@ -46,6 +45,15 @@ final class SidebarNoticeWindow {
             })
         }
     }
+
+    static func host(_ text: String) -> NSHostingView<some View> {
+        let host = NSHostingView(rootView: SidebarNoticeView(text: text))
+        host.layoutSubtreeIfNeeded()
+        return host
+    }
+
+    /// The panel's size for the note: the capsule's.
+    static func size(of host: NSView) -> CGSize { host.fittingSize }
 
     private func makePanel() -> NSPanel {
         let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: true)
