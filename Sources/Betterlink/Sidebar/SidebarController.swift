@@ -283,6 +283,7 @@ final class SidebarController: ObservableObject {
         // Minimized, full screen or hidden, or back: its sidebar goes or comes.
         // Else it only moved, and the panel with it.
         if was.fullScreen != t.fullScreen || was.minimized != t.minimized || was.appHidden != t.appHidden {
+            if was.fullScreen != t.fullScreen { i.readCorner(t.fullScreen ? "full screen" : "out of full screen") }
             tracker.orderMayHaveChanged()
         } else {
             i.follow()

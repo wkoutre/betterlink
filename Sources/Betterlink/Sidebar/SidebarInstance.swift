@@ -48,6 +48,37 @@ final class SidebarInstance: ObservableObject {
         self.width = width
         rest = window.target.frame
         reported = window.target
+        cornerDisplay = display(for: rest).flatMap(Self.number)
+        readCorner("followed")
+    }
+
+    // MARK: - The window's corner
+
+    /// The radius of this window's corners: what the seam's notches and the
+    /// sidebar's outer corners are cut for. From the window server
+    /// (`WindowServer.cornerRadius`), or the fallback when it can't say.
+    private(set) var cornerRadius = SidebarSeam.fallbackRadius
+    /// The display the window was on when its corner was last read.
+    private var cornerDisplay: CGDirectDisplayID?
+
+    private static func number(_ screen: NSScreen) -> CGDirectDisplayID? {
+        (screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+    }
+
+    /// Asks the window server once: when the window is first followed, and
+    /// when it leaves or enters full screen or comes to rest on another
+    /// display. Never per frame or on a timer.
+    func readCorner(_ why: String) {
+        let began = CACurrentMediaTime()
+        let read = WindowServer.cornerRadius(window.number)
+        let ms = (CACurrentMediaTime() - began) * 1000
+        let radius = read ?? SidebarSeam.fallbackRadius
+        DragTrace.log(String(format: "corner: window %u (%@) radius %.2f pt %@, read in %.3f ms (%@)", window.number, window.target.appName, Double(radius),
+                             read != nil ? "from the window server"
+                                 : "the fallback: " + (WindowServer.cornersUnreadBecause ?? "the window server gave no radius between 4 and 40 pt"), ms, why))
+        guard radius != cornerRadius else { return }
+        cornerRadius = radius
+        follow() // a panel on screen takes the new shape now
     }
 
     /// The window is no longer followed: its sidebar goes. One that closed
@@ -182,21 +213,18 @@ final class SidebarInstance: ObservableObject {
         let f = SidebarSlide.frames(hiddenWindow: run.hiddenWindow, shownWindow: run.shownWindow,
                                     outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: p)
         var seam = f.innerEdge
-        // The window's seam edge: where it rests, or where it really is.
-        var windowEdge = run.side == .left ? run.shownWindow.minX : run.shownWindow.maxX
         if run.fitted {
             // Hiding widens the window; showing narrows it.
             AXWindow.slide(window.element, to: f.window, moveOrigin: run.side == .left,
                            growing: run.slide.phase == .hiding || run.slide.phase == .hidden)
             if let real = WindowServer.frame(window.number) {
                 let edge = run.side == .left ? real.minX : real.maxX
-                windowEdge = edge
                 run.worstGap = max(run.worstGap, abs(edge - f.innerEdge))
                 seam = SidebarSlide.seam(windowEdge: edge, innerEdge: f.innerEdge,
                                          hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
             }
         }
-        panel.reveal = SidebarSeam.reveal(seam: seam, windowEdge: windowEdge, overlap: panel.overlap, side: run.side)
+        panel.reveal = seam
         run.frames += 1
         if run.slide.done(at: now) {
             run.slide.settle(at: now)
@@ -298,6 +326,11 @@ final class SidebarInstance: ObservableObject {
     /// The window came to rest: make the pair fill the space the window was given.
     func settle(_ t: WindowTracker.Target) {
         rest = t.frame
+        let on = display(for: t.frame).flatMap(Self.number)
+        if on != cornerDisplay {
+            cornerDisplay = on
+            readCorner("another display")
+        }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
         if let r = refused, !Self.same(r, t.frame) { refused = nil }
         let screen = screen(for: t.frame)
@@ -485,11 +518,8 @@ final class SidebarInstance: ObservableObject {
     /// that isn't showing too.
     func follow() {
         // A slide places the panel itself, frame by frame.
-        guard slideRun == nil, let panel, panel.isVisible else { return }
-        let was = panel.attachedSide
+        guard slideRun == nil, panel?.isVisible == true else { return }
         placePanel(placement(beside: window.target.frame))
-        // From beside the window to over its edge, or back: under it or on top.
-        if isShown, (panel.attachedSide == nil) != (was == nil) { panel.order(at: place(panel)) }
     }
 
     /// Shows the panel in its place, lets it sleep on its window's Space, or
@@ -538,11 +568,14 @@ final class SidebarInstance: ObservableObject {
         let fresh = self.panel == nil
         let panel = self.panel ?? makePanel()
         let attached: SidebarSide? = p.overlaps ? nil : p.side
-        // Beside the window, the panel reaches under the window's edge, past
-        // its rounded corners (SidebarSeam), so it is that much wider.
-        let overlap = SidebarSeam.overlap(for: p, cornerExtent: SidebarPanel.reach)
-        if fresh || panel.attachedSide != attached || panel.overlap != overlap { panel.attach(to: attached, overlap: overlap) }
-        let frame = SidebarSeam.panel(for: p, overlap: overlap)
+        // Beside the window, the panel reaches over the window's rounded
+        // corners to fill what they leave open (SidebarSeam), so it is that
+        // much wider.
+        let reach = SidebarSeam.reach(for: p, radius: cornerRadius)
+        if fresh || panel.attachedSide != attached || panel.reach != reach || panel.radius != cornerRadius || panel.scale != p.scale {
+            panel.attach(to: attached, reach: reach, radius: cornerRadius, scale: p.scale)
+        }
+        let frame = SidebarSeam.panel(for: p, reach: reach)
         // Set first: the move notifications arrive inside setFrame.
         placedPanelFrame = frame
         let was = panel.frame
@@ -554,7 +587,7 @@ final class SidebarInstance: ObservableObject {
         }
         if DragTrace.enabled, panel.frame != was, !tracker.isDragging(window) {
             DragTrace.log("place: window \(window.number) reported \(window.target.frame), on screen \(WindowServer.frame(window.number).map { "\($0)" } ?? "?"), "
-                + "panel asked \(frame) got \(panel.frame), scale \(p.scale), under the window \(overlap) pt, \(attached == nil ? "over its edge" : "beside it")")
+                + "panel asked \(frame) got \(panel.frame), scale \(p.scale), over the window \(reach) pt, \(attached == nil ? "covering its edge" : "beside it")")
         }
         return panel
     }
@@ -565,7 +598,8 @@ final class SidebarInstance: ObservableObject {
         host.sizingOptions = []
         let panel = SidebarPanel(contentView: host)
         panel.setTint(tint)
-        panel.onClick = { [weak self] in self?.pressed() }
+        // A press brings the panel in front of every window: back to its place.
+        panel.onClick = { [weak self] in self?.tracker.orderMayHaveChanged() }
         self.panel = panel
         for name in [NSWindow.didMoveNotification, NSWindow.didResizeNotification] {
             panelTokens.append(NotificationCenter.default.addObserver(forName: name, object: panel, queue: .main) { [weak self] _ in
@@ -573,14 +607,6 @@ final class SidebarInstance: ObservableObject {
             })
         }
         return panel
-    }
-
-    /// A press brings the panel in front of every window: back to its place
-    /// at once (in front of its window it covers the window's edge), and
-    /// every sidebar is looked at again.
-    private func pressed() {
-        if let panel, panel.isVisible { panel.order(at: place(panel)) }
-        tracker.orderMayHaveChanged()
     }
 
     // MARK: - Moved from outside

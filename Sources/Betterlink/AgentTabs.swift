@@ -252,6 +252,9 @@ extension AgentCommand {
             "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
+            // False: this macOS doesn't tell a window's corner radius (or wasn't checked to), and every
+            // sidebar is cut for a 20 pt corner (SidebarSeam.fallbackRadius).
+            "readsWindowCorners": WindowServer.readsCorners,
             "browsers": (d.array(forKey: "sidebar.browsers") as? [String]).map { Browser.sidebarHosts($0).sorted() }
                 // Until changed, every installed browser the sidebar can attach to (SidebarController.defaultBrowsers).
                 ?? Browser.known.filter { $0.hostsSidebar

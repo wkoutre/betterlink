@@ -7,10 +7,11 @@ public enum SidebarPresence {
 
     /// Where the panel sits among the windows: next to its browser window, so
     /// whatever covers that window covers it too. `attached`: beside the
-    /// window, where it lies under it, so the window's rounded corners are
-    /// drawn over the sidebar (SidebarSeam). Covering the window's edge
-    /// instead, it can only be seen on top.
-    public static func relation(attached: Bool) -> Relation { attached ? .below : .above }
+    /// window rather than covering its edge. Above either way: covering the
+    /// edge, only above can be seen; beside the window, the window's shadow
+    /// would fall across a panel under it (measured: the sidebar 15 to 32
+    /// percent darker along the seam), and the pair reads as one window.
+    public static func relation(attached: Bool) -> Relation { .above }
 
     public enum Decision: Equatable, Sendable {
         /// Out of sight.

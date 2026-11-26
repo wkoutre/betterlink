@@ -54,69 +54,170 @@ struct SidebarSeamTests {
         #expect(s.minY == -40 && s.maxY == 1260)
     }
 
-    @Test func thePanelReachesUnderTheWindowPastItsCornerInWholePixels() {
-        for scale in scales {
-            for extent in [CGFloat(18.24), 24.5, 25, 39.75] {
-                let o = SidebarSeam.overlap(cornerExtent: extent, scale: scale)
-                #expect(o >= extent && o < extent + 1 / scale, "scale \(scale) extent \(extent): \(o)")
-                #expect(pixel(o, scale).off < 1e-6, "scale \(scale) extent \(extent): \(o)")
-            }
-        }
-        #expect(SidebarSeam.overlap(cornerExtent: 39.75, scale: 1) == 40)
-        #expect(SidebarSeam.overlap(cornerExtent: 18.24, scale: 2) == 18.5)
+    // MARK: - The window's corner radius
+
+    /// What the window server says is used only when it is a radius a window
+    /// can have: anything else means the call no longer says what it did.
+    @Test func onlyASaneRadiusIsTakenFromTheWindowServer() {
+        for r in [CGFloat(4), 10, 16, 20, 26, 40] { #expect(SidebarSeam.radius(reported: r) == r) }
+        for r in [CGFloat(0), -3, 3.9, 40.1, 60, 1e9, .infinity, .nan] { #expect(SidebarSeam.radius(reported: r) == nil, "\(r)") }
+        #expect(SidebarSeam.radius(reported: nil) == nil)
     }
 
-    @Test func besideTheWindowThePanelLiesUnderItsEdgeOnEitherSide() {
+    /// Chrome's and Brave's windows read 20 on macOS 26.5.2, the only macOS
+    /// the call was verified on.
+    @Test func theFallbackIsChromesRadiusAndOnlyMacOS26IsTrusted() {
+        #expect(SidebarSeam.fallbackRadius == 20)
+        #expect(SidebarSeam.radius(reported: SidebarSeam.fallbackRadius) == 20)
+        #expect(SidebarSeam.verifiedSystems == [26])
+    }
+
+    // MARK: - How far the panel reaches over the window
+
+    /// As far as the corner's pixels go, in whole points: AppKit keeps a
+    /// window's frame on whole points.
+    @Test func thePanelReachesOverTheWholeCornerInWholePoints() {
+        for scale in scales {
+            for radius in [CGFloat(10), 16, 20, 26, 40] {
+                let reach = SidebarSeam.reach(radius: radius, scale: scale)
+                let corner = CGFloat(WindowCorner.pixels(radius: radius, scale: scale).side) / scale
+                #expect(reach >= corner && reach < corner + 1, "radius \(radius) at \(scale)x: \(reach) for \(corner)")
+                #expect(reach == reach.rounded())
+            }
+        }
+        #expect(SidebarSeam.reach(radius: 20, scale: 2) == 31)
+        #expect(SidebarSeam.reach(radius: 16, scale: 2) == 25)
+        #expect(SidebarSeam.reach(radius: 26, scale: 2) == 41)
+    }
+
+    @Test func besideTheWindowThePanelReachesOverItsEdgeOnEitherSide() {
         let win = CGRect(x: 400, y: 31, width: 1200, height: 900)
         let right = SidebarGeometry.place(window: win, screen: screen, width: 280, side: .right, scale: 2)
-        let o = SidebarSeam.overlap(for: right, cornerExtent: 39.75)
-        #expect(o == 40)
-        // From 40 pt inside the window's right edge to the sidebar's outer edge.
-        #expect(SidebarSeam.panel(for: right, overlap: o) == CGRect(x: 1560, y: 31, width: 320, height: 900))
+        let reach = SidebarSeam.reach(for: right, radius: 20)
+        #expect(reach == 31)
+        // From 31 pt inside the window's right edge to the sidebar's outer edge.
+        #expect(SidebarSeam.panel(for: right, reach: reach) == CGRect(x: 1569, y: 31, width: 311, height: 900))
         let left = SidebarGeometry.place(window: win, screen: screen, width: 280, side: .left, scale: 2)
-        // From the sidebar's outer edge to 40 pt inside the window's left edge.
-        #expect(SidebarSeam.panel(for: left, overlap: SidebarSeam.overlap(for: left, cornerExtent: 39.75)) == CGRect(x: 120, y: 31, width: 320, height: 900))
+        // From the sidebar's outer edge to 31 pt inside the window's left edge.
+        #expect(SidebarSeam.panel(for: left, reach: SidebarSeam.reach(for: left, radius: 20)) == CGRect(x: 120, y: 31, width: 311, height: 900))
         // Top and bottom stay the window's.
         for p in [right, left] {
-            let f = SidebarSeam.panel(for: p, overlap: o)
+            let f = SidebarSeam.panel(for: p, reach: reach)
             #expect(f.minY == win.minY && f.maxY == win.maxY)
         }
     }
 
-    @Test func thePanelsOverlapIsInThePixelsOfItsScreen() {
-        let win = CGRect(x: 400 / 1.5, y: 31, width: 1200, height: 900)
-        let p = SidebarGeometry.place(window: win, screen: screen, width: 280, side: .right, scale: 1.5)
-        let o = SidebarSeam.overlap(for: p, cornerExtent: 39.75)
-        #expect(o == 60 / 1.5)
-        let f = SidebarSeam.panel(for: p, overlap: o)
-        #expect(pixel(f.minX, 1.5).off < 1e-6 && pixel(f.maxX, 1.5).off < 1e-6)
-        #expect(abs((p.sidebar.minX - f.minX) - o) < 1e-9)
-    }
-
-    /// The browser would not make room: the panel covers its edge. Nothing
-    /// to reach under, and only on top of the window can it be seen.
-    @Test func coveringTheWindowsEdgeThePanelReachesUnderNothingAndStaysAbove() {
+    /// The browser would not make room: the panel covers its edge. No corner
+    /// of the window to fill there.
+    @Test func coveringTheWindowsEdgeThePanelReachesOverNothing() {
         let p = SidebarGeometry.place(window: screen, screen: screen, width: 280, side: .right, keepOnScreen: true, scale: 2)
         #expect(p.overlaps)
-        #expect(SidebarSeam.overlap(for: p, cornerExtent: 39.75) == 0)
-        #expect(SidebarSeam.panel(for: p, overlap: 0) == CGRect(x: 1776, y: 0, width: 280, height: 1259))
-        #expect(SidebarPresence.relation(attached: !p.overlaps) == .above)
+        #expect(SidebarSeam.reach(for: p, radius: 20) == 0)
+        #expect(SidebarSeam.panel(for: p, reach: 0) == CGRect(x: 1776, y: 0, width: 280, height: 1259))
     }
 
-    /// During a slide the panel shows from the seam outwards. While the seam
-    /// is the window's own edge, it shows the overlap under the window too,
-    /// so the window's corners stay filled as it moves.
-    @Test func aSlideOpensThePanelFromUnderTheWindowsEdge() {
-        #expect(SidebarSeam.reveal(seam: 900, windowEdge: 900, overlap: 40, side: .right) == 860)
-        #expect(SidebarSeam.reveal(seam: 500, windowEdge: 500, overlap: 40, side: .left) == 540)
-        #expect(SidebarSeam.reveal(seam: 900.2, windowEdge: 900, overlap: 40, side: .right) == 860.2)
+    // MARK: - The panel's shape, pixel by pixel
+
+    /// How much of each pixel a list of rects covers, `w` by `h` pixels, row 0 at the top.
+    private func drawn(_ rects: [CGRect], _ w: Int, _ h: Int) -> [[Double]] {
+        var g = Array(repeating: Array(repeating: 0.0, count: w), count: h)
+        for r in rects {
+            for j in max(0, Int(r.minY.rounded(.down)))..<min(h, Int(r.maxY.rounded(.up))) {
+                let dy = min(r.maxY, CGFloat(j + 1)) - max(r.minY, CGFloat(j))
+                for i in max(0, Int(r.minX.rounded(.down)))..<min(w, Int(r.maxX.rounded(.up))) {
+                    let dx = min(r.maxX, CGFloat(i + 1)) - max(r.minX, CGFloat(i))
+                    if dx > 0, dy > 0 { g[j][i] += Double(dx * dy) }
+                }
+            }
+        }
+        return g
     }
 
-    /// The sidebar's edge ahead of the window (one that stays put, or lent
-    /// less than the sidebar is wide): nothing more of it shows in the open.
-    @Test func aSlideAheadOfTheWindowShowsNoMoreThanTheSidebar() {
-        #expect(SidebarSeam.reveal(seam: 1040, windowEdge: 900, overlap: 40, side: .right) == 1040)
-        #expect(SidebarSeam.reveal(seam: 360, windowEdge: 500, overlap: 40, side: .left) == 360)
-        #expect(SidebarSeam.reveal(seam: 1040, windowEdge: nil, overlap: 40, side: .right) == 1040)
+    private let corner = WindowCorner.pixels(radius: 20, scale: 2)
+    private let w = 622, h = 400, reach = 62 // a 280 pt sidebar reaching 31 pt over its window, at 2x
+
+    private func expectSame(_ a: Double, _ b: Double, _ what: String) { #expect(abs(a - b) < 1e-9, "\(what): \(a) for \(b)") }
+
+    /// Sidebar on the right, the window to its left: the seam is `reach`
+    /// pixels in. Its body is filled, its two outer corners are the window's
+    /// own corner mirrored, the seam's two notches are the corner's fill, and
+    /// the rest of the strip over the window is clear, so a click there is
+    /// the window's.
+    @Test func besideAWindowThePanelIsItsBodyItsOuterCornersAndTheSeamsNotches() {
+        let n = corner.side
+        for side in SidebarSide.allCases {
+            let rects = SidebarSeam.mask(width: w, height: h, side: side, reach: reach, corner: corner, reveal: nil)
+            let g = drawn(rects, w, h)
+            // Column `i` pixels from the outer edge, and from the seam into the window.
+            let outer = { (i: Int) in side == .right ? self.w - 1 - i : i }
+            let over = { (i: Int) in side == .right ? self.reach - 1 - i : self.w - self.reach + i }
+            for j in 0..<n {
+                for i in 0..<n {
+                    for row in [j, h - 1 - j] {
+                        expectSame(g[row][outer(i)], corner.window[j][i], "\(side) outer corner \(i), \(j)")
+                        expectSame(g[row][over(i)], corner.notch[j][i], "\(side) notch \(i), \(j)")
+                    }
+                }
+            }
+            // Between the corners: all of the body, none of the strip.
+            for row in [n, h / 2, h - 1 - n] {
+                for i in 0..<(w - reach) { expectSame(g[row][outer(i)], 1, "\(side) body \(i)") }
+                for i in 0..<reach { expectSame(g[row][over(i)], 0, "\(side) strip \(i)") }
+            }
+            for i in n..<(w - reach) { expectSame(g[0][outer(i)], 1, "\(side) top edge \(i)") }
+        }
+    }
+
+    /// No rect leaves the panel, and each lies on whole pixel rows: only its
+    /// width says how much of a pixel is covered.
+    @Test func theShapeIsWholePixelRowsInsideThePanel() {
+        for side in [SidebarSide.left, .right, nil] {
+            for reveal in [nil, CGFloat(200.5)] {
+                for r in SidebarSeam.mask(width: w, height: h, side: side, reach: side == nil ? 0 : reach, corner: corner, reveal: reveal) {
+                    #expect(r.minX >= 0 && r.maxX <= CGFloat(w) && r.minY >= 0 && r.maxY <= CGFloat(h), "\(r)")
+                    #expect(r.minY == r.minY.rounded() && r.maxY == r.maxY.rounded() && r.width > 0 && r.height > 0, "\(r)")
+                }
+            }
+        }
+    }
+
+    @Test func coveringAWindowsEdgeThePanelIsRoundedAllRound() {
+        let n = corner.side, g = drawn(SidebarSeam.mask(width: 560, height: h, side: nil, reach: 0, corner: corner, reveal: nil), 560, h)
+        for j in 0..<n {
+            for i in 0..<n {
+                for (row, col) in [(j, i), (j, 559 - i), (h - 1 - j, i), (h - 1 - j, 559 - i)] { expectSame(g[row][col], corner.window[j][i], "corner \(i), \(j)") }
+            }
+        }
+        expectSame(g[h / 2][0], 1, "left edge")
+        expectSame(g[h / 2][559], 1, "right edge")
+    }
+
+    /// During a slide only the strip from the line to the outer edge shows:
+    /// its outer corners rounded, square at the line, and no notches (the
+    /// window is not at the seam yet).
+    @Test func aSlideShowsOnlyTheStripOutwardsFromItsLine() {
+        let n = corner.side
+        let right = drawn(SidebarSeam.mask(width: w, height: h, side: .right, reach: reach, corner: corner, reveal: 300), w, h)
+        expectSame(right[h / 2][299], 0, "inside the line")
+        expectSame(right[h / 2][300], 1, "outside the line")
+        expectSame(right[0][300], 1, "square at the line")
+        expectSame(right[0][w - 1], 0, "rounded outside")
+        expectSame(right[5][w - 1 - 3], corner.window[5][3], "the outer corner")
+        for j in 0..<n { for i in 0..<reach { expectSame(right[j][i], 0, "no notch \(i), \(j)") } }
+        let left = drawn(SidebarSeam.mask(width: w, height: h, side: .left, reach: reach, corner: corner, reveal: 250.5), w, h)
+        expectSame(left[h / 2][249], 1, "outside the line")
+        expectSame(left[h / 2][250], 0.5, "the line's own pixel")
+        expectSame(left[h / 2][251], 0, "inside the line")
+        expectSame(left[h - 1][0], 0, "rounded outside")
+        // Nothing yet: the line is at the outer edge.
+        #expect(SidebarSeam.mask(width: w, height: h, side: .right, reach: reach, corner: corner, reveal: CGFloat(w)).isEmpty)
+        #expect(SidebarSeam.mask(width: w, height: h, side: .left, reach: reach, corner: corner, reveal: 0).isEmpty)
+    }
+
+    /// A panel too small for its corners is still filled, square.
+    @Test func aPanelSmallerThanItsCornersIsAPlainRect() {
+        let g = drawn(SidebarSeam.mask(width: 80, height: 60, side: nil, reach: 0, corner: corner, reveal: nil), 80, 60)
+        expectSame(g[0][0], 1, "corner")
+        expectSame(g[30][40], 1, "middle")
     }
 }
