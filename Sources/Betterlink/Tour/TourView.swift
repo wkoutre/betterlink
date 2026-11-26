@@ -232,7 +232,8 @@ struct TourCommandHint: View {
                 Text(cli)
                     .font(DS.TextStyle.code)
                     .foregroundStyle(DS.Palette.textTertiary)
-                    .lineLimit(1).truncationMode(.middle)
+                    // A long command shrinks a little before it loses its middle.
+                    .lineLimit(1).minimumScaleFactor(0.85).truncationMode(.middle)
                     .textSelection(.enabled)
                 Button {
                     NSPasteboard.general.clearContents()
@@ -313,6 +314,9 @@ private struct TourTopicCard: View {
                 Image(systemName: opened ? "checkmark" : "chevron.right")
                     .font(.system(size: 10, weight: .bold))
                     .foregroundStyle(opened ? DS.Palette.success : DS.Palette.textTertiary)
+                    // One width for both symbols, so a card's words don't
+                    // rewrap or cut off once it has been opened.
+                    .frame(width: 8)
                     .accessibilityLabel(opened ? "Seen" : "")
             }
             .padding(.horizontal, DS.Space.space3)
