@@ -23,25 +23,22 @@ enum TabStripTakeover {
         // A browser without the item (Arc, Dia) can't be taken over: its window is not walked.
         guard items.show != nil else { return TabStripReading(tabs: nil, toolbar: nil, tabHeight: nil, show: nil, collapse: nil) }
         var groups: [(frame: CGRect, tabHeight: CGFloat)] = [], toolbars: [CGRect] = []
-        var seen = 0
-        // The browser's own chrome is a few hundred elements; pages are skipped.
-        func walk(_ e: AXUIElement, _ depth: Int) {
-            seen += 1
-            guard depth < 14, seen < 1500 else { return }
-            // Role and children in one round trip to the browser.
-            let (role, children) = roleAndChildren(e)
-            if role == "AXWebArea" { return }
+        // The walk that also says what kind of window it is (ChromeWalk): the
+        // browser's own chrome, a few hundred elements at most, pages skipped.
+        let walk = ChromeWalk()
+        let read = walk.run(window) { role, e, children in
+            guard let f = frame(e) else { return true }
             if role == kAXTabGroupRole as String {
-                if let f = frame(e), let h = firstTabHeight(in: e, depth: 0) { groups.append((f, h)) }
-                return
+                var height: CGFloat = 0
+                let tab = walk.firstTab(in: children) { height = frame($0)?.height ?? 0; return height > 0 }
+                if tab != nil { groups.append((f, height)) }
+            } else if holdsTextField(e, depth: 0) {
+                toolbars.append(f)
             }
-            if role == kAXToolbarRole as String {
-                if let f = frame(e), holdsTextField(e, depth: 0) { toolbars.append(f) }
-                return
-            }
-            for c in children { walk(c, depth + 1) }
+            return true
         }
-        walk(window, 0)
+        // A browser that stopped answering partway was not seen whole.
+        if !read { groups = []; toolbars = [] }
         // Exactly one of each, or it isn't known which is the window's own.
         return TabStripReading(tabs: groups.count == 1 ? groups[0].frame : nil, toolbar: toolbars.count == 1 ? toolbars[0] : nil,
                                tabHeight: groups.count == 1 ? groups[0].tabHeight : nil,
@@ -67,15 +64,6 @@ enum TabStripTakeover {
         return (item(TabStripMenu.showVertically), item(TabStripMenu.collapse))
     }
 
-    private static func firstTabHeight(in e: AXUIElement, depth: Int) -> CGFloat? {
-        guard depth < 6 else { return nil }
-        for c in children(e) {
-            if (copy(c, kAXSubroleAttribute as String) as String?) == "AXTabButton", let f = frame(c), f.height > 0 { return f.height }
-            if let h = firstTabHeight(in: c, depth: depth + 1) { return h }
-        }
-        return nil
-    }
-
     private static func holdsTextField(_ e: AXUIElement, depth: Int) -> Bool {
         guard depth < 6 else { return false }
         return children(e).contains {
@@ -88,13 +76,6 @@ enum TabStripTakeover {
         var origin = CGPoint.zero, size = CGSize.zero
         guard AXValueGetValue(p, .cgPoint, &origin), AXValueGetValue(s, .cgSize, &size) else { return nil }
         return CGRect(origin: origin, size: size)
-    }
-
-    private static func roleAndChildren(_ e: AXUIElement) -> (String, [AXUIElement]) {
-        var values: CFArray?
-        let names = [kAXRoleAttribute, kAXChildrenAttribute] as CFArray
-        guard AXUIElementCopyMultipleAttributeValues(e, names, [], &values) == .success, let v = values as? [Any], v.count == 2 else { return ("", []) }
-        return (v[0] as? String ?? "", v[1] as? [AXUIElement] ?? [])
     }
 
     private static func children(_ e: AXUIElement) -> [AXUIElement] {

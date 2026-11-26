@@ -188,6 +188,53 @@ struct FaviconStoreTests {
     }
 }
 
+/// The browser's own word for each window (`chrome.windows`: normal, popup,
+/// app), passed on by the extension since 0.3.2.
+struct WindowTypeTests {
+    func decode(_ s: String) -> Inbound { try! JSONDecoder().decode(Inbound.self, from: Data(s.utf8)) }
+    private func tab(_ id: Int, _ w: Int, _ title: String) -> String {
+        #"{"id":\#(id),"windowId":\#(w),"index":0,"title":"\#(title)","url":"https://t/\#(id)","active":true}"#
+    }
+    /// A normal window, an extension's palette (a popup), and a window from an
+    /// extension that sends no type.
+    private func seeded() -> TabStore {
+        var s = TabStore()
+        s.apply(decode(#"{"type":"snapshot","seq":1,"windows":["# + [
+            #"{"id":1,"focused":true,"windowType":"normal","left":0,"top":31,"width":748,"height":1259,"tabs":[\#(tab(10, 1, "Inbox"))]}"#,
+            #"{"id":2,"focused":false,"windowType":"popup","left":900,"top":31,"width":400,"height":600,"tabs":[\#(tab(20, 2, "Palette"))]}"#,
+            #"{"id":3,"focused":false,"left":0,"top":31,"width":748,"height":1259,"tabs":[\#(tab(30, 3, "Docs"))]}"#,
+        ].joined(separator: ",") + "]}"))
+        return s
+    }
+
+    @Test func eachWindowsTypeArrivesInTheSnapshotAndWhenAWindowOpens() {
+        var s = seeded()
+        #expect(s.windows[1]?.type == "normal")
+        #expect(s.windows[2]?.type == "popup")
+        #expect(s.windows[3]?.type == nil)
+        s.apply(decode(#"{"type":"event","kind":"windowCreated","seq":2,"windowId":4,"focused":true,"windowType":"app"}"#))
+        #expect(s.windows[4]?.type == "app")
+        // A tab of a window whose own event hasn't come yet.
+        s.apply(decode(#"{"type":"event","kind":"tabCreated","seq":3,"tab":\#(tab(50, 5, "New"))}"#))
+        #expect(s.windows[5]?.type == nil)
+        s.apply(decode(#"{"type":"event","kind":"windowCreated","seq":4,"windowId":5,"focused":true,"windowType":"popup"}"#))
+        #expect(s.windows[5]?.type == "popup" && s.windows[5]?.tabIds == [50])
+    }
+
+    @Test func onlyAPopupOrAnAppWindowIsNotNormal() {
+        let s = seeded()
+        #expect(s.windows[1]?.isNormal == true)
+        #expect(s.windows[2]?.isNormal == false)
+        // An extension older than 0.3.2 says nothing: normal, as before.
+        #expect(s.windows[3]?.isNormal == true)
+        var other = s.windows[1]!
+        for type in ["app", "devtools", "panel"] {
+            other.type = type
+            #expect(!other.isNormal)
+        }
+    }
+}
+
 struct ProfileTests {
     private func snapshot(_ wins: [SnapshotWindow]) -> Inbound {
         var m = Inbound(type: "snapshot"); m.seq = 1; m.windows = wins; return m

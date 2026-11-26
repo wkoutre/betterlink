@@ -8,9 +8,30 @@ function ev() {
   return { addListener: (f) => fns.add(f), removeListener: (f) => fns.delete(f), fire: (...a) => [...fns].map((f) => f(...a)), size: () => fns.size };
 }
 
+// A chrome.windows event as Chrome delivers it: only for the window types the
+// listener's filter names, by default ['normal', 'popup'] (an app window's
+// events reach no listener added without a filter). `typeOf` tells the type
+// from the event's first argument; undefined (no window) always goes through.
+function winEv(typeOf) {
+  const fns = new Map();
+  return {
+    addListener: (f, filters) => fns.set(f, (filters && filters.windowTypes) || ["normal", "popup"]),
+    removeListener: (f) => fns.delete(f),
+    fire: (...a) => {
+      const type = typeOf(a[0]);
+      return [...fns].filter(([, types]) => type === undefined || types.includes(type)).map(([f]) => f(...a));
+    },
+    size: () => fns.size,
+  };
+}
+
 function fakeChrome() {
   const windows = [{ id: 1, focused: true, incognito: false, tabs: [{ id: 10, windowId: 1, index: 0, title: "A", url: "https://a.test/", active: true }] }];
   const calls = [];
+  // Every window there is, by id: the ones getAll lists and the ones opened since.
+  const open = new Map();
+  const find = (id) => open.get(id) || windows.find((w) => w.id === id);
+  const typeOfId = (id) => (id === -1 ? undefined : (find(id) || {}).type || "normal");
   const c = {
     calls,
     tabs: {
@@ -25,8 +46,16 @@ function fakeChrome() {
       get: async (id) => ({ id, windowId: 1, index: 0, title: "R", url: "https://r.test/" }),
     },
     windows: {
-      onCreated: ev(), onRemoved: ev(), onFocusChanged: ev(),
+      onCreated: winEv((w) => { open.set(w.id, w); return w.type || "normal"; }), onRemoved: winEv(typeOfId), onFocusChanged: winEv(typeOfId),
       getAll: async () => windows,
+      // As Chrome: a window whose type the options don't name is not found.
+      get: async (id, o) => {
+        calls.push(["windows.get", id, o]);
+        const w = find(id);
+        if (!w || !((o && o.windowTypes) || ["normal", "popup"]).includes(w.type || "normal")) throw new Error("No window with id: " + id);
+        return w;
+      },
+      opened: (w) => open.set(w.id, w),
       getLastFocused: async () => windows[0],
       update: async (id, o) => { calls.push(["windows.update", id, o]); },
       create: async (o) => { calls.push(["windows.create", o]); return { id: 5, tabs: [{ id: 55, windowId: 5, index: 0 }] }; },
@@ -177,6 +206,74 @@ test("window frames ride along in the snapshot and on every move, for profile ma
   const moved = out.find((m) => m.kind === "windowBounds");
   assert.equal(moved.windowId, 1);
   assert.equal(moved.left, 1028);
+});
+
+test("each window's type rides along in the snapshot and when a window opens", async () => {
+  const chrome = fakeChrome();
+  const all = await chrome.windows.getAll();
+  all[0].type = "normal";
+  all.push({ id: 2, type: "popup", focused: false, incognito: false, tabs: [] });
+  const out = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1234);
+  b.attach();
+  await b.snapshot();
+  assert.deepEqual(out[0].windows.map((w) => w.windowType), ["normal", "popup"]);
+  chrome.windows.onCreated.fire({ id: 3, type: "popup", focused: true, incognito: false });
+  const opened = out.find((m) => m.kind === "windowCreated");
+  // The message's own `type` is taken: the window's goes as `windowType`.
+  assert.equal(opened.type, "event");
+  assert.equal(opened.windowType, "popup");
+});
+
+test("an app window's opening, focus and closing reach the app, as the snapshot's windows do", async () => {
+  const { chrome, out, b } = setup();
+  await b.snapshot();
+  out.length = 0;
+  // Chrome sends these only to a listener whose filter names "app".
+  chrome.windows.onCreated.fire({ id: 3, type: "app", focused: true, incognito: false });
+  chrome.windows.onFocusChanged.fire(3);
+  chrome.windows.onRemoved.fire(3);
+  assert.deepEqual(out.map((m) => [m.kind, m.windowId]), [["windowCreated", 3], ["windowFocused", 3], ["windowRemoved", 3]]);
+  assert.equal(out[0].windowType, "app");
+});
+
+test("a tab of a window the app was never sent brings the window's type right behind it", async () => {
+  const { chrome, out, b } = setup();
+  // Before the first snapshot nothing is asked: the snapshot will say.
+  chrome.tabs.onCreated.fire({ id: 70, windowId: 7, index: 0 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(chrome.calls, []);
+  await b.snapshot();
+  out.length = 0;
+  // A window whose own event never came (a DevTools window has none).
+  chrome.windows.opened({ id: 7, type: "devtools", focused: false, incognito: false, left: 5, top: 6, width: 700, height: 500 });
+  chrome.tabs.onCreated.fire({ id: 71, windowId: 7, index: 1 });
+  chrome.tabs.onAttached.fire(72, { newWindowId: 7, newPosition: 2 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(out.map((m) => m.kind), ["tabCreated", "tabAttached", "windowCreated"], "the tab goes at once, the window once");
+  assert.deepEqual([out[2].windowId, out[2].windowType, out[2].left], [7, "devtools", 5]);
+  assert.deepEqual(out.map((m) => m.seq), [3, 4, 5], "no gap in the sequence");
+  // A window the snapshot or its own event named is not asked about.
+  chrome.tabs.onCreated.fire({ id: 11, windowId: 1, index: 1 });
+  chrome.windows.onCreated.fire({ id: 8, type: "popup", focused: true, incognito: false });
+  chrome.tabs.onCreated.fire({ id: 80, windowId: 8, index: 0 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(chrome.calls.filter((c) => c[0] === "windows.get").map((c) => c[1]), [7]);
+  // A window that is gone by the time the tab says so: nothing is sent for it.
+  chrome.tabs.onCreated.fire({ id: 90, windowId: 9, index: 0 });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.equal(out.filter((m) => m.kind === "windowCreated" && m.windowId === 9).length, 0);
+});
+
+test("a window sent because a tab named it is reported gone too, whatever its type", async () => {
+  const { chrome, out, b } = setup();
+  await b.snapshot();
+  chrome.windows.opened({ id: 7, type: "devtools", focused: false, incognito: false, left: 5, top: 6, width: 700, height: 500 });
+  chrome.tabs.onCreated.fire({ id: 71, windowId: 7, index: 0 });
+  await new Promise((r) => setTimeout(r, 0));
+  out.length = 0;
+  chrome.windows.onRemoved.fire(7);
+  assert.deepEqual(out.map((m) => [m.kind, m.windowId]), [["windowRemoved", 7]]);
 });
 
 test("move, mute, duplicate, reload and newWindow drive the real tab API", async () => {
