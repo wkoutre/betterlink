@@ -135,7 +135,7 @@ struct RulesPage: View {
                     .padding(.vertical, DS.Space.space1)
                 }
                 ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
-                    RuleSentence(index: i, rule: rule)
+                    RuleSentence(index: i, count: model.rules.count, rule: rule)
                 }
                 LabeledContent("Everything else opens in") {
                     ProfileMenu(selection: $model.fallback)
@@ -193,11 +193,11 @@ struct RulesPage: View {
 /// "Open domains matching example.com in ● Work", as one line.
 private struct RuleSentence: View {
     let index: Int
+    let count: Int
     let rule: Rule
     var body: some View {
         HStack(spacing: DS.Space.space2) {
-            Text("\(index + 1)").font(DS.TextStyle.caption).monospacedDigit()
-                .foregroundStyle(DS.Palette.textTertiary).frame(width: 14, alignment: .trailing)
+            RuleNumber(number: index + 1, count: count)
             Text("Open \(rule.kind.label)").foregroundStyle(DS.Palette.textSecondary)
             Text(rule.pattern).font(DS.TextStyle.bodyStrong).lineLimit(1).truncationMode(.middle)
             Text("in").foregroundStyle(DS.Palette.textSecondary)
@@ -205,6 +205,24 @@ private struct RuleSentence: View {
             Spacer(minLength: 0)
         }
         .accessibilityElement(children: .combine)
+    }
+}
+
+/// A rule's number, right-aligned in a column as wide as the list's widest
+/// number, so 10 and 100 stay on one line and every row's text starts at the
+/// same place.
+struct RuleNumber: View {
+    let number: Int
+    let count: Int
+    var body: some View {
+        // Digits are monospaced, so zeros as wide as the count are exactly as
+        // wide as the widest number in the list.
+        Text(String(repeating: "0", count: String(max(count, number, 1)).count))
+            .hidden()
+            .overlay(alignment: .trailing) { Text("\(number)") }
+            .font(DS.TextStyle.caption).monospacedDigit().lineLimit(1).fixedSize()
+            .foregroundStyle(DS.Palette.textTertiary)
+            .accessibilityLabel("\(number)")
     }
 }
 

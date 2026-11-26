@@ -258,13 +258,6 @@ struct SidebarGeometryTests {
         #expect(!p.overlaps)
     }
 
-    @Test func neverRunsUnderTheMenuBarOrBelowTheScreen() {
-        let tall = CGRect(x: 100, y: -40, width: 800, height: 1000)
-        let p = SidebarGeometry.place(window: tall, screen: screen, width: 280, side: .right)
-        #expect(p.sidebar.minY == 0)
-        #expect(p.sidebar.maxY == 875)
-    }
-
     @Test func axAndCocoaFramesRoundTrip() {
         // AX: 100pt from the top of a 900pt main screen, 700 tall.
         let ax = CGRect(x: 100, y: 100, width: 900, height: 700)

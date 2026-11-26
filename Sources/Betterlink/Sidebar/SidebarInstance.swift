@@ -44,6 +44,42 @@ final class SidebarInstance: ObservableObject {
         self.hidden = hidden
         self.width = width
         reported = window.target
+        cornerDisplay = display(for: window.target.frame)?.number
+        readCorner("followed")
+    }
+
+    // MARK: - The window's corner
+
+    /// The radius of this window's corners: what the seam's notches and the
+    /// sidebar's outer corners are cut for. From the window server
+    /// (`WindowServer.cornerRadius`), or the fallback while it has never said.
+    private(set) var cornerRadius = SidebarSeam.fallbackRadius
+    /// The last radius the window server gave for this window.
+    private var cornerRead: CGFloat?
+    /// The display the window was on when its corner was last read.
+    private var cornerDisplay: CGDirectDisplayID?
+
+    /// Asks the window server once: when the window is first followed, when
+    /// it enters or leaves full screen, and each time it comes to rest (the
+    /// moment it leaves full screen the window server may not have its
+    /// corner back yet). Never per frame or on a timer. A read that gives
+    /// nothing keeps the last one that did (`SidebarSeam.radius(read:lastRead:)`).
+    func readCorner(_ why: String) {
+        let began = CACurrentMediaTime()
+        let read = WindowServer.cornerRadius(window.number)
+        let ms = (CACurrentMediaTime() - began) * 1000
+        let radius = SidebarSeam.radius(read: read, lastRead: cornerRead)
+        if DragTrace.enabled {
+            let nothing = WindowServer.cornersUnreadBecause ?? "the window server gave no radius between 4 and 40 pt"
+            let from = read != nil ? "from the window server" : cornerRead != nil ? "kept from the last read (\(nothing))" : "the fallback (\(nothing))"
+            DragTrace.log(String(format: "corner: window %u (%@) radius %.2f pt %@, read in %.3f ms (%@)", window.number, window.target.appName,
+                                 Double(radius), from, ms, why))
+        }
+        if let read { cornerRead = read }
+        // The same radius: the panel is left as it is.
+        guard radius != cornerRadius else { return }
+        cornerRadius = radius
+        follow() // a panel on screen takes the new shape now
     }
 
     /// The window is no longer followed: its sidebar goes. One that closed
@@ -293,12 +329,20 @@ final class SidebarInstance: ObservableObject {
     /// Frames within a point count as the same: the browser rounds.
     private static func same(_ a: CGRect, _ b: CGRect) -> Bool { WidthLoan.same(a, b) }
 
-    private func screen(for frame: CGRect) -> CGRect {
-        Displays.visibleFrame(for: frame) ?? frame
-    }
+    private func screen(for frame: CGRect) -> CGRect { display(for: frame)?.visibleFrame ?? frame }
+
+    /// The display most of `frame` is on.
+    private func display(for frame: CGRect) -> Display? { Displays.display(for: frame) }
 
     /// The window came to rest: make the pair fill the space the window was given.
     func settle(_ t: WindowTracker.Target) {
+        // At rest, its corner is asked again: not while it is dragged, slid
+        // or its edge is dragged (it comes to rest again after those).
+        if slideRun == nil, resizing == nil, !tracker.isDragging(window) {
+            let on = display(for: t.frame)?.number
+            readCorner(on != cornerDisplay ? "settled on another display" : "settled")
+            cornerDisplay = on
+        }
         // A resize by the edge still open ends with the loan read off the window.
         guard resizing == nil else { return }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
@@ -609,8 +653,9 @@ final class SidebarInstance: ObservableObject {
     /// where it is about to be).
     private func placement(beside frame: CGRect) -> SidebarPlacement {
         let l = loan.flatMap { Self.same($0.inner, frame) ? $0 : nil }
-        return SidebarGeometry.place(window: frame, screen: screen(for: frame), width: width, side: l?.side ?? sidebar.side,
-                                     keepOnScreen: refused.map { Self.same($0, frame) } ?? false)
+        let on = display(for: frame)
+        return SidebarGeometry.place(window: frame, screen: on?.visibleFrame ?? frame, width: width, side: l?.side ?? sidebar.side,
+                                     keepOnScreen: refused.map { Self.same($0, frame) } ?? false, scale: on?.scale ?? 1)
     }
 
     /// Puts the panel there, attached to the window's edge. Returns the panel.
@@ -620,20 +665,26 @@ final class SidebarInstance: ObservableObject {
         let fresh = self.panel == nil
         let panel = self.panel ?? makePanel()
         let attached: SidebarSide? = p.overlaps ? nil : p.side
-        if fresh || panel.attachedSide != attached { panel.attach(to: attached) }
-        // Beside the window, the panel reaches under the window's rounded
-        // corners to fill them (see SidebarPanel), so it is that much wider.
-        let reach = attached == nil ? 0 : panel.reach
-        var frame = p.sidebar
-        frame.size.width += reach
-        if attached == .right { frame.origin.x -= reach }
+        // Beside the window, the panel reaches over the window's rounded
+        // corners to fill what they leave open (SidebarSeam), so it is that
+        // much wider.
+        let reach = SidebarSeam.reach(for: p, radius: cornerRadius)
+        if fresh || panel.attachedSide != attached || panel.reach != reach || panel.radius != cornerRadius || panel.scale != p.scale {
+            panel.attach(to: attached, reach: reach, radius: cornerRadius, scale: p.scale)
+        }
+        let frame = SidebarSeam.panel(for: p, reach: reach)
         // Set first: the move notifications arrive inside setFrame.
         placedPanelFrame = frame
+        let was = panel.frame
         // A pure move is cheap; only a real resize lays the tab list out again.
         if panel.frame.size != frame.size {
             panel.setFrame(frame, display: true, animate: false)
         } else if panel.frame.origin != frame.origin {
             panel.setFrameOrigin(frame.origin)
+        }
+        if DragTrace.enabled, panel.frame != was, !tracker.isDragging(window) {
+            DragTrace.log("place: window \(window.number) reported \(window.target.frame), on screen \(WindowServer.frame(window.number).map { "\($0)" } ?? "?"), "
+                + "panel asked \(frame) got \(panel.frame), scale \(p.scale), over the window \(reach) pt, \(attached == nil ? "covering its edge" : "beside it")")
         }
         return panel
     }

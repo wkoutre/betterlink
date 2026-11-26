@@ -5,10 +5,14 @@ import TabSyncCore
 /// A borderless, non-activating panel: clicking it never takes the browser out
 /// of the front, but it can still take keyboard focus for its text field.
 ///
-/// Beside a browser window it reaches `browserCornerRadius` under the window's
-/// edge and draws only where the window's rounded corners leave the screen
-/// showing, so the two read as one window with no notch at the seam. The rest
-/// of that strip is fully transparent, so clicks there reach the browser.
+/// Beside a browser window it lies directly above the window and reaches
+/// over the window's edge as far as the window's rounded corners go
+/// (SidebarSeam). There it is drawn only in the two notches the corners leave
+/// open, so the two read as one window; the rest of that strip is clear, and
+/// clicks there reach the browser. Its outer corners are the window's own
+/// corner: both come from the corner radius the window server reports for
+/// that window (WindowCorner). Covering the window's edge instead (the window
+/// would not make room), it is rounded all round.
 final class SidebarPanel: NSPanel {
     override func orderOut(_ sender: Any?) {
         fadeTimer?.invalidate(); fadeTimer = nil
@@ -39,13 +43,6 @@ final class SidebarPanel: NSPanel {
         if !Self.headless { super.orderOut(nil) }
     }
 
-    /// The corner of a macOS 26 browser window: a continuous curve, measured on
-    /// Chrome (its alpha along the corner matches a 21 pt continuous rounded rect).
-    static let corner = ContinuousCorner(radius: 21)
-    /// How far the panel reaches under the browser window: as far as the
-    /// corner's curve runs along the edge.
-    static var browserCornerRadius: CGFloat { ceil(corner.extent) }
-
     private let effect = NSVisualEffectView()
     private let shape = CAShapeLayer()
     /// The profile color, under the content and inside the same mask.
@@ -53,8 +50,13 @@ final class SidebarPanel: NSPanel {
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
     private var side: SidebarSide?
-    /// How far the panel reaches under the browser window: the corner's curve.
-    var reach: CGFloat { Self.browserCornerRadius }
+    /// How far the panel reaches over the browser window now, in points.
+    /// None while it covers the window's edge.
+    private(set) var reach: CGFloat = 0
+    /// The corner radius of the window it is beside, and the pixels per point
+    /// of the screen it is on.
+    private(set) var radius = SidebarSeam.fallbackRadius
+    private(set) var scale: CGFloat = 2
 
     init(contentView content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 280, height: 600),
@@ -107,13 +109,18 @@ final class SidebarPanel: NSPanel {
         }
     }
 
-    /// Which side of the browser window the panel is on, or nil when it covers
-    /// the window's edge instead (all four corners rounded, nothing to fill).
-    func attach(to side: SidebarSide?) {
+    /// Which side of the browser window the panel is on, reaching `reach`
+    /// over the window, or nil when it covers the window's edge instead (all
+    /// four corners rounded, nothing to fill). `radius`: that window's corner
+    /// radius. `scale`: the pixels per point of its screen.
+    func attach(to side: SidebarSide?, reach: CGFloat, radius: CGFloat, scale: CGFloat) {
         self.side = side
-        let r = side == nil ? 0 : reach
-        leading?.constant = side == .right ? r : 0
-        trailing?.constant = side == .left ? -r : 0
+        self.reach = side == nil ? 0 : reach
+        self.radius = radius
+        self.scale = scale
+        // The content keeps to the sidebar: none of it over the window.
+        leading?.constant = side == .right ? self.reach : 0
+        trailing?.constant = side == .left ? -self.reach : 0
         reshape()
     }
 
@@ -127,49 +134,39 @@ final class SidebarPanel: NSPanel {
         reshape()
     }
 
-    /// The sidebar with rounded outer corners, plus the bits of the strip under
-    /// the browser's edge that its rounded corners leave uncovered.
-    /// During a slide, the part of the panel shown: from `inner` (the
-    /// window's seam) to the outer edge, in screen x. Nil: the whole panel.
+    /// During a slide, the part of the panel shown: from `reveal` (the
+    /// window's seam, in screen x) to the outer edge. Nil: the whole panel.
     var reveal: CGFloat? { didSet { reshape() } }
 
     private func reshape() {
         let b = effect.bounds
         guard b.width > 0, b.height > 0 else { return }
-        let reach = self.reach, c = Self.corner
-        var path: CGPath
-        if let inner = reveal {
-            // Only the strip between the seam and the outer edge, outer
-            // corners rounded; the content stays anchored and isn't reflowed.
-            let x = min(max(inner - frame.minX, 0), b.width)
-            let strip = side == .left ? CGRect(x: 0, y: 0, width: x, height: b.height)
-                                      : CGRect(x: x, y: 0, width: b.width - x, height: b.height)
-            path = strip.width < 1 ? CGPath(rect: .zero, transform: nil)
-                                   : c.rect(strip, corners: side == .left ? [0, 3] : [1, 2])
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            shape.frame = b; shape.path = path
-            CATransaction.commit()
-            return
-        }
-        switch side {
-        case .right:
-            // The window is to the left; its edge is at x = reach.
-            let body = c.rect(CGRect(x: reach, y: 0, width: b.width - reach, height: b.height), corners: [1, 2])
-            path = body.union(c.notch(edgeX: reach, windowLeft: true, top: true, height: b.height))
-                .union(c.notch(edgeX: reach, windowLeft: true, top: false, height: b.height))
-        case .left:
-            let edge = b.width - reach
-            let body = c.rect(CGRect(x: 0, y: 0, width: edge, height: b.height), corners: [0, 3])
-            path = body.union(c.notch(edgeX: edge, windowLeft: false, top: true, height: b.height))
-                .union(c.notch(edgeX: edge, windowLeft: false, top: false, height: b.height))
-        default:
-            path = c.rect(b, corners: [0, 1, 2, 3])
-        }
+        let path = Self.outline(in: b, scale: scale, side: side, reach: reach, radius: radius, reveal: reveal.map { $0 - frame.minX })
         CATransaction.begin()
         CATransaction.setDisableActions(true)
+        shape.contentsScale = scale
         shape.frame = b
         shape.path = path
         CATransaction.commit()
+    }
+
+    /// Window corners already worked out, by radius and scale.
+    private static var corners: [String: CornerPixels] = [:]
+
+    /// The panel's outline in its own bounds, pixel by pixel on a screen with
+    /// `scale` pixels per point (`SidebarSeam.mask` says what is in it).
+    /// `reveal`: x in the bounds; the content stays anchored and isn't reflowed.
+    static func outline(in b: CGRect, scale: CGFloat, side: SidebarSide?, reach: CGFloat, radius: CGFloat, reveal: CGFloat?) -> CGPath {
+        let key = "\(radius) \(scale)"
+        let corner = corners[key] ?? WindowCorner.pixels(radius: radius, scale: scale)
+        corners[key] = corner
+        let height = (b.height * scale).rounded()
+        let rects = SidebarSeam.mask(width: Int((b.width * scale).rounded()), height: Int(height), side: side,
+                                     reach: Int((reach * scale).rounded()), corner: corner, reveal: reveal.map { $0 * scale })
+        let path = CGMutablePath()
+        // Pixels, y down from the top, to points, y up from the bottom.
+        path.addRects(rects.map { CGRect(x: $0.minX / scale, y: (height - $0.maxY) / scale, width: $0.width / scale, height: $0.height / scale) })
+        return path
     }
 
     override var canBecomeKey: Bool { true }

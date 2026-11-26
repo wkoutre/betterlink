@@ -6,6 +6,10 @@ import ApplicationServices
 struct Display: Equatable {
     var frame: CGRect
     var visibleFrame: CGRect
+    /// The display's number (its corner reads are per display), and its
+    /// points-to-pixels scale (edges are rounded to device pixels).
+    var number: CGDirectDisplayID? = nil
+    var scale: CGFloat = 1
 }
 
 /// The displays the sidebar places windows on, the primary one (with the menu
@@ -17,7 +21,11 @@ enum Displays {
     /// (SidebarGuardTests), so the sidebar's moves can be checked on any
     /// arrangement without a Mac that has it.
     static var source: () -> [Display] = {
-        NSScreen.screens.map { Display(frame: $0.frame, visibleFrame: $0.visibleFrame) }
+        NSScreen.screens.map {
+            Display(frame: $0.frame, visibleFrame: $0.visibleFrame,
+                    number: ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value,
+                    scale: $0.backingScaleFactor)
+        }
     }
 
     static var all: [Display] { source() }
@@ -25,9 +33,9 @@ enum Displays {
     /// The height Accessibility's coordinates are flipped by.
     static var primaryHeight: CGFloat? { all.first?.frame.height }
 
-    /// The usable part of the display showing the most of `frame`.
-    static func visibleFrame(for frame: CGRect) -> CGRect? {
-        all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area }?.visibleFrame
+    /// The display showing the most of `frame`.
+    static func display(for frame: CGRect) -> Display? {
+        all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area }
     }
 }
 
