@@ -187,6 +187,16 @@ struct WindowCornerTests {
         expectNothingShowsThrough(model, over: real, "the 16 pt capture")
     }
 
+    /// A radius not measured gets the measured outline nearest it, scaled;
+    /// halfway between two, the larger's.
+    @Test func eachRadiusGetsTheNearestMeasuredOutline() {
+        let cases: [(radius: CGFloat, outline: CGFloat)] = [(4, 16), (10, 16), (16, 16), (17.9, 16), (18, 20), (20, 20), (26, 20), (40, 20)]
+        for (radius, outline) in cases {
+            #expect(WindowCorner.outline(radius: radius).radius == outline, "radius \(radius)")
+        }
+        #expect(WindowCorner.outline(radius: 20).run == WindowCorner.run)
+    }
+
     @Test func aCornerIsClearAtItsPointSolidPastItsRunAndTheSameBothWays() {
         for scale in [CGFloat(1), 2, 3] {
             for radius in [CGFloat(10), 16, 20, 26] {
