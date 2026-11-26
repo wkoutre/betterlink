@@ -225,6 +225,37 @@ struct FolderIconTests {
         #expect(b.icon == .emoji("🚀"))
     }
 
+    /// The usual upgrade order: a Mac on an old build adopts another Mac's
+    /// folder state whole, icon included, but writes sidebar.json without it.
+    /// Once updated it has no icon locally and the state holds one; that is
+    /// not a removal, so it must not send "no icon" (review F1).
+    @Test func aMacUpdatedAfterAnIconWasSetDoesNotRemoveIt() {
+        var a = Mac("A", library: Self.starter()), b = Mac("B", library: Self.starter())
+        a.record(now: 1_000); b.read(a.state, now: 1_001); a.read(b.state, now: 1_002)
+        a.setIcon(.emoji("🚀")); a.record(now: 2_000)
+        b.state = b.state.merged(with: a.state)   // the old build adopts the state whole
+        if let m = b.state.maxStamp { b.clock.observe(m) }
+        b.record(now: 3_000)                       // B updated, its sidebar.json has no icon
+        a.read(b.state, now: 3_001)
+        #expect(a.icon == .emoji("🚀"))
+        b.read(a.state, now: 3_002)
+        #expect(b.icon == .emoji("🚀"))
+    }
+
+    /// Removing an icon this Mac only received is a removal like any other.
+    @Test func removingAReceivedIconReachesTheMacThatSetIt() {
+        var a = Mac("A", library: Self.starter()), b = Mac("B", library: Self.starter())
+        a.setIcon(.emoji("🚀")); a.record(now: 1_000)
+        b.read(a.state, now: 1_001)
+        #expect(b.icon == .emoji("🚀"))
+        b.setIcon(nil); b.record(now: 2_000)
+        a.read(b.state, now: 2_001)
+        #expect(a.icon == nil)
+        // Once sent, the removal is no longer this Mac's to remember.
+        b.read(a.state, now: 2_002)
+        #expect(b.library.profiles.first?.folder(Self.folderID)?.iconRemoved == nil)
+    }
+
     /// Synced state with no icon field (written before folder icons) keeps
     /// an icon this Mac has set and not yet sent.
     @Test func stateWithNoIconFieldKeepsTheLocalIcon() {
