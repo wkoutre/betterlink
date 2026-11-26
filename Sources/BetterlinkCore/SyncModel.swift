@@ -115,11 +115,13 @@ public enum SyncModel {
                             let id = nodeID(f.id)
                             out[id] = ["kind": .string("folder"), "profile": .string(p.id.uuidString), "container": .string("items"),
                                        "parent": .of(parent?.uuidString), "position": .string(pos[id]!), "title": .string(f.name)]
-                            // No icon goes out as null only to clear one the state has: a folder
-                            // that never had one sends no field, so a Mac that has just updated
-                            // can't stamp "no icon" over one another Mac set meanwhile.
+                            // "No icon" goes out only for an icon removed on this Mac
+                            // (iconRemoved), and only when the state still has one. A folder
+                            // that merely has none sends no field: a Mac that has just updated
+                            // from a betterlink without icons has none on every folder, and
+                            // must not stamp "no icon" over one another Mac set (review F1).
                             if let icon = f.icon { out[id]!["icon"] = .string(icon.raw) }
-                            else if let had = state.value(id, "icon"), had != .null { out[id]!["icon"] = .null }
+                            else if f.iconRemoved == true, let had = state.value(id, "icon"), had != .null { out[id]!["icon"] = .null }
                             walk(f.items, parent: f.id)
                         }
                     }
@@ -269,7 +271,9 @@ public enum SyncModel {
     ///
     /// A folder's icon is the synced one. A folder whose synced fields have no
     /// icon at all (written before folder icons, or by a Mac without them)
-    /// keeps this Mac's (`icons`), which goes out with the next push.
+    /// keeps this Mac's (`icons`), which goes out with the next push. A
+    /// removal this Mac made was pushed before this runs, so its mark
+    /// (`iconRemoved`) is not carried over.
     static func tree(_ nodes: [String: [String: Stamped]], expanded: [UUID: Bool], icons: [UUID: FolderIcon] = [:],
                      notes: inout Notes) -> [SidebarItem] {
         var parent: [UUID: UUID?] = [:]
