@@ -1,9 +1,10 @@
 import AppKit
 import ApplicationServices
 
-/// Follows every main window of every running attached browser, in front or
-/// not: which there are, and each one's frame, title and state, the moment they
-/// change. Event-driven throughout:
+/// Follows every browser window of every running attached browser (which of
+/// a browser's windows those are: BrowserWatcher), in front or not: which
+/// there are, and each one's frame, title and state, the moment they change.
+/// Event-driven throughout:
 ///
 /// - NSWorkspace tells us when apps launch, quit or come to the front, and when
 ///   another Space shows.
@@ -170,10 +171,11 @@ final class WindowTracker: NSObject {
 
     func focusChanged() { onFocus?() }
 
-    func removed(_ w: TrackedWindow) {
+    /// `closed`: the window is gone, rather than no longer followed.
+    func removed(_ w: TrackedWindow, closed: Bool) {
         if drag?.window === w { stopDrag() }
         waitingForMouseUp.removeAll { $0 === w }
-        onRemoved?(w, true)
+        onRemoved?(w, closed)
     }
 
     /// Reported at once, and again when windows and Spaces have stopped moving
@@ -181,7 +183,15 @@ final class WindowTracker: NSObject {
     func orderMayHaveChanged() {
         onScreen?(false)
         settledWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.onScreen?(true) }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                // A window seen not to be a browser window after all goes now,
+                // with everything at rest.
+                self.watchers.values.forEach { $0.dropNotBrowser() }
+                self.onScreen?(true)
+            }
+        }
         settledWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
     }

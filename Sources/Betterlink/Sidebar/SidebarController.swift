@@ -4,7 +4,7 @@ import Combine
 import SwiftUI
 import TabSyncCore
 
-/// The betterlink sidebar: a panel beside every main window of every attached
+/// The betterlink sidebar: a panel beside every browser window of every attached
 /// browser, each moving with its window and showing that window's tabs
 /// (SidebarInstance). Here: the settings they share, which of the browser's
 /// own windows each one is, and their places on screen. Settings live in

@@ -1,7 +1,8 @@
 import AppKit
 import ApplicationServices
+import BetterlinkCore
 
-/// One browser main window being followed.
+/// One browser window being followed.
 @MainActor
 final class TrackedWindow {
     /// Its identity while it exists, never reused.
@@ -42,8 +43,10 @@ final class TrackedWindow {
     var isFocused: Bool { watcher?.focused === self }
 }
 
-/// Watches one running browser's main windows through one AXObserver: windows
-/// coming and going, focused, moved, resized, minimized, renamed, hidden.
+/// Watches one running browser's windows through one AXObserver: windows
+/// coming and going, focused, moved, resized, minimized, renamed, hidden. Only
+/// its browser windows are followed, the ones with tabs (`WindowKinds`): an
+/// extension's palette, an app window or DevTools on its own is not.
 @MainActor
 final class BrowserWatcher {
     let pid: pid_t
@@ -56,6 +59,11 @@ final class BrowserWatcher {
     private var triesLeft = 5
 
     private(set) var windows: [TrackedWindow] = []
+    /// What each of the browser's standard windows has been seen to be, by
+    /// window number.
+    private var kinds = WindowKinds()
+    /// The next look at each window not known yet, by window number.
+    private var looks: [CGWindowID: DispatchWorkItem] = [:]
     /// The browser's focused main window, whether or not it is in front.
     private(set) var focused: TrackedWindow?
 
@@ -120,25 +128,41 @@ final class BrowserWatcher {
         focused = nil
         for w in windows { w.settleWork?.cancel() }
         windows = []
+        looks.values.forEach { $0.cancel() }
+        looks = [:]
     }
 
     // MARK: - Windows
 
-    /// Finds the main windows not followed yet. Accessibility lists only those
-    /// on a Space that is showing, so a window missing from the list isn't gone.
+    /// Finds the browser windows not followed yet. Accessibility lists only
+    /// those on a Space that is showing, so a window missing from the list
+    /// isn't gone.
     func scan() {
         guard observer != nil else { return }
         guard let all: [AXUIElement] = AXWindow.copy(element, kAXWindowsAttribute) else {
             if AXWindow.timedOut { isStalled = true }
             return
         }
-        for w in all { follow(w) }
+        consider(all)
         updateFocus()
     }
 
     /// Lets go of windows the window server no longer has.
     func drop(missingFrom all: Set<UInt32>) {
         for w in windows where !all.contains(w.number) { remove(w) }
+        kinds.keep(all)
+    }
+
+    /// Lets go of followed windows that turned out not to be browser windows:
+    /// followed while their browser had not been seen with tabs, and never
+    /// seen with any since. Called on the settled pass, never mid-event. They
+    /// are still open, so each gets its space back.
+    func dropNotBrowser() {
+        for w in windows where kinds.kind(of: w.number) == .notBrowser {
+            DragTrace.log("kinds: \(bundleId) window \(w.number) is not a browser window after all: let go")
+            for n in Self.windowEvents { if let obs = observer { AXObserverRemoveNotification(obs, w.element, n as CFString) } }
+            remove(w, closed: false)
+        }
     }
 
     /// Reads every window again, as far as the browser answers.
@@ -154,28 +178,105 @@ final class BrowserWatcher {
         if w.target != old { tracker.onChange?(w.target) }
     }
 
-    @discardableResult
-    private func follow(_ win: AXUIElement) -> TrackedWindow? {
-        if let known = tracked(win) { return known }
-        AXWindow.limitWaiting(on: win) // kept below as the window's element
-        guard AXWindow.isMain(win), let number = AXWindow.number(of: win) else { return nil }
+    /// Looks at the standard windows among `wins` that are not followed, and
+    /// follows the browser windows. All are read before any is judged: a
+    /// palette read before the normal window beside it would get a sidebar
+    /// for want of knowing that this browser shows its tabs.
+    private func consider(_ wins: [AXUIElement]) {
+        var found: [(win: AXUIElement, number: CGWindowID)] = []
+        var read: [CGWindowID: WindowKinds.Reading] = [:]
+        for win in wins where tracked(win) == nil {
+            AXWindow.limitWaiting(on: win) // kept as the window's element
+            // One with a look to come is left to it.
+            guard AXWindow.isMain(win), let n = AXWindow.number(of: win), looks[n] == nil,
+                  !found.contains(where: { $0.number == n }) else { continue }
+            found.append((win, n))
+            kinds.startOver(n)
+            read[n] = reading(win)
+        }
+        guard !found.isEmpty else { return }
+        // A browser not seen with tabs yet may show them by now in a window
+        // followed while it was still opening: one is enough to know.
+        if !kinds.readable, !read.values.contains(where: \.holdsTabs) {
+            for w in windows {
+                let r = reading(w.element)
+                read[w.number] = r
+                if r?.holdsTabs == true { break }
+            }
+        }
+        take(read)
+        for f in found { judge(f.win, f.number) }
+    }
+
+    private func reading(_ win: AXUIElement) -> WindowKinds.Reading? {
+        guard !isStalled else { return nil }
+        let r = AXWindow.tabs(in: win)
+        if r == nil, AXWindow.timedOut { isStalled = true }
+        return r
+    }
+
+    /// Takes in what a look found. When it is the first to show this browser's
+    /// tabs, the windows followed so far are judged by them too.
+    private func take(_ read: [CGWindowID: WindowKinds.Reading]) {
+        let was = kinds.readable
+        kinds.saw(read)
+        for (n, r) in read {
+            DragTrace.log("kinds: \(bundleId) window \(n): tab groups \(r.tabGroups), tabs \(r.tabs): \(kinds.kind(of: n))")
+        }
+        if kinds.readable, !was { for w in windows { judge(w.element, w.number) } }
+    }
+
+    /// Acts on what a window is now known to be: a browser window is followed,
+    /// one not known yet gets another look, and one that is not a browser
+    /// window is left alone (if it was followed, it goes on the settled pass).
+    private func judge(_ win: AXUIElement, _ n: CGWindowID) {
+        switch kinds.kind(of: n) {
+        case .browser: follow(win, number: n)
+        case .unknown: lookAgain(at: win, n)
+        case .notBrowser: if tracked(win) != nil { tracker.orderMayHaveChanged() }
+        }
+    }
+
+    /// One more look at a window not known yet, after the wait `WindowKinds`
+    /// gives it. A one-shot timer: nothing runs once every window is known.
+    private func lookAgain(at win: AXUIElement, _ n: CGWindowID) {
+        guard looks[n] == nil, let wait = kinds.wait(for: n) else { return }
+        let work = DispatchWorkItem { [weak self] in
+            MainActor.assumeIsolated {
+                guard let self, self.observer != nil else { return }
+                self.looks[n] = nil
+                // Closed meanwhile, or the browser isn't answering: the next
+                // event that names the window looks again.
+                guard let r = self.reading(win) else { return }
+                self.take([n: r])
+                self.judge(win, n)
+            }
+        }
+        looks[n] = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + wait, execute: work)
+    }
+
+    private static let windowEvents = [kAXMovedNotification, kAXResizedNotification, kAXTitleChangedNotification, kAXUIElementDestroyedNotification]
+
+    private func follow(_ win: AXUIElement, number: CGWindowID) {
+        guard tracked(win) == nil else { return }
         let w = TrackedWindow(element: win, number: number, watcher: self)
-        guard w.read() else { return nil }
+        guard w.read() else { return }
         windows.append(w)
         let refcon = Unmanaged.passUnretained(self).toOpaque()
-        for n in [kAXMovedNotification, kAXResizedNotification, kAXTitleChangedNotification, kAXUIElementDestroyedNotification] {
+        for n in Self.windowEvents {
             if let obs = observer { AXObserverAddNotification(obs, win, n as CFString, refcon) }
         }
         tracker.onAdded?(w)
         tracker.scheduleSettle(w)
-        return w
     }
 
-    private func remove(_ w: TrackedWindow) {
+    /// `closed`: the window is gone, rather than no longer followed.
+    private func remove(_ w: TrackedWindow, closed: Bool = true) {
         w.settleWork?.cancel()
         windows.removeAll { $0 === w }
         if focused === w { focused = nil }
-        tracker.removed(w)
+        tracker.removed(w, closed: closed)
     }
 
     private func tracked(_ win: AXUIElement) -> TrackedWindow? { windows.first { CFEqual($0.element, win) } }
@@ -183,7 +284,9 @@ final class BrowserWatcher {
     private func updateFocus() {
         var now: TrackedWindow?
         for attr in [kAXFocusedWindowAttribute, kAXMainWindowAttribute] where now == nil {
-            now = (AXWindow.copy(element, attr) as AXUIElement?).flatMap(follow)
+            guard let win: AXUIElement = AXWindow.copy(element, attr) else { continue }
+            consider([win])
+            now = tracked(win)
         }
         // A popup or panel can have the focus with no main window reported:
         // the last one keeps it.
@@ -232,7 +335,12 @@ final class BrowserWatcher {
             w.target.title = title
             tracker.onChange?(w.target)
         default: // moved, resized, minimized, back from the Dock
-            guard let w = tracked(el), !tracker.isDragging(w) else { return }
+            guard let w = tracked(el) else {
+                // Back from the Dock, a window not followed may show its tabs now.
+                if name == kAXWindowDeminiaturizedNotification { consider([el]) }
+                return
+            }
+            guard !tracker.isDragging(w) else { return }
             refresh(w)
             tracker.scheduleSettle(w)
         }
