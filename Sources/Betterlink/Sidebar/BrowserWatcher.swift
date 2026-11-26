@@ -189,6 +189,7 @@ final class BrowserWatcher {
         // the last one keeps it.
         guard let now, now !== focused else { return }
         focused = now
+        DragTrace.log("focus: macOS says window \(now.number) of \(bundleId) has it")
         tracker.focusChanged()
     }
 
@@ -216,6 +217,8 @@ final class BrowserWatcher {
             tracker.orderMayHaveChanged()
         case kAXWindowCreatedNotification:
             scan()
+            // Followed or not (a window on another Space isn't): the browser has one more.
+            tracker.focusChanged()
             // A window is often announced before it has its title bar's buttons.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in self?.scan() }
         case kAXUIElementDestroyedNotification:
