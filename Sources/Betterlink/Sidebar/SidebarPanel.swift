@@ -32,6 +32,10 @@ final class SidebarPanel: NSPanel {
 
     override var isVisible: Bool { Self.headless ? headlessVisible : super.isVisible }
 
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+        Self.headless ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+    }
+
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         guard Self.headless else { return super.order(place, relativeTo: otherWin) }
         headlessVisible = place != .out

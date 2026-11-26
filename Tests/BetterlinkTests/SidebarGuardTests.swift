@@ -37,6 +37,8 @@ struct GuardRandom {
 struct BrowserBehaviour: CustomStringConvertible {
     enum Timing: String { case atOnce = "at once", late, busy }
     var timing: Timing = .atOnce
+    /// Late or busy: by how long (seconds) it does what it was asked.
+    var lateBy: Double = 0.3
     /// Stops there (macOS and the browser keep a window at least this wide).
     var minWidth: CGFloat = 0
     /// Takes any size, then widens itself back to `minWidth` when it answers.
@@ -50,23 +52,44 @@ struct BrowserBehaviour: CustomStringConvertible {
     var dropsSizeCall: Int?
     /// A tiling app puts the window back on its frame once, after the sidebar changed it.
     var tiler = false
+    /// macOS 27 (Nick's laptop, 27.2.1, measured): each set is animated over
+    /// this many seconds (easing in and out); a read gives the target at once,
+    /// the window server the frame on screen, and the next set cuts the one in
+    /// flight where it has got to. 0: at once.
+    var animation: Double = 0
+    /// Another reading of macOS 27: a size is taken only after this many
+    /// reads (a frame or more); a size or a position sent meanwhile drops it,
+    /// and a position is taken at once.
+    var sizeLag = 0
+    /// Stops answering now and then (its main thread busy for 100 to 300 ms):
+    /// for `stall` calls in every `stall + every`, reads time out (or, with
+    /// `staleReads`, give the frame from before), and what it is asked waits,
+    /// then is done in order.
+    var stall = 0, every = 0
+    var staleReads = false
 
     /// Sizes it is given end up taken (late, once dropped, or after a tiling app, included).
     var sizesStick: Bool { !positionOnly && revertReads == 0 }
 
     var description: String {
-        var s = [timing.rawValue]
+        var s = [timing == .atOnce ? timing.rawValue : "\(timing.rawValue) by \(Int(lateBy * 1000)) ms"]
         if minWidth > 0 { s.append("minimum \(Int(minWidth))\(widensBack ? " (widens back to it)" : "")") }
         if positionOnly { s.append("applies the position, not the size") }
         if revertReads > 0 { s.append("reads back the asked size \(revertReads)x, then reverts") }
         if let n = dropsSizeCall { s.append("drops size change #\(n)") }
         if tiler { s.append("a tiling app puts it back once") }
+        if animation > 0 { s.append("macOS 27: each set animated over \(Int(animation * 1000)) ms, cut short by the next") }
+        if sizeLag > 0 { s.append("macOS 27: a size lands \(sizeLag) reads later, dropped by anything sent meanwhile") }
+        if stall > 0 { s.append("stops answering for \(stall) calls in every \(stall + every)\(staleReads ? ", reading stale" : "")") }
         return s.joined(separator: ", ")
     }
 
     static func random(_ r: inout GuardRandom) -> BrowserBehaviour {
         var b = BrowserBehaviour()
         b.timing = r.pick([.atOnce, .atOnce, .late, .busy])
+        b.lateBy = r.double(0.02...0.5)
+        if b.timing == .atOnce, r.bool(0.3) { b.sizeLag = r.int(1...4) }
+        if b.timing == .atOnce, b.sizeLag == 0, r.bool(0.35) { b.animation = r.double(0.05...0.35) }
         switch r.int(0...9) {
         case 0: b.positionOnly = true
         case 1: b.revertReads = r.int(1...6)
@@ -75,6 +98,7 @@ struct BrowserBehaviour: CustomStringConvertible {
         if r.bool(0.4) { b.minWidth = CGFloat(r.int(300...1400)); b.widensBack = r.bool(0.25) }
         if r.bool(0.15) { b.dropsSizeCall = r.int(1...8) }
         if r.bool(0.15) { b.tiler = true }
+        if b.timing == .atOnce, r.bool(0.25) { b.stall = r.int(2...12); b.every = r.int(1...8); b.staleReads = r.bool() }
         return b
     }
 }
@@ -85,19 +109,50 @@ struct BrowserBehaviour: CustomStringConvertible {
 /// that moment. A move is not limited.
 @MainActor
 final class FakeBrowser: WindowHandle {
-    private(set) var frame: CGRect
+    /// The frame on screen now (mid-animation: where the animation has got to).
+    var frame: CGRect {
+        guard let a = anim else { return base }
+        let u = behaviour.animation > 0 ? (now() - a.start) / behaviour.animation : 1
+        if u >= 1 { base = a.to; anim = nil; return base }
+        let f = CGFloat(u < 0.5 ? 4 * u * u * u : 1 - pow(-2 * u + 2, 3) / 2)
+        return CGRect(x: a.from.minX + (a.to.minX - a.from.minX) * f, y: a.from.minY + (a.to.minY - a.from.minY) * f,
+                      width: a.from.width + (a.to.width - a.from.width) * f, height: a.from.height + (a.to.height - a.from.height) * f)
+    }
+    private var base: CGRect
+    private var anim: (from: CGRect, to: CGRect, start: Double)?
+    /// The rig's clock, for animations.
+    var now: () -> Double = { 0 }
+    /// What a read gives: the target of an animation at once.
+    private var readFrame: CGRect { anim?.to ?? frame }
     let behaviour: BrowserBehaviour
     var onScreen = true
     /// Every frame it has had, in order, and whether the person put it there.
     private(set) var history: [(frame: CGRect, byPerson: Bool)]
     private var queued: [(size: CGSize?, position: CGPoint?)] = []
+    private var queuedAt = 0.0
+
+    /// A late or busy browser gets to what it was asked once `lateBy` has passed.
+    private func due() {
+        guard behaviour.timing != .atOnce, !queued.isEmpty, now() - queuedAt >= behaviour.lateBy else { return }
+        let todo = queued
+        queued = []
+        for q in todo {
+            if let s = q.size { apply(s) }
+            if let p = q.position { move(to: p) }
+        }
+    }
+
+    private func enqueue(_ q: (size: CGSize?, position: CGPoint?)) {
+        if queued.isEmpty { queuedAt = now() }
+        queued.append(q)
+    }
     private var sizeCalls = 0
     private var reported: CGSize?
     private var reportReads = 0
     private var tilerHome: CGRect?
 
     init(frame: CGRect, behaviour: BrowserBehaviour) {
-        self.frame = frame
+        base = frame
         self.behaviour = behaviour
         history = [(frame, true)]
         if behaviour.tiler { tilerHome = frame }
@@ -106,31 +161,89 @@ final class FakeBrowser: WindowHandle {
     private var height: CGFloat { Displays.primaryHeight! }
     private var busy: Bool { behaviour.timing == .busy && !queued.isEmpty }
 
-    func position() -> CGPoint? { busy ? nil : CGPoint(x: frame.minX, y: height - frame.maxY) }
+    /// Calls so far, for a browser that stalls; the frame from before the stall began.
+    private var calls = 0
+    private var beforeStall: CGRect?
+    /// Whether this call finds it stalled. Coming out of a stall, it does what waited.
+    /// Set by the rig while a slide runs: the coordinator's run paused Brave during slides.
+    var sliding = false {
+        didSet { if !sliding, beforeStall != nil { beforeStall = nil; catchUp() } }
+    }
+
+    private func stalled() -> Bool {
+        guard behaviour.stall > 0, sliding else { return false }
+        calls += 1
+        let inStall = calls % (behaviour.stall + behaviour.every) < behaviour.stall
+        if inStall, beforeStall == nil { beforeStall = frame }
+        if !inStall, beforeStall != nil { beforeStall = nil; catchUp() }
+        return inStall
+    }
+
+    private func catchUp() {
+        let todo = queued
+        queued = []
+        for q in todo {
+            if let s = q.size { take(s) }
+            if let p = q.position { move(to: p) }
+        }
+    }
+
+    /// macOS 27: the size on its way, and how many reads until it lands.
+    private var pendingSize: (size: CGSize, reads: Int)?
+
+    private func tick() {
+        guard var p = pendingSize else { return }
+        p.reads -= 1
+        if p.reads <= 0 { pendingSize = nil; take(p.size) } else { pendingSize = p }
+    }
+
+    func position() -> CGPoint? {
+        tick()
+        due()
+        if stalled() { return behaviour.staleReads ? beforeStall.map { CGPoint(x: $0.minX, y: height - $0.maxY) } : nil }
+        return busy ? nil : CGPoint(x: readFrame.minX, y: height - readFrame.maxY)
+    }
 
     func size() -> CGSize? {
+        tick()
+        due()
+        if stalled() { return behaviour.staleReads ? beforeStall?.size : nil }
         if busy { return nil }
         if reportReads > 0, let r = reported { reportReads -= 1; return r }
-        return frame.size
+        return readFrame.size
     }
 
     func setPosition(_ p: CGPoint) {
-        if behaviour.timing == .busy { return queued.append((nil, p)) }
+        pendingSize = nil
+        due()
+        if behaviour.timing == .busy || stalled() { return enqueue((nil, p)) }
         move(to: p)
     }
 
     func setSize(_ s: CGSize) {
+        pendingSize = nil
+        due()
+        if stalled() { return enqueue((s, nil)) }
+        if behaviour.sizeLag > 0 { pendingSize = (s, behaviour.sizeLag); return }
+        take(s)
+    }
+
+    private func take(_ s: CGSize) {
         sizeCalls += 1
         if sizeCalls == behaviour.dropsSizeCall { return }
         if behaviour.positionOnly { return }
         if behaviour.revertReads > 0 { reported = s; reportReads = behaviour.revertReads; return }
         switch behaviour.timing {
         case .atOnce: apply(s)
-        case .late, .busy: queued.append((s, nil))
+        case .late, .busy: enqueue((s, nil))
         }
     }
 
-    func shownBounds() -> CGRect? { CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height) }
+    func shownBounds() -> CGRect? {
+        tick()
+        due()
+        return CGRect(x: frame.minX, y: height - frame.maxY, width: frame.width, height: frame.height)
+    }
 
     var isOnScreen: Bool { onScreen }
 
@@ -139,10 +252,12 @@ final class FakeBrowser: WindowHandle {
     @discardableResult
     func answer() -> Bool {
         let was = frame
+        if let p = pendingSize { pendingSize = nil; take(p.size) }
+        beforeStall = nil
         let todo = queued
         queued = []
         for q in todo {
-            if let s = q.size { apply(s) }
+            if let s = q.size { if behaviour.timing == .atOnce { take(s) } else { apply(s) } }
             if let p = q.position { move(to: p) }
         }
         if behaviour.widensBack, frame.width < behaviour.minWidth - 0.5 {
@@ -158,30 +273,42 @@ final class FakeBrowser: WindowHandle {
     /// The person moves or resizes the window.
     func person(_ f: CGRect) {
         queued = []
+        pendingSize = nil
         reportReads = 0
         tilerHome = nil
-        frame = f
+        anim = nil
+        base = f
         history.append((f, true))
     }
 
     private func move(to p: CGPoint) {
-        set(CGRect(x: p.x, y: height - p.y - frame.height, width: frame.width, height: frame.height))
+        let f = frame
+        set(CGRect(x: p.x, y: height - p.y - f.height, width: f.width, height: f.height))
     }
 
     /// The top left stays; the size is limited to what fits on the display
     /// the window is on now, and to the browser's minimum.
     private func apply(_ s: CGSize) {
-        let d = (Displays.all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area } ?? Displays.all[0]).frame
+        let frame = self.frame
+        // The displays side by side at its height count as one screen.
+        let span = screenSpan(at: frame)
+        let d = CGRect(x: span?.lowerBound ?? frame.minX, y: (Displays.all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area } ?? Displays.all[0]).frame.minY,
+                       width: (span?.upperBound ?? frame.maxX) - (span?.lowerBound ?? frame.minX), height: 1)
         let least = behaviour.widensBack ? 1 : max(1, behaviour.minWidth)
-        // A window already past the display's edge keeps what it has there.
-        let w = max(least, min(s.width, max(max(d.maxX, frame.maxX) - frame.minX, least)))
-        let h = min(s.height, max(frame.maxY - d.minY, 1))
+        // A window can always go back where it has been, past the display's edge too.
+        let reach = history.map(\.frame.maxX).max() ?? frame.maxX
+        let w = max(least, min(s.width, max(max(d.maxX, frame.maxX, reach) - frame.minX, least)))
+        let h = min(s.height, max(frame.maxY - d.minY, frame.height, 1))
         set(CGRect(x: frame.minX, y: frame.maxY - h, width: w, height: h))
     }
 
+    /// Where it goes: at once, or (macOS 27) animated from where it is now,
+    /// cutting short the animation in flight there.
     private func set(_ f: CGRect) {
-        guard f != frame else { return }
-        frame = f
+        let at = frame
+        if anim != nil { base = at; anim = nil; history.append((at, false)) }
+        guard f != at else { return }
+        if behaviour.animation > 0 { anim = (at, f, now()) } else { base = f }
         history.append((f, false))
     }
 }
@@ -215,6 +342,7 @@ final class SidebarRig {
         window.read()
         instance = SidebarInstance(window: window, sidebar: controller, hidden: true, width: width)
         instance.clock = { [unowned self] in self.time }
+        fake.now = { [unowned self] in self.time }
         instance.reducesMotion = { reduceMotion }
     }
 
@@ -223,14 +351,16 @@ final class SidebarRig {
 
     /// The shortcut: the slide to its end, then the window comes to rest.
     func toggle() {
+        fake.sliding = true
         SidebarController.shared.toggle(instance)
         var frames = 0
-        while instance.sliding, frames < 1000 {
+        while instance.sliding, frames < 2000 {
             time += 1.0 / 120
             instance.stepSlide()
             events()
             frames += 1
         }
+        fake.sliding = false
         rest()
     }
 
@@ -243,12 +373,25 @@ final class SidebarRig {
 
     /// The browser answers what it was asked, a tiling app does its part, and
     /// the window tracker reports the window at rest, until nothing changes.
+    /// The app's own look a moment later (`answerLater`), when nothing moved,
+    /// is one more rest.
     func rest() {
-        for _ in 0..<8 {
+        var quiet = 0
+        for _ in 0..<16 {
+            time += 0.5 // what is animating lands
             let changed = fake.answer()
+            time += 0.5 // and what that started: the tracker reports rest only once the window stops moving
             events()
             instance.settle(window.target)
-            if !changed { break }
+            var ticks = 0
+            while instance.sliding, ticks < 2000 { // the app's own moves, tick by tick
+                time += 1.0 / 120
+                instance.stepSlide()
+                events()
+                ticks += 1
+            }
+            quiet = changed ? 0 : quiet + 1
+            if quiet == 4 { break }
         }
     }
 
@@ -277,6 +420,13 @@ final class SidebarRig {
         rest()
     }
 
+    /// The browser and its sidebar.
+    var pair: CGRect {
+        var p = fake.frame
+        if open { p.size.width += sidebarWidth; if side == .left { p.origin.x -= sidebarWidth } }
+        return p
+    }
+
     /// The sidebar's outer edge (the one away from the browser), from the panel.
     var sidebarOuterEdge: CGFloat? {
         guard let p = instance.panel, p.isVisible else { return nil }
@@ -299,18 +449,31 @@ func offScreen(_ f: CGRect, _ displays: [Display]) -> CGFloat {
     return max(0, f.width - covered)
 }
 
+/// The horizontal span of the display under most of `r` and the displays
+/// side by side with it at `r`'s height: one screen, to a window.
+@MainActor
+func screenSpan(at r: CGRect) -> ClosedRange<CGFloat>? {
+    let level = Displays.all.map(\.frame).filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }.sorted { $0.minX < $1.minX }
+    guard let home = level.max(by: { $0.intersection(r).area < $1.intersection(r).area }) else { return nil }
+    var lo = home.minX, hi = home.maxX
+    for d in level where d.minX <= hi + 1 && d.maxX > hi { hi = d.maxX }
+    for d in level.reversed() where d.maxX >= lo - 1 && d.minX < lo { lo = d.minX }
+    return lo...hi
+}
+
 /// The frame the browser takes when the sidebar hides (rule 4): the pair's,
-/// no further off its display than the browser was. (Wider than the
-/// display, it starts at the display's edge.)
+/// moved as little as it takes to be on the displays beside each other at
+/// its height: the browser never ends off screen. No wider than they are.
 @MainActor
 func pairFrame(browser b: CGRect, sidebar w: CGFloat, side: SidebarSide) -> CGRect {
     var p = b
     p.size.width += w
     if side == .left { p.origin.x -= w }
-    guard let d = Displays.display(for: b)?.frame else { return p }
-    let right = max(d.maxX, b.maxX), left = min(d.minX, b.minX)
-    if p.maxX > right { p.origin.x = right - p.width }
-    if p.minX < left { p.origin.x = left }
+    guard let span = screenSpan(at: p) else { return p }
+    let lo = span.lowerBound, hi = span.upperBound
+    p.size.width = min(p.width, hi - lo) // no window wider than its displays
+    if p.maxX > hi { p.origin.x = hi - p.width }
+    if p.minX < lo { p.origin.x = lo }
     return p
 }
 
@@ -339,7 +502,9 @@ struct RuleCheck {
         let allowed = offScreen(before, displays) + 2
         let b = rig.fake.behaviour
         let frames = rig.fake.history[mark...].filter { !$0.byPerson }.map(\.frame)
-        let checked = (b.timing == .busy || b.widensBack) ? [rig.fake.frame] : frames + [rig.fake.frame]
+        // Replays (a busy or stalled browser doing late what it was asked, in a burst) and a browser
+        // widening itself are checked at rest.
+        let checked = (b.timing == .busy || b.widensBack || b.stall > 0) ? [rig.fake.frame] : frames + [rig.fake.frame]
         if let off = checked.first(where: { offScreen($0, displays) > allowed }) {
             problems.append("\(step): pushed off screen to \(off) (\(Int(offScreen(off, displays))) pt off; was \(before), \(Int(allowed - 2)) pt off)")
         }
@@ -387,10 +552,15 @@ struct RuleCheck {
         mark = rig.fake.history.count
     }
 
-    /// After the sidebar's edge was dragged: beside the browser, nothing pushed off.
-    mutating func adjusted(from before: CGRect, _ step: String) {
+    /// After the sidebar's edge was dragged: beside the browser, and the pair
+    /// (the drag keeps its outer edges) no further off screen than it was.
+    mutating func adjusted(from pair: CGRect, _ step: String) {
         besideTheBrowser(step)
-        noFurtherOff(than: before, step)
+        let allowed = offScreen(pair, displays) + 2
+        if offScreen(rig.pair, displays) > allowed {
+            problems.append("\(step): the pair pushed off screen to \(rig.pair) (was \(pair))")
+        }
+        mark = rig.fake.history.count
     }
 
     /// After the person moved the sidebar by `dx`: the browser went along, as one window.
@@ -511,13 +681,23 @@ struct GuardCase: CustomStringConvertible {
                 case 0: round.append(.moveBrowser(dx: CGFloat(r.int(-300...300)), dy: CGFloat(r.int(-80...80))))
                 case 1: round.append(.resizeBrowser(left: CGFloat(r.int(-150...150)), right: CGFloat(r.int(-150...150))))
                 case 2: round.append(.dragEdge(CGFloat(r.int(-160...160))))
-                default: round.append(.moveSidebar(CGFloat(r.int(-200...200))))
+                // At least 5 pt: within 2 pt the app takes a frame for its own placement, rounded.
+                default: round.append(.moveSidebar(CGFloat(r.int(5...200) * (r.bool() ? 1 : -1))))
                 }
             }
             actions.append(round)
         }
+        var b = BrowserBehaviour.random(&r)
+        b.minWidth = min(b.minWidth, w.width) // a window is never narrower than its browser lets it be
+        if b.timing != .atOnce || b.widensBack || b.animation > 0 || b.sizeLag > 0 {
+            // A browser that has stopped answering is left alone by a drag of the edge (BrowserWatcher.isStalled),
+            // which the fake can't make it; and one that answers (or widens itself back) after the drag has ended has been resized
+            // as by hand, which is not put back (docs/tabs.md, Width). Nor macOS 27's animated sets: a drag of the
+            // edge still asks the browser at each move of the pointer (not yet one call at a time). No drags for them.
+            actions = actions.map { $0.filter { if case .dragEdge = $0 { false } else { true } } }
+        }
         return GuardCase(displays: displays, window: w, side: r.bool() ? .left : .right, width: Double(r.int(200...440)),
-                         behaviour: .random(&r), reduceMotion: r.bool(0.15), actions: actions)
+                         behaviour: b, reduceMotion: r.bool(0.15), actions: actions)
     }
 
     /// Whether the browser can give the sidebar its least width out of `frame`.
@@ -543,14 +723,16 @@ struct GuardCase: CustomStringConvertible {
                         rig.personSets(f)
                         check.personDid(f, step)
                     case .resizeBrowser(let l, let r):
+                        // macOS stops a resize by hand at the browser's own minimum.
                         var f = before
                         f.origin.x += l
-                        f.size.width = max(200, f.width - l + r)
+                        f.size.width = max(200, behaviour.minWidth, f.width - l + r)
                         rig.personSets(f)
                         check.personDid(f, step)
                     case .dragEdge(let delta):
+                        let pair = rig.pair
                         rig.personDragsEdge(by: delta)
-                        check.adjusted(from: before, step)
+                        check.adjusted(from: pair, step)
                     case .moveSidebar(let dx):
                         rig.personMovesSidebar(by: dx)
                         check.carried(from: before, by: dx, step)
@@ -594,6 +776,10 @@ struct GuardCase: CustomStringConvertible {
             if !problems.isEmpty { failed.append((i, c, problems)) }
         }
         print("SidebarGuard: \(count) random cases from seed \(seed), \(failed.count) failed")
+        // BETTERLINK_GUARD_LIST=1: each failed case's first problem, one line each.
+        if env["BETTERLINK_GUARD_LIST"] == "1" {
+            for (i, c, problems) in failed { print("SidebarGuard case \(i): \(problems[0]) || \(c.behaviour) || \(c.side) \(Int(c.width)) window \(c.window)") }
+        }
         for (i, c, problems) in failed.prefix(12) {
             let found = problems.prefix(3).joined(separator: "\n  ")
             Issue.record("case \(i) of seed \(seed): \(c)\n  \(found)")
@@ -618,11 +804,55 @@ struct GuardCase: CustomStringConvertible {
                              visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
         let brave = CGRect(x: 0, y: 0, width: 2056, height: 1290)
         var behaviours = [BrowserBehaviour(revertReads: 2), BrowserBehaviour(revertReads: 6), BrowserBehaviour(positionOnly: true),
-                          BrowserBehaviour(minWidth: 615)]
+                          BrowserBehaviour(minWidth: 615), BrowserBehaviour(sizeLag: 1), BrowserBehaviour(sizeLag: 2), BrowserBehaviour(sizeLag: 4),
+                          BrowserBehaviour(animation: 0.2), BrowserBehaviour(animation: 0.25), BrowserBehaviour(animation: 0.3)]
         behaviours.append(BrowserBehaviour(timing: .late, minWidth: 615))
         for b in behaviours {
             run(GuardCase(displays: [screen], window: brave, side: .left, width: 280, behaviour: b, reduceMotion: false, actions: [[], []]))
         }
+    }
+
+    /// Nick's three measurements on macOS 27.2.1 (Brave at 0, 39 to 2056,
+    /// 1329, AppleScript's bounds; each asked for 280, 39 to 2056, 1329), as
+    /// the fake browser has them: each set animated over 0.25 s and cut short
+    /// by the next. The timings are those his calls took.
+    @Test func nicksMacOS27Measurements() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        Displays.source = { [screen] }
+        let brave = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        // A: size; read it (it says 1776 at once); position. 1871 wide.
+        var t = 0.0
+        let a = FakeBrowser(frame: brave, behaviour: BrowserBehaviour(animation: 0.25))
+        a.now = { t }
+        a.setSize(CGSize(width: 1776, height: 1290))
+        #expect(a.size()?.width == 1776)
+        t += 0.140
+        a.setPosition(CGPoint(x: 280, y: 39))
+        t += 10
+        #expect(abs(a.frame.width - 1871) < 3 && a.frame.minX == 280, "A: \(a.frame)")
+        // B: position, then size. At x 15.
+        t = 0
+        let b = FakeBrowser(frame: brave, behaviour: BrowserBehaviour(animation: 0.25))
+        b.now = { t }
+        b.setPosition(CGPoint(x: 280, y: 39))
+        t += 0.0594
+        b.setSize(CGSize(width: 1776, height: 1290))
+        t += 10
+        #expect(abs(b.frame.minX - 15) < 3 && b.frame.width == 1776, "B: \(b.frame)")
+        // C: sixteen steps 15 ms apart, each size then position. 1838 wide.
+        t = 0
+        let c = FakeBrowser(frame: brave, behaviour: BrowserBehaviour(animation: 0.25))
+        c.now = { t }
+        for i in 1...16 {
+            let q = CGFloat(i) / 16
+            c.setSize(CGSize(width: 2056 - 280 * q, height: 1290))
+            t += 0.0947
+            c.setPosition(CGPoint(x: 280 * q, y: 39))
+            t += 0.015
+        }
+        t += 10
+        #expect(abs(c.frame.width - 1838) < 3 && c.frame.minX == 280, "C: \(c.frame)")
     }
 
     /// PR 72's placements: a window filling the screen or snapped to a half,
