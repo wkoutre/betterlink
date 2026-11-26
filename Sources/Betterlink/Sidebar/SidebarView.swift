@@ -304,13 +304,25 @@ struct SidebarView: View {
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
                 .strokeBorder(pal.textTertiary, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
             .contentShape(Rectangle())
-            .onDrop(of: [SidebarDrag.type], isTargeted: nil) { providers in
-                SidebarDrag.keys(from: providers) { keys in
-                    dragging = nil
-                    apply(keys, at: spot, p, open)
-                }
-                return true
-            }
+            .onDrop(of: [SidebarDrag.type], isTargeted: nil) { drop($0, at: spot, p, open) }
+    }
+
+    /// A drop on a zone or on the Favorites' empty space. The keys arrive
+    /// later, so whether it is taken is decided from what this sidebar is
+    /// dragging: a drop that would move nothing (a folder onto the Favorites)
+    /// is refused, and slides back. Not known here: a tab whose page is already
+    /// a Favorite counts as taken and saves nothing, and a row dragged from
+    /// another window's sidebar is taken as it was before.
+    private func drop(_ providers: [NSItemProvider], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
+        guard dragging == nil || allowed(spot, p) else {
+            dragging = nil
+            return false
+        }
+        SidebarDrag.keys(from: providers) { keys in
+            dragging = nil
+            apply(keys, at: spot, p, open)
+        }
+        return true
     }
 
     private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
@@ -347,13 +359,7 @@ struct SidebarView: View {
         .animation(Motion.quick(reduceMotion), value: p.favorites.map(\.id))
         .animation(Motion.quick(reduceMotion), value: open.map(\.url))
         // Dropped on the grid's empty space: the end of the Favorites.
-        .onDrop(of: [SidebarDrag.type], isTargeted: nil) { providers in
-            SidebarDrag.keys(from: providers) { keys in
-                dragging = nil
-                apply(keys, at: .favorites(p.favorites.count), p, open)
-            }
-            return true
-        }
+        .onDrop(of: [SidebarDrag.type], isTargeted: nil) { drop($0, at: .favorites(p.favorites.count), p, open) }
     }
 
     // MARK: - Folders
