@@ -156,14 +156,18 @@ final class SidebarController: ObservableObject {
     /// every window.
     var toggleTitle: String {
         if let i = front { return i.hidden ? "Show Sidebar" : "Hide Sidebar" }
-        return collapsed ? "Show Sidebars" : "Hide Sidebars"
+        return allHidden ? "Show Sidebars" : "Hide Sidebars"
     }
+
+    /// Every window's sidebar is hidden, also when the shortcut hid them one at
+    /// a time; with no windows, as the setting says.
+    private var allHidden: Bool { WindowMemory.allHidden(instances.values.map(\.hidden), setting: collapsed) }
 
     /// The shortcut and the menu item: hide the sidebar and give the window its
     /// space back, or show it and make room again.
     func toggle() {
         guard enabled else { return }
-        guard let i = front else { return setCollapsed(!collapsed) }
+        guard let i = front else { return setCollapsed(!allHidden) }
         i.toggle()
         chosen.set(hidden: i.hidden, window: i.window.number, pid: i.window.target.pid)
         saveChosen()
