@@ -7,9 +7,12 @@ private let kInternetEventClass = AEEventClass(0x4755524C)  // 'GURL'
 private let kAEGetURL = AEEventID(0x4755524C)               // 'GURL'
 private let keyDirectObject = AEKeyword(0x2D2D2D2D)         // '----'
 private let keySenderPID = AEKeyword(0x73706964)            // 'spid'
+private let kAEOpenApp = AEEventID(0x6F617070)              // 'oapp'
+private let keyLaunchProperty = AEKeyword(0x70726474)       // 'prdt'
+private let kLaunchedAsLoginItem = OSType(0x6C676974)       // 'lgit'
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     let model = AppModel()
     private var statusItem: NSStatusItem?
     private var window: NSWindow?
@@ -35,7 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // Listen before loading settings: loading can report a problem.
         NotificationCenter.default.addObserver(forName: .betterlinkNeedsAttention, object: nil, queue: .main) { _ in
-            Task { @MainActor in self.showWindow() }
+            // A problem to read: not the moment for the first-run tour.
+            Task { @MainActor in self.showWindow(offerTour: false) }
         }
         model.startConfig(resourceDirectory: Bundle.main.resourceURL ?? Bundle.main.bundleURL)
         model.listenForCLIChanges()
@@ -47,9 +51,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menuBarSetting = model.$showsMenuBarIcon.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] shown in
             MainActor.assumeIsolated { self?.setStatusItemShown(shown) }
         }
+        // Started by macOS at login, not by the person: the window still opens
+        // as it always has, but that is not the moment for the first-run tour.
+        let launch = NSAppleEventManager.shared().currentAppleEvent
+        let atLogin = launch?.eventID == kAEOpenApp
+            && launch?.paramDescriptor(forKeyword: keyLaunchProperty)?.enumCodeValue == kLaunchedAsLoginItem
         // Opened by hand (not by a link): show the window.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
-            if !self.routedAtLaunch { self.showWindow() }
+            if !self.routedAtLaunch { self.showWindow(offerTour: !atLogin) }
         }
     }
 
@@ -104,22 +113,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Window
 
-    func showWindow() {
+    /// - Parameter offerTour: whether the first-run tour may open with the
+    ///   window (once, until it is finished or skipped). Off when the window
+    ///   opens to show something particular: a problem, or a page asked for.
+    func showWindow(offerTour: Bool = true) {
         model.refreshCatalog()
         model.refreshDefaultBrowser()
         if window == nil {
-            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 880, height: 640),
+            let w = NSWindow(contentRect: NSRect(origin: .zero, size: BetterlinkWindow.defaultSize),
                              styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                              backing: .buffered, defer: false)
             w.title = "betterlink"
             w.titleVisibility = .hidden
             w.titlebarAppearsTransparent = true
             w.isReleasedWhenClosed = false
-            w.contentMinSize = NSSize(width: 780, height: 540)
             let host = NSHostingController(rootView: RootView().environmentObject(model))
             host.sizingOptions = []  // the window, not the content, sets the size
             w.contentViewController = host
-            w.setContentSize(NSSize(width: 880, height: 640))
+            w.setContentSize(BetterlinkWindow.defaultSize)
+            // The smallest size is held in windowWillResize, below.
+            w.delegate = self
+            // Closing the window on the tour ends the tour, like Skip.
+            // The window lives as long as the app, so the observer is never removed.
+            _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+                MainActor.assumeIsolated { TourModel.shared.windowClosed() }
+            }
             w.center()
             // AppKit keeps the frame in the app's own preferences: not from a
             // development or test run (MenuBarIcon.defaults).
@@ -129,6 +147,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         model.refreshPermissions()
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        TourModel.shared.windowOpened(offer: offerTour)
+    }
+
+    /// Holds the window's smallest size: dragged smaller, it clips the page's
+    /// edges (and the tour's buttons). `contentMinSize` can't hold it: the
+    /// hosting view writes the window's size limits from its own on its first
+    /// layout, and with `sizingOptions = []` those are zero.
+    func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
+        let least = sender.frameRect(forContentRect: NSRect(origin: .zero, size: BetterlinkWindow.minSize)).size
+        return NSSize(width: max(frameSize.width, least.width), height: max(frameSize.height, least.height))
     }
 
     // MARK: Keyboard menu
@@ -223,6 +251,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.removeAllItems()
         menu.addItem(withTitle: "Open betterlink…", action: #selector(openWindow), keyEquivalent: "").target = self
         menu.addItem(withTitle: "Edit config.ts", action: #selector(editConfig), keyEquivalent: "").target = self
+        // The way back into the tour for people who live in the menu bar.
+        menu.addItem(withTitle: TourModel.shared.news.isEmpty ? "Show the Tour…" : "What's New…",
+                     action: #selector(showTour), keyEquivalent: "").target = self
         if Updater.shared.isAvailable {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
         }
@@ -252,6 +283,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openWindow() { showWindow() }
     @objc private func editConfig() { model.editConfig() }
+    @objc private func showTour() {
+        showWindow(offerTour: false)
+        TourModel.shared.start(TourModel.shared.news.isEmpty ? .replay : .whatsNew)
+    }
     @objc private func toggleSidebar() { SidebarController.shared.toggleCollapsed() }
     @objc private func checkForUpdates() { Updater.shared.checkNow() }
     @objc private func copyLink(_ sender: NSMenuItem) {
