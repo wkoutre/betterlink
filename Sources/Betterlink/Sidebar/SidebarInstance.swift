@@ -223,8 +223,9 @@ final class SidebarInstance: ObservableObject {
     /// changed. `watching`: nothing of betterlink's can still be on its way
     /// (the last steps weren't capped, nor a drag's, which lets calls go),
     /// so someone else's change meanwhile ends it as it ends any steps.
-    private func resend(_ frame: CGRect, watching: Bool, then: @escaping () -> Void = {}) {
-        steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching)
+    /// `settling`: every size held still before it counts (`WindowSteps.settles`).
+    private func resend(_ frame: CGRect, watching: Bool, settling: Bool = false, then: @escaping () -> Void = {}) {
+        steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching, settles: settling)
         afterSteps = then
         stepWindow()
         runTicker()
@@ -356,7 +357,6 @@ final class SidebarInstance: ObservableObject {
         // A refused open still going back: it opens once there (restored()).
         if restoring != nil { return }
         if var run = slideRun { // turning back mid-hide: open in the frame it was closing to (rule 2)
-            if tooNarrow(run.hiddenWindow) { return }
             closing = nil
             let browser = SidebarGeometry.opened(run.hiddenWindow, width: CGFloat(width), side: run.side)
             let panel = placePanel(placement(beside: browser))
@@ -384,7 +384,6 @@ final class SidebarInstance: ObservableObject {
     /// browser is asked for the frame less the sidebar's width, its far edge
     /// kept. What it really takes decides the sidebar's width (`answer()`).
     private func open(from frame: CGRect, slide: Bool) {
-        if tooNarrow(frame) { return layout() }
         width = chosenWidth
         let side = sidebar.side
         let browser = SidebarGeometry.opened(frame, width: CGFloat(width), side: side)
@@ -461,8 +460,6 @@ final class SidebarInstance: ObservableObject {
         let real = onScreenFrame
         // Past the cap: a browser slower than that, or one that never took the size.
         if lastCapped { return refuse(o, real: real, .noSize) }
-        // Took part and stopped: its minimum.
-        if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { least = real.width }
         if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, notice) }
         let room = o.frame.width - real.width
         // Its far edge where it was, at the width it really has.
@@ -512,23 +509,6 @@ final class SidebarInstance: ObservableObject {
         layout()
     }
 
-    /// The narrowest this window has been seen to go when asked to go
-    /// narrower: its browser's minimum, learned from a refused or short
-    /// open. Seen narrower since (the person resized it), that is its least.
-    private var least: CGFloat?
-
-    /// Too narrow, by what this window has shown it can't go below, to leave
-    /// the sidebar its least width out of `frame`: it stays closed at once,
-    /// with its note, and nothing is asked of the browser.
-    private func tooNarrow(_ frame: CGRect) -> Bool {
-        guard let least, frame.width - least < SidebarGeometry.widths.lowerBound - 0.5 else { return false }
-        DragTrace.log("open: window \(window.number) goes no narrower than \(Int(least)) pt, leaving the sidebar \(Int(frame.width - least)) of \(Int(frame.width)): stays closed")
-        hidden = true
-        sidebar.refused(self)
-        Self.tell(.noRoom, frame)
-        return true
-    }
-
     /// A refused open's window is back. Pressed again meanwhile (the last
     /// press asked for it open): tried again from there.
     private func restored(_ frame: CGRect) {
@@ -544,6 +524,12 @@ final class SidebarInstance: ObservableObject {
         let b = window.target.frame
         sidebar.paired(window, browser: b, pair: closedUnderWay ?? closedFrame(from: b, side: placedSide))
     }
+
+    /// Its browser missed a call while every window was given back (quitting,
+    /// the sidebar turned off): nothing more is sent to it, not even when it
+    /// is let go, and its record is kept, so it is recognised later instead
+    /// of narrowed again.
+    func letAlone() { paired = false }
 
     func unpair() {
         guard paired else { return }
@@ -692,8 +678,12 @@ final class SidebarInstance: ObservableObject {
         var ending = false
         var checked = false
         var resent = false
-        /// The widest it went when asked wider, this drag: a screen's edge stops it there.
+        var rechecked = false
+        /// The widest it went when asked wider, this drag: a screen's edge stops
+        /// it there. The narrowest it went when asked narrower: its minimum,
+        /// for this drag only (it may have stopped only for a moment).
         var most: CGFloat?
+        var least: CGFloat?
         /// The longest a call has taken to land, this drag: a call that
         /// changes nothing is waited for three times that (at least 0.15 s),
         /// not the full timeout, since the pointer's next width comes anyway
@@ -760,7 +750,7 @@ final class SidebarInstance: ObservableObject {
     /// past them would change nothing, and be waited out.
     private func within(_ ask: CGRect, _ r: Resize) -> CGRect {
         var w = ask.width
-        if let least, w < least - 0.5 { w = least }
+        if let least = r.least, w < least - 0.5 { w = least }
         if let most = r.most, w > most + 0.5 { w = most }
         guard w != ask.width else { return ask }
         var a = ask
@@ -780,7 +770,7 @@ final class SidebarInstance: ObservableObject {
         // The last steps asked it narrower than it went: that is its minimum.
         // Wider: that is as far as it goes from here, this drag.
         if let ran = r.ran, abs(ran.width - real.width) >= 2 {
-            if ran.width < real.width { least = real.width } else { r.most = real.width }
+            if ran.width < real.width { r.least = real.width } else { r.most = real.width }
             r.asked = within(r.asked, r)
             resizing = r
         }
@@ -802,7 +792,15 @@ final class SidebarInstance: ObservableObject {
         guard r.resent else {
             r.resent = true
             resizing = r
-            return resend(onScreenFrame, watching: false) { [weak self] in self?.stepResize() }
+            return resend(onScreenFrame, watching: false, settling: true) { [weak self] in self?.stepResize() }
+        }
+        // Its far edge moved meanwhile (a browser that widened itself back to its minimum): checked and sent once more again.
+        if !r.rechecked, r.drag.kept(onScreenFrame) != nil {
+            r.rechecked = true
+            r.checked = false
+            r.resent = false
+            resizing = r
+            return stepResize()
         }
         endResize()
     }
@@ -842,6 +840,7 @@ final class SidebarInstance: ObservableObject {
             open.ending = false
             open.checked = false
             open.resent = false
+            open.rechecked = false
             resizing = open
         } else if !beginResize() {
             return
@@ -885,7 +884,6 @@ final class SidebarInstance: ObservableObject {
     /// The window moved or resized: the panel stays beside it, on a Space
     /// that isn't showing too.
     func follow() {
-        if let l = least, window.target.frame.width < l - 1 { least = window.target.frame.width }
         trackResize()
         // A single step still open: its answer ends the step.
         if let r = resizing, r.waits, steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }

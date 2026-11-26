@@ -15,8 +15,14 @@ import CoreGraphics
 /// still changing from the last call, and a window is never moved before it
 /// has really taken its new size. A call has landed when the window server's
 /// frame has reached what it asked, or has changed at least once and then
-/// held still for `still` (a narrower size of a show or hide: both, since a
-/// browser can take it and then widen itself back to its minimum). A window that hasn't moved at all since the call
+/// held still for `still` (a narrower size of a show or hide, or of the final
+/// target: both, since a browser can take it and then widen itself back to
+/// its minimum). A call
+/// of a show or hide (or the final target's) held still short of what it
+/// asked is sent once more first, since macOS 27 can hold an animation
+/// partway: if the window moves again it goes on, and if it stays still
+/// another `still` (plus the longest the window took to start on a call of
+/// these steps, since that animation too can begin late) it has stopped there. A window that hasn't moved at all since the call
 /// hasn't started on it yet: that is waited for, and only `deadline` ends
 /// the wait (a call that changes nothing within `patience` is sent once
 /// more meanwhile, since a call can be dropped).
@@ -81,6 +87,10 @@ public struct WindowSteps: Sendable {
     /// With a `deadline`, always; the final target sent once more, only when
     /// nothing of betterlink's can still be on its way (not after a cap).
     public let watches: Bool
+    /// `resends`: every size lands only once it has held still too, not only
+    /// a narrower one (the end of a drag, whose last size the window may
+    /// look done with before its browser has widened itself back).
+    public let settles: Bool
     public private(set) var done = false
     /// Done because something else changed the window (see above).
     public private(set) var interrupted = false
@@ -94,6 +104,9 @@ public struct WindowSteps: Sendable {
     public var patience = WindowSteps.timeout
     /// The longest any call took to land (its last change), in seconds.
     public private(set) var slowest = 0.0
+    /// The longest the window took to start on a call of these steps (its
+    /// first change), in seconds: macOS 27's animation can begin late.
+    private var startLag = 0.0
 
     private enum Phase: Equatable {
         case start
@@ -104,8 +117,10 @@ public struct WindowSteps: Sendable {
     private var phase = Phase.start
     /// The call in flight: when it was sent, the frame at the last look, when
     /// that last changed, the frame it was sent from, and whether the window
-    /// has changed since (a change in the very tick it was sent counts).
-    private var sent: (call: Call, at: Double, last: CGRect, changed: Double, from: CGRect, moved: Bool)?
+    /// has changed since (a change in the very tick it was sent counts); and,
+    /// once it was sent again to check a stop short, when, and whether the
+    /// window has moved since.
+    private var sent: (call: Call, at: Double, last: CGRect, changed: Double, from: CGRect, moved: Bool, checkedAt: Double?, resumed: Bool)?
     /// The call in flight was the steps' these took over from.
     private var inherited = false
     /// `resends`: the call in flight was sent again once already.
@@ -132,7 +147,7 @@ public struct WindowSteps: Sendable {
     /// `after`: the steps these replace, mid-way: their call in flight is
     /// waited for first.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, after earlier: WindowSteps? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, after earlier: WindowSteps? = nil) {
         self.target = target
         self.keep = keep
         self.widest = widest
@@ -140,10 +155,12 @@ public struct WindowSteps: Sendable {
         self.deadline = resends ? nil : deadline
         self.resends = resends
         self.watches = resends ? watches : deadline != nil
+        self.settles = resends && settles
         // Its call in flight is waited for first, as one of these.
         if let earlier, !earlier.done {
             sent = earlier.sent
             inherited = sent != nil
+            startLag = earlier.startLag
         }
     }
 
@@ -192,19 +209,34 @@ public struct WindowSteps: Sendable {
                     done = true
                     return nil
                 }
+                if !s.moved { startLag = max(startLag, now - s.at) }
+                if let c = s.checkedAt, !s.resumed { s.resumed = true; startLag = max(startLag, now - c) }
                 s.last = seen
                 s.changed = now
                 s.moved = true
                 sent = s
             }
             // Still, once it has moved: landed short. Not moved at all yet: not started.
-            let still = s.moved && now - s.changed >= Self.still
+            let still = s.moved && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
-            // narrower size, carrying out a show or hide, only once it has held still too: a browser can
-            // take it and then widen itself back to its minimum.
-            let holds = capped && Self.narrows(s.call, s.from)
-            let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still)
-            if !arrived, !still {
+            // narrower size, carrying out a show or hide or sending the final target, only once it has
+            // held still too: a browser can take it and then widen itself back to its minimum.
+            let holds = (capped || resends) && Self.narrows(s.call, s.from)
+            // Settling: a size, reached, and nothing changed for `still`, whether it moved or not.
+            let settling = settles && { if case .size = s.call { true } else { false } }()
+            let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still) && (!settling || now - s.changed >= Self.still)
+            // Held still short of what it asked, carrying out a show or hide or sending the final target:
+            // sent once more, since macOS 27 can hold an animation partway. Moving again, it goes on;
+            // still another `still`, it has stopped there (its minimum, or a screen's edge).
+            if capped || resends, still, !Self.reached(s.call, seen), s.checkedAt == nil {
+                s.checkedAt = now
+                s.changed = now
+                sent = s
+                return s.call
+            }
+            // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
+            let stopped = s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false
+            if !arrived, !still, !stopped {
                 guard !s.moved, now - s.at >= patience else { return nil }
                 // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
                 // or hide, waited for up to the deadline; the final target's, once; a drag's, or one the
@@ -328,7 +360,7 @@ public struct WindowSteps: Sendable {
     }
 
     private mutating func send(_ c: Call, _ seen: CGRect, _ now: Double) -> Call {
-        sent = (c, now, seen, now, seen, false)
+        sent = (c, now, seen, now, seen, false, nil, false)
         resent = false
         return c
     }

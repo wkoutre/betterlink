@@ -158,15 +158,20 @@ import Testing
         #expect(w == narrowed && !s.capped && !s.interrupted, "\(w) at \(t)")
     }
 
-    /// A window that moves, then holds still, has landed where it stopped:
-    /// after `still`, not before.
+    /// A window that moves, then holds still short of what was asked, is
+    /// sent the call once more after `still` (a hold partway through an
+    /// animation); still another `still` (plus the 50 ms the window took to
+    /// start on the call), it has landed where it stopped.
     @Test func aChangeThatHoldsStillHasLanded() {
         var s = WindowSteps(target: narrowed, keep: .left, deadline: 3)
         #expect(s.step(seen: full, now: 0) == .size(narrowed))
         let stopped = CGRect(x: 0, y: 0, width: 1900, height: 1290)
+        let t = 0.05 + WindowSteps.still
         #expect(s.step(seen: stopped, now: 0.05) == nil)
-        #expect(s.step(seen: stopped, now: 0.05 + WindowSteps.still - 0.01) == nil)
-        #expect(s.step(seen: stopped, now: 0.05 + WindowSteps.still + 0.01) == .position(CGRect(x: 156, y: 0, width: 1900, height: 1290)))
+        #expect(s.step(seen: stopped, now: t - 0.01) == nil)
+        #expect(s.step(seen: stopped, now: t + 0.01) == .size(narrowed))
+        #expect(s.step(seen: stopped, now: t + WindowSteps.still + 0.04) == nil)
+        #expect(s.step(seen: stopped, now: t + WindowSteps.still + 0.07) == .position(CGRect(x: 156, y: 0, width: 1900, height: 1290)))
     }
 
     /// The final target sent whole (`resends`), even where the window is

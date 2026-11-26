@@ -260,13 +260,16 @@ final class SidebarController: ObservableObject {
     /// Every window moved together (`AXWindow.placeNow`): the wait is the
     /// slowest window's, bounded however many there are and whatever their
     /// browsers do (review F3). A window whose browser didn't answer keeps
-    /// its record, so it is recognised later instead of narrowed again.
+    /// its record, so it is recognised later instead of narrowed again, and
+    /// is sent nothing more, also when it is let go (`stop()`, review F2).
     /// `clock` and `pause`: the time, and waiting (tests step their own).
     func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
                        pause: @escaping (Double) -> Void = AXWindow.sleep) {
         let moves = all.compactMap { $0.spaceBack() }
         let missed = AXWindow.placeNow(moves, clock: clock, pause: pause)
-        for i in all where !missed.contains(ObjectIdentifier(i.window.handle)) { i.unpair() }
+        for i in all {
+            if missed.contains(ObjectIdentifier(i.window.handle)) { i.letAlone() } else { i.unpair() }
+        }
     }
 
     private func trustMayHaveChanged() {

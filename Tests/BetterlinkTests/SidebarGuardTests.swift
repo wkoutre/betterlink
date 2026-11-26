@@ -999,8 +999,9 @@ struct RuleCheck {
     /// it stops, not at the cap on a show (review of 596bc4e; at 9eb0125
     /// Brave against the screen's right edge sat squeezed for seconds): the
     /// note shows, and the window is back in its exact frame and stays there,
-    /// within 0.5 s of the stop plus the modelled time of a call (the way
-    /// back's), and a dropped one's wait. `start`: the frame it opened from.
+    /// within 0.5 s of the stop plus the modelled time of the way back's two
+    /// calls (its place and its size), and a dropped one's wait. `start`:
+    /// the frame it opened from.
     mutating func refusedPromptly(from start: CGRect, _ step: String) {
         let s = rig.samples
         guard !rig.open, let first = s.first, let noteAt = SidebarRig.noticeTimes.last(where: { $0 >= first.t - 1e-9 }) else { return }
@@ -1014,7 +1015,7 @@ struct RuleCheck {
         var each = b.animation + b.animationDelay + b.animationHold + Double(b.sizeLag) / 30 + (b.timing == .atOnce ? 0 : b.lateBy)
         if b.stall > 0 { each += Double(b.stall) / 60 }
         if b.dropsSizeCall != nil { each += WindowSteps.timeout }
-        let allowed = 0.5 + each + 1.0 / 60
+        let allowed = 0.5 + 2 * each + 1.0 / 60
         if noteAt - stop.t > allowed {
             problems.append(String(format: "%@: stopped short at %.0f pt (asked %.0f), refused %.0f ms later, more than %.0f ms", step, Double(stop.browser.width),
                                    Double(asked), (noteAt - stop.t) * 1000, allowed * 1000))
