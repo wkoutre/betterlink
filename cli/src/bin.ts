@@ -325,10 +325,30 @@ const sidebarSettings = Cli.create('settings', { description: 'The sidebar on th
     },
   })
 
+const sidebarIcon = Cli.create('icon', {
+  description: "A folder's icon, shown in place of the folder glyph: an emoji, or a built-in symbol (synced with the folder)",
+})
+  .command('set', {
+    description: 'Give a folder an emoji or a built-in symbol (give one of --emoji and --symbol)',
+    args: z.object({ id: z.string().describe('Folder id from sidebar list') }),
+    options: z.object({
+      emoji: z.string().optional().describe('One emoji, such as 📚'),
+      symbol: z.string().optional().describe('A built-in symbol\'s name, such as star.fill or folder.badge.person.crop (the SF Symbols app lists them)'),
+      ...sidebarProfileOption,
+    }),
+    run: (c) => core('sidebar.folders.icon', { id: c.args.id, ...c.options }),
+  })
+  .command('clear', {
+    description: "Take a folder's icon away, so it shows the folder glyph again",
+    args: z.object({ id: z.string().describe('Folder id from sidebar list') }),
+    options: z.object(sidebarProfileOption),
+    run: (c) => core('sidebar.folders.icon', { id: c.args.id, profile: c.options.profile, clear: true }),
+  })
+
 const sidebar = Cli.create('sidebar', {
   description: "The sidebar's saved things: Sidebar Profiles, Favorites, folders and saved links, imports, and its settings",
 })
-  .command('list', { description: 'Every Sidebar Profile with its Favorites and folders, with ids', run: () => core('sidebar.list') })
+  .command('list', { description: 'Every Sidebar Profile with its Favorites and folders (and their icons), with ids', run: () => core('sidebar.list') })
   .command(sidebarProfiles)
   .command('add-folder', {
     description: 'Make a folder',
@@ -364,6 +384,7 @@ const sidebar = Cli.create('sidebar', {
     options: z.object({ ...sidebarProfileOption, open: onOff('the folder') }),
     run: (c) => core('sidebar.items.expand', { id: c.args.id, profile: c.options.profile, expanded: isOn(c.options.open) }),
   })
+  .command(sidebarIcon)
   .command('import', {
     description: 'Import bookmarks (into one closed folder) or Arc\'s sidebar (each Space becomes a Sidebar Profile)',
     options: z.object({
@@ -549,7 +570,7 @@ const changelog = Cli.create('changelog', {
 export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
-    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders, saved links, imports and settings; ' +
+    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders and their icons, saved links, imports and settings; ' +
     "and open tabs in browsers with the Tabs extension; Sync between Macs; the tour (the first-run flow and What's New); and read the changelog. " +
     '(The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).

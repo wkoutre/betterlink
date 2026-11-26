@@ -152,6 +152,28 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         return out
     }
 
+    /// A folder by id, at any depth.
+    public func folder(_ id: UUID) -> SidebarFolder? {
+        if case .folder(let f)? = Self.find(id, in: items) { return f }
+        return nil
+    }
+
+    /// Gives a folder an icon, or takes it away (nil). False when `id` isn't
+    /// a folder: a saved link shows its site's icon.
+    @discardableResult
+    public mutating func setIcon(_ id: UUID, to icon: FolderIcon?) -> Bool {
+        guard folder(id) != nil else { return false }
+        items = Self.mapping(items) { item in
+            if case .folder(var f) = item, f.id == id {
+                f.icon = icon
+                f.iconRemoved = icon == nil ? true : nil
+                return .folder(f)
+            }
+            return item
+        }
+        return true
+    }
+
     public mutating func toggleExpanded(_ id: UUID) {
         items = Self.mapping(items) { item in
             if case .folder(var f) = item, f.id == id { f.expanded.toggle(); return .folder(f) }
@@ -389,9 +411,20 @@ public struct SidebarFolder: Codable, Equatable, Identifiable, Sendable {
     public var name: String
     public var expanded: Bool
     public var items: [SidebarItem]
+    /// Shown in place of the folder glyph. Left out of sidebar.json when
+    /// there is none, so a file from before folder icons reads the same.
+    public var icon: FolderIcon?
+    /// True once the icon was removed on this Mac, until sync has sent that.
+    /// A folder with no icon is not a removal by itself: a betterlink from
+    /// before folder icons writes every folder without one, and sending "no
+    /// icon" for those would undo icons set on other Macs. Left out of
+    /// sidebar.json when not set.
+    public var iconRemoved: Bool?
 
-    public init(id: UUID = UUID(), name: String, expanded: Bool = true, items: [SidebarItem] = []) {
-        self.id = id; self.name = name; self.expanded = expanded; self.items = items
+    public init(id: UUID = UUID(), name: String, expanded: Bool = true, items: [SidebarItem] = [], icon: FolderIcon? = nil,
+                iconRemoved: Bool? = nil) {
+        self.id = id; self.name = name; self.expanded = expanded; self.items = items; self.icon = icon
+        self.iconRemoved = iconRemoved
     }
 }
 

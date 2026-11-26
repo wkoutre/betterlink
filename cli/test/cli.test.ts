@@ -62,6 +62,30 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     }
   })
 
+  test('gives a folder an icon, shows it in the listing, and clears it', () => {
+    const d = home()
+    const folder = run(d, 'sidebar', 'add-folder', '--name', 'Docs').json.id as string
+    const icon = () => run(d, 'sidebar', 'list').json[0].items[0].icon
+    expect(run(d, 'sidebar', 'icon', 'set', folder.slice(0, 8), '--emoji', '🚀').code).toBe(0)
+    expect(icon()).toEqual({ emoji: '🚀' })
+    expect(run(d, 'sidebar', 'icon', 'set', folder, '--symbol', 'star.fill').code).toBe(0)
+    expect(icon()).toEqual({ symbol: 'star.fill' })
+    // The app checks a symbol against the Mac's own, and an emoji is one emoji.
+    expect(run(d, 'sidebar', 'icon', 'set', folder, '--symbol', 'not.a.symbol.this.mac.has').code).not.toBe(0)
+    expect(run(d, 'sidebar', 'icon', 'set', folder, '--emoji', 'ab').code).not.toBe(0)
+    // One of the two.
+    expect(run(d, 'sidebar', 'icon', 'set', folder).code).not.toBe(0)
+    expect(run(d, 'sidebar', 'icon', 'set', folder, '--emoji', '🚀', '--symbol', 'star.fill').code).not.toBe(0)
+    expect(icon()).toEqual({ symbol: 'star.fill' })
+    expect(run(d, 'sidebar', 'icon', 'clear', folder).code).toBe(0)
+    expect(icon()).toBeUndefined()
+    // A saved link shows its site's icon, so it can't have one.
+    const link = run(d, 'sidebar', 'add-link', '--url', 'https://example.com').json.id as string
+    expect(run(d, 'sidebar', 'icon', 'set', link, '--emoji', '🚀').code).not.toBe(0)
+    const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
+    for (const c of ['sidebar icon set', 'sidebar icon clear']) expect(llms).toContain(`betterlink ${c}`)
+  })
+
   // The app carries the Tabs extension and puts it in one folder (under
   // BETTERLINK_HOME here, so this never touches the one a browser loads).
   test('says where the Tabs extension is, after putting it there', () => {

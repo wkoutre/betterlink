@@ -48,6 +48,7 @@ Edits made at nearly the same time:
 
 - **Order:** each favorite, folder and saved link has a `position`, a fractional index (a string that sorts between its neighbours). Inserting between two items creates a new key, so two Macs reordering one list both keep their changes instead of overwriting each other. Equal positions sort by id.
 - **Moves:** a folder or saved link has a `parent` field (a folder id, or none for the top level). Moving an item changes `parent` and `position`, and the higher stamp decides.
+- **Folder icons:** a folder's icon is one field, `icon` (`"emoji:📚"` or `"symbol:star.fill"`; null once removed), so the later edit wins it whole. Only a removal made on a Mac sends "no icon": removing one marks the folder in sidebar.json (`iconRemoved`) until the next sync has sent it. A folder that merely has no icon sends no `icon` field at all, so a Mac that has just updated betterlink (whose sidebar.json an older betterlink wrote without icons) can't stamp "no icon" over one another Mac set, and takes that icon on its next sync. A Mac on a betterlink from before folder icons leaves the field alone. Whether a folder is open is not synced; each Mac keeps its own.
 - **Cycles:** two Macs might each move a folder into the other at once. After a merge, any folder whose parents form a loop goes to the top level, the one with the lowest id first, so every Mac makes the same choice. The Log says what moved.
 
 ## Deletes
