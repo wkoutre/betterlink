@@ -110,6 +110,15 @@ struct FolderIconTests {
         }
     }
 
+    /// The emoji the sidebar offers to click (the Mac's emoji picker can't
+    /// open for a panel that never makes betterlink the active app).
+    @Test func everySuggestedEmojiIsOneThatIsAccepted() throws {
+        let offered = FolderIcon.suggestedEmoji
+        #expect((16...48).contains(offered.count))
+        #expect(Set(offered).count == offered.count)
+        for e in offered { #expect(try FolderIcon.checkedEmoji(e) == .emoji(e), "\(e)") }
+    }
+
     @Test func rawStringsKeepTheirKind() {
         #expect(FolderIcon(raw: "emoji:🚀") == .emoji("🚀"))
         #expect(FolderIcon(raw: "symbol:star.fill") == .symbol("star.fill"))
