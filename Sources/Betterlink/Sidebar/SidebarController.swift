@@ -38,6 +38,10 @@ final class SidebarController: ObservableObject {
     /// False when this macOS no longer says which window is which
     /// (`AXWindow.number`): then no window gets a sidebar.
     let canTellWindowsApart = AXWindow.numbersWindows
+    /// False when the window server can't be asked for a window's corner
+    /// radius (`WindowServer.cornerRadius`): then every sidebar is cut for
+    /// `SidebarSeam.fallbackRadius`.
+    let readsWindowCorners = WindowServer.readsCorners
     /// Why the shortcut couldn't be registered, for the setting.
     @Published private(set) var hotKeyProblem: String?
 
