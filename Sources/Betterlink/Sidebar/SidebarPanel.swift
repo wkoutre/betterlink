@@ -5,10 +5,13 @@ import TabSyncCore
 /// A borderless, non-activating panel: clicking it never takes the browser out
 /// of the front, but it can still take keyboard focus for its text field.
 ///
-/// Beside a browser window it reaches `browserCornerRadius` under the window's
-/// edge and draws only where the window's rounded corners leave the screen
-/// showing, so the two read as one window with no notch at the seam. The rest
-/// of that strip is fully transparent, so clicks there reach the browser.
+/// Beside a browser window it lies directly under the window and reaches
+/// `overlap` under the window's edge, past the window's rounded corners
+/// (SidebarSeam). The window draws its own corners over the sidebar, so what
+/// they leave open is filled by the sidebar whatever their shape, and clicks
+/// on the window's edge are the window's. Its two outer corners are a system
+/// window's. Covering the window's edge instead (the window would not make
+/// room), it lies on top of the window, rounded all round.
 final class SidebarPanel: NSPanel {
     override func orderOut(_ sender: Any?) {
         fadeTimer?.invalidate(); fadeTimer = nil
@@ -20,12 +23,16 @@ final class SidebarPanel: NSPanel {
         super.orderOut(sender)
     }
 
-    /// The corner of a macOS 26 browser window: a continuous curve, measured on
-    /// Chrome (its alpha along the corner matches a 21 pt continuous rounded rect).
-    static let corner = ContinuousCorner(radius: 21)
-    /// How far the panel reaches under the browser window: as far as the
-    /// corner's curve runs along the edge.
-    static var browserCornerRadius: CGFloat { ceil(corner.extent) }
+    /// The outer corners: those macOS gives a window of a browser's style.
+    static let corner = ContinuousCorner.window
+    /// How far a browser window's corner may run along its edge: as far as
+    /// the largest corner macOS gives a window, since another app's window
+    /// doesn't tell its own. The panel reaches at least that far under it.
+    static let reach: CGFloat = {
+        let reach = max(ContinuousCorner.largest.span, corner.span)
+        DragTrace.log("corner: outer corners run \(corner.span) pt along the edge, the panel reaches \(reach) pt under its window")
+        return reach
+    }()
 
     private let effect = NSVisualEffectView()
     private let shape = CAShapeLayer()
@@ -34,8 +41,9 @@ final class SidebarPanel: NSPanel {
     private var leading: NSLayoutConstraint?
     private var trailing: NSLayoutConstraint?
     private var side: SidebarSide?
-    /// How far the panel reaches under the browser window: the corner's curve.
-    var reach: CGFloat { Self.browserCornerRadius }
+    /// How far the panel reaches under the browser window now. None while it
+    /// covers the window's edge.
+    private(set) var overlap: CGFloat = 0
 
     init(contentView content: NSView) {
         super.init(contentRect: NSRect(x: 0, y: 0, width: 280, height: 600),
@@ -50,8 +58,8 @@ final class SidebarPanel: NSPanel {
         isMovable = false
         isOpaque = false
         backgroundColor = .clear
-        // No shadow of its own: it would fall across the browser along the seam,
-        // and the pair should read as one window.
+        // No shadow of its own, as before it went under its window (it fell
+        // across the browser along the seam then). The window's falls on it.
         hasShadow = false
         // Our slide and fade are the only motion; no system fade on close.
         animationBehavior = .none
@@ -88,13 +96,14 @@ final class SidebarPanel: NSPanel {
         }
     }
 
-    /// Which side of the browser window the panel is on, or nil when it covers
-    /// the window's edge instead (all four corners rounded, nothing to fill).
-    func attach(to side: SidebarSide?) {
+    /// Which side of the browser window the panel is on, reaching `overlap`
+    /// under the window, or nil when it covers the window's edge instead.
+    func attach(to side: SidebarSide?, overlap: CGFloat) {
         self.side = side
-        let r = side == nil ? 0 : reach
-        leading?.constant = side == .right ? r : 0
-        trailing?.constant = side == .left ? -r : 0
+        self.overlap = side == nil ? 0 : overlap
+        // The content keeps to the sidebar: none of it under the window.
+        leading?.constant = side == .right ? self.overlap : 0
+        trailing?.constant = side == .left ? -self.overlap : 0
         reshape()
     }
 
@@ -108,49 +117,35 @@ final class SidebarPanel: NSPanel {
         reshape()
     }
 
-    /// The sidebar with rounded outer corners, plus the bits of the strip under
-    /// the browser's edge that its rounded corners leave uncovered.
-    /// During a slide, the part of the panel shown: from `inner` (the
-    /// window's seam) to the outer edge, in screen x. Nil: the whole panel.
+    /// During a slide, the part of the panel shown: from `reveal` (screen x,
+    /// SidebarSeam.reveal) to the outer edge. Nil: the whole panel.
     var reveal: CGFloat? { didSet { reshape() } }
 
     private func reshape() {
         let b = effect.bounds
         guard b.width > 0, b.height > 0 else { return }
-        let reach = self.reach, c = Self.corner
-        var path: CGPath
-        if let inner = reveal {
-            // Only the strip between the seam and the outer edge, outer
-            // corners rounded; the content stays anchored and isn't reflowed.
-            let x = min(max(inner - frame.minX, 0), b.width)
-            let strip = side == .left ? CGRect(x: 0, y: 0, width: x, height: b.height)
-                                      : CGRect(x: x, y: 0, width: b.width - x, height: b.height)
-            path = strip.width < 1 ? CGPath(rect: .zero, transform: nil)
-                                   : c.rect(strip, corners: side == .left ? [0, 3] : [1, 2])
-            CATransaction.begin(); CATransaction.setDisableActions(true)
-            shape.frame = b; shape.path = path
-            CATransaction.commit()
-            return
-        }
-        switch side {
-        case .right:
-            // The window is to the left; its edge is at x = reach.
-            let body = c.rect(CGRect(x: reach, y: 0, width: b.width - reach, height: b.height), corners: [1, 2])
-            path = body.union(c.notch(edgeX: reach, windowLeft: true, top: true, height: b.height))
-                .union(c.notch(edgeX: reach, windowLeft: true, top: false, height: b.height))
-        case .left:
-            let edge = b.width - reach
-            let body = c.rect(CGRect(x: 0, y: 0, width: edge, height: b.height), corners: [0, 3])
-            path = body.union(c.notch(edgeX: edge, windowLeft: false, top: true, height: b.height))
-                .union(c.notch(edgeX: edge, windowLeft: false, top: false, height: b.height))
-        default:
-            path = c.rect(b, corners: [0, 1, 2, 3])
-        }
+        let path = Self.outline(in: b, side: side, reveal: reveal.map { $0 - frame.minX }, corner: Self.corner)
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         shape.frame = b
         shape.path = path
         CATransaction.commit()
+    }
+
+    /// The panel's outline in its own bounds. Beside a window (`side`): all
+    /// of it, the two outer corners rounded; the end under the window stays
+    /// square, the window covers it. Covering a window's edge (nil): rounded
+    /// all round. During a slide: only the strip from `reveal` (x in the
+    /// bounds) to the outer edge; the content stays anchored and isn't
+    /// reflowed.
+    static func outline(in b: CGRect, side: SidebarSide?, reveal: CGFloat?, corner c: ContinuousCorner) -> CGPath {
+        guard let side else { return c.rect(b, corners: [0, 1, 2, 3]) }
+        let outer: Set<Int> = side == .left ? [0, 3] : [1, 2]
+        guard let reveal else { return c.rect(b, corners: outer) }
+        let x = min(max(reveal, 0), b.width)
+        let strip = side == .left ? CGRect(x: 0, y: 0, width: x, height: b.height)
+                                  : CGRect(x: x, y: 0, width: b.width - x, height: b.height)
+        return strip.width < 1 ? CGMutablePath() : c.rect(strip, corners: outer)
     }
 
     override var canBecomeKey: Bool { true }
@@ -174,22 +169,41 @@ final class SidebarPanel: NSPanel {
         var window: UInt32
     }
 
+    /// Where the panel was last put.
+    private var home: Place?
+
     /// Puts the panel in its place, ordering it in when it isn't. Works while
     /// another app is in front.
     func order(at place: Place) {
-        order(place.relation == .above ? .above : .below, relativeTo: Int(place.window))
+        home = place
+        super.order(place.relation == .above ? .above : .below, relativeTo: Int(place.window))
     }
 
-    /// Called after the mouse was pressed or released in the panel: macOS
+    /// Asked to the front, a panel on screen goes to its place instead: in
+    /// front of its window it would cover the window's edge.
+    override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
+        guard place == .above, otherWin == 0, isVisible, let home else { return super.order(place, relativeTo: otherWin) }
+        DragTrace.log("order: asked to the front, kept in its place")
+        super.order(home.relation == .above ? .above : .below, relativeTo: Int(home.window))
+    }
+
+    /// Called when the mouse is pressed or released in the panel: macOS
     /// brings a pressed window in front of the others.
     var onClick: (() -> Void)?
 
     override func sendEvent(_ event: NSEvent) {
-        super.sendEvent(event)
+        let press: Bool
         switch event.type {
-        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp: onClick?()
-        default: break
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp: press = true
+        default: press = false
         }
+        // A press that opens a menu stays in `super` until the menu closes:
+        // the menu's own run loop calls back meanwhile.
+        if press {
+            RunLoop.main.perform(inModes: [.common]) { [weak self] in MainActor.assumeIsolated { self?.onClick?() } }
+        }
+        super.sendEvent(event)
+        if press { onClick?() }
     }
 
     /// Shows at full alpha at once (a slide reveals it instead of a fade).

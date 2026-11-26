@@ -6,9 +6,11 @@ public enum SidebarPresence {
     public enum Relation: Equatable, Sendable { case above, below }
 
     /// Where the panel sits among the windows: next to its browser window, so
-    /// whatever covers that window covers it too. `attached`: beside the window
-    /// rather than covering its edge, where only above can be seen.
-    public static func relation(attached: Bool) -> Relation { .above }
+    /// whatever covers that window covers it too. `attached`: beside the
+    /// window, where it lies under it, so the window's rounded corners are
+    /// drawn over the sidebar (SidebarSeam). Covering the window's edge
+    /// instead, it can only be seen on top.
+    public static func relation(attached: Bool) -> Relation { attached ? .below : .above }
 
     public enum Decision: Equatable, Sendable {
         /// Out of sight.
