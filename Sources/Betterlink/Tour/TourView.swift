@@ -308,8 +308,8 @@ private struct TourTopicCard: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title).font(DS.TextStyle.bodyStrong).foregroundStyle(DS.Palette.text).lineLimit(1)
                     Text(topic.summary).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                        // Always two lines tall, so every card in the grid
-                        // is the same height whatever its summary's length.
+                        // Two lines tall even for a one-line summary; with the
+                        // card's minHeight every card in the grid matches.
                         .lineLimit(2, reservesSpace: true).multilineTextAlignment(.leading)
                 }
                 Spacer(minLength: 0)
@@ -323,7 +323,7 @@ private struct TourTopicCard: View {
             }
             .padding(.horizontal, DS.Space.space3)
             .padding(.vertical, DS.Space.space2)
-            .frame(maxWidth: .infinity, minHeight: 52, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
                 .fill(hovering ? DS.Palette.hover : DS.Palette.panel))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
