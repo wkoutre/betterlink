@@ -94,6 +94,28 @@ public struct WindowPairing: Sendable {
         return mine.isEmpty ? sessions.filter { $0.browser == app } : mine
     }
 
+    /// A window as the window server lists it: every window of every process on
+    /// every Space, with no titles (those would need Screen Recording).
+    public struct ServerWindow: Equatable, Sendable {
+        public var number: UInt32
+        public var pid: Int
+        public var layer: Int
+        public var bounds: WindowBounds
+        public init(number: UInt32, pid: Int, layer: Int, bounds: WindowBounds) {
+            self.number = number; self.pid = pid; self.layer = layer; self.bounds = bounds
+        }
+    }
+
+    /// For the tests of the rules to come: nothing is left out yet.
+    public static func unlisted(_ server: [ServerWindow], followed: Set<UInt32>) -> [Int: [WindowBounds]] {
+        Dictionary(grouping: server, by: \.pid).mapValues { $0.map(\.bounds) }
+    }
+    public static let patience = 3.0
+    public var byFocus: [Int: Hit] { pairs.filter(\.value.byFocus).mapValues(\.hit) }
+    public mutating func update(_ windows: [Window], others: [Int: [WindowBounds]], in sessions: [BrowserSession], now: Double) -> [Int: Found] {
+        update(windows, in: sessions, now: now)
+    }
+
     /// One look, at `now` (seconds on any steady clock): pairs `windows` (every
     /// one there is, whatever app is in front) with the browsers' own windows.
     public mutating func update(_ windows: [Window], in sessions: [BrowserSession], now: Double) -> [Int: Found] {
