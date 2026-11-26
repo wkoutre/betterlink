@@ -279,6 +279,30 @@ import Testing
         #expect(!c.awaitsWord(2) && c.kind(of: 2) == .unknown && c.wait(for: 2) == WindowKinds.waits[0])
     }
 
+    /// A window that closes, by whichever path, leaves nothing behind: not
+    /// the word it was given, nor that its wait for one was over.
+    @Test func aClosedWindowLeavesNeitherItsWordNorItsWaitBehind() {
+        var k = WindowKinds()
+        k.listening = true
+        k.saw([1: dia, 2: dia, 3: dia])
+        k.said([1: .other])
+        k.waited(2)
+        #expect(k.kind(of: 1) == .notBrowser && k.kind(of: 2) == .browser && k.awaitsWord(3))
+        // Seen to close (Accessibility, or a look that finds it gone).
+        k.forget(1)
+        k.forget(2)
+        #expect(k.isNew(1) && k.isNew(2))
+        #expect(k.kind(of: 1) == .unknown && k.awaitsWord(1) && k.awaitsWord(2))
+        // Forgetting twice changes nothing more.
+        let once = k
+        k.forget(1)
+        #expect(k == once)
+        // The window server's list without it (a palette judged and never followed).
+        k.said([3: .other])
+        k.keep([])
+        #expect(k.isNew(3) && k.listening)
+    }
+
     @Test func closedWindowsAreForgottenAndWhatTheBrowserShowedIsNot() {
         var k = WindowKinds()
         k.saw([1: normal])

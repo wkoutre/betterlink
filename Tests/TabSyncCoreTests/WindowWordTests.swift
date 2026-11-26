@@ -65,6 +65,23 @@ struct WindowWordTests {
         #expect(q.update([window], others: others, in: [normalOnly], now: 0)[100] == .unseen)
     }
 
+    /// A palette opening or closing is a window coming or going on the
+    /// browser's side: what the extension reports differs, so the windows
+    /// are counted again and a closed one is found.
+    @Test func whatTheExtensionReportsCountsItsPopupsAndAppWindows() {
+        let one = session([entry(1, "normal", "Inbox", at: Self.big)])
+        let withPalette = session([entry(1, "normal", "Inbox", at: Self.big), entry(2, "popup", "Palette", at: Self.small)])
+        let withApp = session([entry(1, "normal", "Inbox", at: Self.big), entry(3, "app", "App", at: Self.small)])
+        #expect(WindowPairing.reported(in: [one]).count == 1)
+        #expect(WindowPairing.reported(in: [withPalette]) == [.init(session: "/a", windowId: 1), .init(session: "/a", windowId: 2)])
+        #expect(WindowPairing.reported(in: [withApp]) != WindowPairing.reported(in: [one]))
+        // The palette's own window, awaiting its word, is one of the followed
+        // windows the window server's list is checked for.
+        let server = [WindowPairing.ServerWindow(number: 100, pid: 7, layer: 0, bounds: Self.big)]
+        #expect(WindowPairing.closed([100, 101], in: server) == [101])
+        #expect(WindowPairing.closed([100, 101], in: nil) == [])
+    }
+
     /// Dia: a palette is followed, with no sidebar, until the browser's word
     /// for it comes. It pairs with its own browser window, a popup.
     @Test func aPaletteFollowedForItsWordPairsWithItsOwnPopup() {
