@@ -20,6 +20,8 @@ final class TabsModel: ObservableObject {
     /// paints its window frame, when it has one.
     @Published private(set) var profiles: [String: (ref: ProfileRef, name: String, color: UInt32?)] = [:]
     private var profileLookups: [String: Date] = [:]
+    /// When each instance's profile was first looked for.
+    private var profileFirstLookups: [String: Date] = [:]
     @Published private(set) var registrationError: String?
     /// Bumped after a register/unregister so the browser rows re-read their state.
     @Published private(set) var registrationVersion = 0
@@ -155,11 +157,14 @@ final class TabsModel: ObservableObject {
             // every 30 s, on the next tab change, so a name or color changed in
             // the browser shows up.
             guard let instance = s.instance,
-                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast) > (profiles[instance] == nil ? 5 : 30),
+                  Date().timeIntervalSince(profileLookups[instance] ?? .distantPast)
+                    > ProfileLocator.lookAgain(found: profiles[instance] != nil,
+                                               lookingFor: Date().timeIntervalSince(profileFirstLookups[instance] ?? Date())),
                   let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
                   let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
                   let folder = browser.dataFolder else { continue }
             profileLookups[instance] = Date()
+            if profileFirstLookups[instance] == nil { profileFirstLookups[instance] = Date() }
             let root = FileManager.default.homeDirectoryForCurrentUser
                 .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
             DispatchQueue.global(qos: .utility).async {

@@ -7,6 +7,15 @@ import Foundation
 /// writes to `<profile folder>/Local Extension Settings/<extension id>/`. The id
 /// is found by reading those files: no browser API names the profile.
 public enum ProfileLocator {
+    /// Seconds after a look before a session's profile is looked for again
+    /// (each look reads the profile folders' extension storage and Local
+    /// State): one found is read again every 30 s, so a renamed or recolored
+    /// profile shows; one not found yet every 5 s. `lookingFor`: seconds
+    /// since its first look.
+    public static func lookAgain(found: Bool, lookingFor: Double) -> Double {
+        found ? 30 : 5
+    }
+
     /// The profile folder name (`Default`, `Profile 1`) under `dataFolder` whose
     /// extension storage holds `instance`, or nil.
     public static func directory(instance: String, dataFolder: URL,

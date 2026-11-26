@@ -110,6 +110,17 @@ import Testing
         #expect(hub.collect().first?.store == reference(sent: sent))
     }
 
+    /// A profile not found within a minute (its extension storage is written
+    /// a moment after the extension starts) is one this browser's folder
+    /// doesn't have: it is looked for again as seldom as a found one, not
+    /// every 5 s for as long as the browser runs.
+    @Test func aProfileNotFoundIsLookedForLessOftenAfterAMinute() {
+        #expect(ProfileLocator.lookAgain(found: false, lookingFor: 0) == 5)
+        #expect(ProfileLocator.lookAgain(found: false, lookingFor: 59) == 5)
+        #expect(ProfileLocator.lookAgain(found: false, lookingFor: 60) == 30)
+        #expect(ProfileLocator.lookAgain(found: true, lookingFor: 0) == 30)
+    }
+
     /// The terminal view and the e2e test see every change as it comes.
     @Test func aHubThatHoldsNothingHandsOnEveryChange() throws {
         let host = try FakeHost()
