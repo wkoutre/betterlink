@@ -168,6 +168,15 @@ final class SidebarInstance: ObservableObject {
     private var lastSlowest = 0.0
     /// The last steps ended at their cap, not where they were going.
     private var lastCapped = false
+    /// The last steps ended because the window stopped short (`WindowSteps.stoppedShort`).
+    private var lastStoppedShort = false
+    /// The width this window's browser was seen to stop at when asked
+    /// narrower, opening: its minimum as far as anything has shown. It
+    /// shapes the next open (`WindowSteps.stops`: a window already that
+    /// narrow that doesn't move when asked twice has stopped there, refused
+    /// for want of room at once, not at the cap), and never skips asking the
+    /// browser. Seen narrower since (the person resized it), it is forgotten.
+    private var stops: CGFloat?
     private var afterSteps: (() -> Void)?
     private var ticker: Timer?
 
@@ -208,7 +217,9 @@ final class SidebarInstance: ObservableObject {
     /// `retreats`: false when giving space back (`WindowSteps.retreats`).
     private func move(to frame: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, patience: Double = WindowSteps.timeout,
                       deadline: Double? = nil, then: @escaping () -> Void = {}) {
-        steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, after: steps)
+        // Opening (only an open has `widest`): what this window's browser was seen to stop at.
+        steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: widest == nil ? nil : stops,
+                            after: steps)
         steps?.patience = patience
         afterSteps = then
         stepWindow()
@@ -254,7 +265,29 @@ final class SidebarInstance: ObservableObject {
         stepWindow()
         stepPanel()
         if resizing != nil { follow() } // mid-drag the panel follows the window's real edge, tick by tick
+        revealOpening()
         if !sliding { stopTicker() }
+    }
+
+    /// An open without a slide (a new width, a window followed or back from
+    /// full screen): the panel is shown beside the frame the browser was
+    /// asked for, and until the browser has made room it is revealed only up
+    /// to where the browser really is, as a slide's is (`stepPanel`): a slow
+    /// or unmoving browser shows no panel over its content (the guard's
+    /// panel property, seed 20261126 case 408: a new width's open lay 281 pt
+    /// over a late browser for over 0.9 s). Its whole shape, the seam's
+    /// notches included, once the browser's edge is at its inner edge.
+    private func revealOpening() {
+        guard slideRun == nil, let panel else { return }
+        guard opening != nil, panel.isVisible, let real = AXWindow.shownFrame(of: window.handle) else {
+            if panel.reveal != nil { panel.reveal = nil }
+            return
+        }
+        let left = panel.attachedSide == .left
+        let edge = left ? real.minX : real.maxX
+        let inner = left ? panel.frame.maxX - panel.reach : panel.frame.minX + panel.reach
+        let short = left ? edge < inner - 0.5 : edge > inner + 0.5
+        if short { panel.reveal = edge } else if panel.reveal != nil { panel.reveal = nil }
     }
 
     private func stepWindow() {
@@ -264,6 +297,7 @@ final class SidebarInstance: ObservableObject {
         steps = nil
         lastSlowest = s.slowest
         lastCapped = s.capped
+        lastStoppedShort = s.stoppedShort
         let then = afterSteps
         afterSteps = nil
         if s.interrupted { takenByOther() } else { then?() }
@@ -460,7 +494,10 @@ final class SidebarInstance: ObservableObject {
         let real = onScreenFrame
         // Past the cap: a browser slower than that, or one that never took the size.
         if lastCapped { return refuse(o, real: real, .noSize) }
-        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, notice) }
+        // Took part and stopped: as far as it goes. (Not moved at all and taken as stopped, `stops` already says so.)
+        if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { stops = real.width }
+        // Stopped short where it was seen to stop before: no room, though it didn't move.
+        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastStoppedShort ? .noRoom : notice) }
         let room = o.frame.width - real.width
         // Its far edge where it was, at the width it really has.
         var at = real
@@ -885,12 +922,15 @@ final class SidebarInstance: ObservableObject {
     /// that isn't showing too.
     func follow() {
         trackResize()
+        // Narrower than its browser was seen to stop at: that was no minimum.
+        if let s = stops, onScreenFrame.width < s - 1 { stops = nil }
         // A single step still open: its answer ends the step.
         if let r = resizing, r.waits, steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }
         // A slide places the panel itself, frame by frame. Mid-drag, beside
         // the window as it is on screen.
         guard slideRun == nil, panel?.isVisible == true else { return }
         placePanel(placement(beside: resizing != nil ? onScreenFrame : window.target.frame))
+        revealOpening()
     }
 
     /// Shows the panel in its place, lets it sleep on its window's Space, or
@@ -916,6 +956,7 @@ final class SidebarInstance: ObservableObject {
             if rehome { panel.reenter(at: place(panel)) } else if reorder, panel.isVisible { panel.order(at: place(panel)) }
             panel.fadeIn(at: place(panel))
         }
+        revealOpening()
     }
 
     /// The panel's place among the windows: next to this one.

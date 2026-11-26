@@ -89,7 +89,12 @@ public struct WindowSteps: Sendable {
     public let deadline: Double?
     /// The final target sent whole once more (see above).
     public let resends: Bool
-    /// A width this window's browser was seen to stop at, asked narrower.
+    /// A width this window's browser was seen to stop at, asked narrower
+    /// (its minimum, as far as anything has shown). With a deadline, a
+    /// narrower size that a window no wider than that doesn't move at all is
+    /// checked as a stop short is (sent once more after `still`, and still
+    /// unmoved another `still` plus the start lag, stopped there) instead of
+    /// waited for up to the deadline. The browser is always asked.
     public let stops: CGFloat?
     /// A change the call in flight can't make ends the steps (`interrupted`).
     /// With a `deadline`, always; the final target sent once more, only when
@@ -145,6 +150,9 @@ public struct WindowSteps: Sendable {
     private var resentSize = false
     /// Where it was put at a size it stopped short at: its minimum.
     private var short: CGRect?
+    /// The size didn't move a window already at a width its browser was seen
+    /// to stop at (`stops`), sent once more either: it stopped there.
+    private var stayed = false
     /// `resends`: the calls still to send, and whether the last was one sent twice.
     private var finals: [Call]?
     private var echoed = false
@@ -233,7 +241,11 @@ public struct WindowSteps: Sendable {
                 sent = s
             }
             // Still, once it has moved: landed short. Not moved at all yet: not started.
-            let still = s.moved && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
+            // A narrower size of a show or hide, the window already no wider than this window's browser
+            // was seen to stop at (`stops`), at or above the width asked: not moving is its answer too.
+            let atStop = capped && !foreign && Self.narrows(s.call, s.from) && !s.moved
+                && { if case .size(let f) = s.call, let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
+            let still = (s.moved || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
             // narrower size, carrying out a show or hide or sending the final target, only once it has
             // held still too: a browser can take it and then widen itself back to its minimum.
@@ -254,6 +266,7 @@ public struct WindowSteps: Sendable {
             }
             // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
             let stopped = s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false
+            if stopped, atStop { stayed = true }
             if !arrived, !still, !stopped {
                 guard !s.moved, now - s.at >= patience else { return nil }
                 // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
@@ -341,6 +354,12 @@ public struct WindowSteps: Sendable {
             return send(.size(target), seen, now)
         case .sizing(let from, let movedFirst):
             let took = !Self.near(seen.width, from.width) || !Self.near(seen.height, from.height)
+            // Seen to stop there before, sent once more, and still unmoved: stopped short where it is.
+            if !took, stayed, let widest, target.width <= widest, seen.width > widest + 0.5 {
+                stoppedShort = true
+                done = true
+                return nil
+            }
             if !took, !resentSize {
                 // Not taken: sent once more (a call can be dropped), before giving up.
                 resentSize = true
