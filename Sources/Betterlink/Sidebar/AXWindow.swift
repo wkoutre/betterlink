@@ -94,49 +94,29 @@ enum AXWindow {
     }
 
     /// One look at what a window holds, for `WindowKinds`: its tab groups and
-    /// whether one has a tab in it, found the way the tab takeover finds them
-    /// (the browser's own chrome, pages skipped). Stops at the first tab. Nil
-    /// when the window can't be read now: it is gone, or its browser didn't
-    /// answer in time (`timedOut`).
+    /// whether one has a tab in it, by the walk the tab takeover reads the
+    /// window with (`ChromeWalk`). Stops at the first tab. Nil when the window
+    /// can't be read now: it is gone, or its browser didn't answer in time
+    /// (`timedOut`).
     static func tabs(in win: AXUIElement) -> WindowKinds.Reading? {
         var reading = WindowKinds.Reading(tabGroups: 0, tabs: 0)
-        var seen = 0, unanswered = false
-        // Role, subrole and children in one round trip to the browser.
-        func parts(_ e: AXUIElement) -> (role: String, subrole: String, children: [AXUIElement])? {
-            limitWaiting(on: e)
-            var values: CFArray?
-            let names = [kAXRoleAttribute, kAXSubroleAttribute, kAXChildrenAttribute] as CFArray
-            let answer = AXUIElementCopyMultipleAttributeValues(e, names, [], &values)
-            if answer == .cannotComplete { unanswered = true }
-            guard answer == .success, let v = values as? [Any], v.count == 3 else { return nil }
-            return (v[0] as? String ?? "", v[1] as? String ?? "", v[2] as? [AXUIElement] ?? [])
-        }
-        func holdsTab(_ children: [AXUIElement], depth: Int) -> Bool {
-            guard depth < 6 else { return false }
-            for c in children {
-                seen += 1
-                guard seen < 1500, !unanswered, let p = parts(c), p.role != "AXWebArea" else { continue }
-                if p.subrole == "AXTabButton" || holdsTab(p.children, depth: depth + 1) { return true }
-            }
+        let walk = ChromeWalk()
+        let began = CACurrentMediaTime()
+        let read = walk.run(win) { role, _, children in
+            guard role == kAXTabGroupRole as String else { return true }
+            reading.tabGroups += 1
+            guard walk.firstTab(in: children) != nil else { return true }
+            reading.tabs = 1
             return false
         }
-        func walk(_ e: AXUIElement, depth: Int) {
-            seen += 1
-            // A browser that has stopped answering is not asked for the rest.
-            guard depth < 14, seen < 1500, reading.tabs == 0, !unanswered, let p = parts(e) else { return }
-            if p.role == "AXWebArea" { return }
-            if p.role == kAXTabGroupRole as String {
-                reading.tabGroups += 1
-                if holdsTab(p.children, depth: 0) { reading.tabs = 1 }
-                return
-            }
-            for c in p.children { walk(c, depth: depth + 1) }
-        }
-        let window = parts(win)
-        for c in window?.children ?? [] { walk(c, depth: 1) }
-        timedOut = unanswered
-        return window == nil || unanswered ? nil : reading
+        timedOut = !walk.answered
+        lastWalk = (walk.calls, (CACurrentMediaTime() - began) * 1000)
+        return read ? reading : nil
     }
+
+    /// What the last `tabs(in:)` cost: round trips to the browser, and
+    /// milliseconds on the main thread. For the trace.
+    private(set) static var lastWalk = (calls: 0, ms: 0.0)
 
     /// The window's window-server number. Accessibility has no public way to
     /// tell it, and the frame can't: two windows of one browser often share
