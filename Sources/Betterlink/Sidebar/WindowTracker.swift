@@ -86,7 +86,9 @@ final class WindowTracker: NSObject {
     func start() {
         guard !isRunning else { return }
         let workspace = NSWorkspace.shared.notificationCenter
-        listen(workspace, NSWorkspace.didActivateApplicationNotification) { t, _ in t.frontAppChanged() }
+        listen(workspace, NSWorkspace.didActivateApplicationNotification) { t, _ in
+            t.frontAppChanged(to: NSWorkspace.shared.frontmostApplication?.processIdentifier)
+        }
         // Only a browser's coming or going: other apps launch and quit all day.
         listen(workspace, NSWorkspace.didLaunchApplicationNotification) { t, app in
             if let id = app?.bundleIdentifier, t.browserBundleIds.contains(id) { t.watchRunning() }
@@ -108,7 +110,7 @@ final class WindowTracker: NSObject {
             t.orderMayHaveChanged()
         }
         watchRunning()
-        frontAppChanged()
+        frontAppChanged(to: NSWorkspace.shared.frontmostApplication?.processIdentifier)
     }
 
     private func listen(_ center: NotificationCenter, _ name: Notification.Name,
@@ -173,8 +175,9 @@ final class WindowTracker: NSObject {
     /// since each ask is a round trip to Launch Services.
     private(set) var frontPid: pid_t?
 
-    private func frontAppChanged() {
-        frontPid = NSWorkspace.shared.frontmostApplication?.processIdentifier
+    /// An app came to the front: `pid` is the front app's now.
+    func frontAppChanged(to pid: pid_t?) {
+        frontPid = pid
         if let d = drag { endDrag(d.window) }
         frontWatcher?.start()
         updateMouseMonitor()
