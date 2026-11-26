@@ -133,7 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             w.contentViewController = host
             w.setContentSize(BetterlinkWindow.defaultSize)
             // Closing the window on the tour ends the tour, like Skip.
-            NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
+            // The window lives as long as the app, so the observer is never removed.
+            _ = NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: w, queue: .main) { _ in
                 MainActor.assumeIsolated { TourModel.shared.windowClosed() }
             }
             w.center()
