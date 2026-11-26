@@ -213,7 +213,11 @@ final class FakeBrowser: WindowHandle {
         return readFrame.size
     }
 
+    /// Every size and position it has been sent, for the time bound.
+    private(set) var setCalls = 0
+
     func setPosition(_ p: CGPoint) {
+        setCalls += 1
         pendingSize = nil
         due()
         if behaviour.timing == .busy || stalled() { return enqueue((nil, p)) }
@@ -221,6 +225,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func setSize(_ s: CGSize) {
+        setCalls += 1
         pendingSize = nil
         due()
         if stalled() { return enqueue((s, nil)) }
@@ -349,22 +354,144 @@ final class SidebarRig {
     var open: Bool { !instance.hidden }
     var sidebarWidth: CGFloat { CGFloat(instance.width) }
 
+    /// What else happens while a press of the shortcut is carried out, a
+    /// moment after it: the shortcut pressed again, or the person moving or
+    /// resizing the browser (to the frame on screen then, its left edge by
+    /// `left`, its right edge by `right`, its top by `dy`).
+    enum During: CustomStringConvertible {
+        case press
+        case person(left: CGFloat, right: CGFloat, dy: CGFloat)
+        var description: String {
+            switch self {
+            case .press: "the shortcut again"
+            case .person(let l, let r, let dy): "the person: left edge \(Int(l)), right edge \(Int(r)), up \(Int(dy))"
+            }
+        }
+    }
+
+    /// What was on screen at one tick: the browser, how much of the sidebar
+    /// shows (its width between its outer edge and the seam), and whether it is hidden.
+    struct Sample {
+        var t: Double
+        var browser: CGRect
+        var shown: CGFloat
+        var hidden: Bool
+    }
+    /// Every tick since the last press of the shortcut began.
+    private(set) var samples: [Sample] = []
+    /// The time of the last press, or of the person's last change, during it.
+    private(set) var lastEvent: Double = 0
+    /// The last tick at which the app was still moving something.
+    private(set) var lastBusy: Double = 0
+    /// The browser's calls before the first press.
+    private(set) var callsBefore = 0
+    /// The presses in this one (the first and those during it).
+    private(set) var presses = 0
+    /// What the last press asked for: open (true) or closed.
+    private(set) var askedOpen = false
+    /// Where the person put the browser during it, if they did.
+    private(set) var personPut: CGRect?
+
+    /// How much of the sidebar shows now.
+    var shownWidth: CGFloat {
+        guard let p = instance.panel, p.isVisible else { return 0 }
+        let outer = side == .left ? p.frame.minX : p.frame.maxX
+        let seam = p.reveal ?? (side == .left ? outer + sidebarWidth : outer - sidebarWidth)
+        return max(0, side == .left ? seam - outer : outer - seam)
+    }
+
+    private func sample() { samples.append(Sample(t: time, browser: fake.frame, shown: shownWidth, hidden: instance.hidden)) }
+
+    private func press() {
+        SidebarController.shared.toggle(instance)
+        presses += 1
+        askedOpen = !instance.hidden
+        lastEvent = time
+    }
+
     /// The shortcut: the slide to its end, then the window comes to rest.
     /// `within`: the person presses it again that many seconds later, whatever
     /// is still going on (no rest).
     func toggle(within: Double? = nil) {
         fake.sliding = true
-        SidebarController.shared.toggle(instance)
+        callsBefore = fake.setCalls
+        presses = 0
+        personPut = nil
+        samples = []
+        press()
+        sample()
         var frames = 0
         let limit = within.map { Int($0 * 120) } ?? 2000
         while instance.sliding, frames < limit {
             time += 1.0 / 120
             instance.stepSlide()
             events()
+            sample()
+            frames += 1
+        }
+        lastBusy = time
+        fake.sliding = false
+        if within == nil { rest() }
+    }
+
+    /// The shortcut, and `during` (each that many seconds after the press),
+    /// tick by tick until the app has stopped moving anything and all of
+    /// `during` has happened; then the window comes to rest.
+    func toggle(during: [(at: Double, what: During)]) {
+        fake.sliding = true
+        callsBefore = fake.setCalls
+        presses = 0
+        personPut = nil
+        samples = []
+        let pressed = time
+        press()
+        sample()
+        lastBusy = time
+        var todo = during.sorted { $0.at < $1.at }
+        var frames = 0
+        while instance.sliding || !todo.isEmpty, frames < 2000 {
+            time += 1.0 / 120
+            instance.stepSlide()
+            events()
+            while let next = todo.first, time - pressed >= next.at - 1e-9 {
+                todo.removeFirst()
+                switch next.what {
+                case .press:
+                    press()
+                case .person(let l, let r, let dy):
+                    var f = fake.frame.integral
+                    f.origin.x += l
+                    f.origin.y += dy
+                    f.size.width = max(200, fake.behaviour.minWidth, f.width - l + r)
+                    fake.person(f)
+                    personPut = f
+                    lastEvent = time
+                    events()
+                }
+            }
+            if instance.sliding { lastBusy = time }
+            sample()
             frames += 1
         }
         fake.sliding = false
-        if within == nil { rest() }
+        rest()
+    }
+
+    /// The longest a press may take to settle: 0.5 s, plus for each call the
+    /// browser was sent the time it takes it as modelled (an animation, an
+    /// answer that comes late, a size that lands some reads later), plus the
+    /// waits nothing can avoid: a size the browser never takes is waited
+    /// for twice (`WindowSteps.timeout`), and a dropped one once.
+    var bound: Double {
+        let b = fake.behaviour
+        let calls = Double(fake.setCalls - callsBefore)
+        var each = b.animation + Double(b.sizeLag) / 30
+        if b.timing != .atOnce { each += b.lateBy }
+        if b.stall > 0 { each += Double(b.stall) / 60 }
+        var waits = 0.0
+        if !b.sizesStick { waits += 2 * WindowSteps.timeout * Double(presses) }
+        if b.dropsSizeCall != nil { waits += WindowSteps.timeout }
+        return 0.5 + calls * each + waits
     }
 
     /// Each move the browser makes is an Accessibility event: the window is
@@ -574,6 +701,32 @@ struct RuleCheck {
         mark = rig.fake.history.count
     }
 
+    /// The time bound (`SidebarRig.bound`): after the last press, or the
+    /// person's last change during it, the app stops moving the window, and
+    /// what is on screen (the browser, how much of the sidebar shows, open or
+    /// closed) reaches what it ends as, within the bound. Nothing in between,
+    /// a squeezed window beside a sidebar that won't open, a window past the
+    /// screen's edge, a pair whose sum is wrong, lasts longer.
+    mutating func timely(_ step: String) {
+        let s = rig.samples
+        guard let last = s.last else { return }
+        var from = last.t
+        for x in s.reversed() {
+            guard GuardFrames.same(x.browser, last.browser), abs(x.shown - last.shown) < 2, x.hidden == last.hidden else { break }
+            from = x.t
+        }
+        let bound = rig.bound + 1.0 / 60
+        let settled = from - rig.lastEvent, busy = rig.lastBusy - rig.lastEvent
+        if settled > bound {
+            let was = s.last { $0.t < from }
+            problems.append(String(format: "%@: settled %.0f ms after the last press or change, more than %.0f ms (until then %@, sidebar %.0f shown, %@; then %@, sidebar %.0f, %@)",
+                                    step, settled * 1000, bound * 1000, "\(was?.browser ?? .zero)", Double(was?.shown ?? 0), was?.hidden == true ? "hidden" : "shown",
+                                    "\(last.browser)", Double(last.shown), last.hidden ? "hidden" : "shown"))
+        } else if busy > bound {
+            problems.append(String(format: "%@: kept moving the window %.0f ms after the last press or change, more than %.0f ms", step, busy * 1000, bound * 1000))
+        }
+    }
+
     /// Rule 4: the browser takes the pair's frame.
     mutating func hidden(from b: CGRect, sidebar w: CGFloat, wasOpen: Bool, _ step: String) {
         let want = wasOpen ? pairFrame(browser: b, sidebar: w, side: rig.side) : b
@@ -597,6 +750,9 @@ struct GuardCase: CustomStringConvertible {
     var reduceMotion: Bool
     /// What the person does while it is open, before each hide.
     var actions: [[Action]]
+    /// What happens while each show and hide is carried out: the shortcut
+    /// again, or the person moving or resizing the browser.
+    var during: [(show: [(at: Double, what: SidebarRig.During)], hide: [(at: Double, what: SidebarRig.During)])] = []
 
     enum Action: CustomStringConvertible {
         case moveBrowser(dx: CGFloat, dy: CGFloat)
@@ -617,6 +773,32 @@ struct GuardCase: CustomStringConvertible {
         let ds = displays.map { "\($0.frame) visible \($0.visibleFrame) @\(Int($0.scale))x" }.joined(separator: "; ")
         return "displays [\(ds)], window \(window), sidebar \(side) \(Int(width)), browser \(behaviour)\(reduceMotion ? ", Reduce Motion" : ""), "
             + "the person: \(actions.map { $0.map(\.description).joined(separator: ", ") })"
+            + (during.isEmpty ? "" : ", during: \(during.map { "show [\(Self.text($0.show))], hide [\(Self.text($0.hide))]" })")
+    }
+
+    private static func text(_ d: [(at: Double, what: SidebarRig.During)]) -> String {
+        d.map { "\($0.what) at \(Int($0.at * 1000)) ms" }.joined(separator: ", ")
+    }
+
+    /// The shortcut pressed again once or twice, or the person moving or
+    /// resizing the browser, while a show or hide is carried out. The
+    /// person's change moves the window's top or left edge too: one that only
+    /// narrows it where it stands is what a browser does with the size it was
+    /// asked, and is taken as the browser's (WindowSteps).
+    static func during(_ r: inout GuardRandom) -> [(at: Double, what: SidebarRig.During)] {
+        switch r.int(0...3) {
+        case 0: return [(r.double(0...0.6), .press)]
+        case 1:
+            let a = r.double(0...0.4)
+            return [(a, .press), (a + r.double(0.02...0.4), .press)]
+        case 2:
+            let dy = CGFloat(r.int(2...60) * (r.bool() ? 1 : -1))
+            let dx = CGFloat(r.int(-200...200))
+            return [(r.double(0...0.5), .person(left: dx, right: dx, dy: dy))]
+        default:
+            let l = CGFloat(r.int(2...120) * (r.bool() ? 1 : -1))
+            return [(r.double(0...0.5), .person(left: l, right: CGFloat(r.int(-120...120)), dy: 0))]
+        }
     }
 
     /// A display: any size and scale, a menu bar 24 to 39 pt, the Dock on
@@ -699,26 +881,45 @@ struct GuardCase: CustomStringConvertible {
             // edge still asks the browser at each move of the pointer (not yet one call at a time). No drags for them.
             actions = actions.map { $0.filter { if case .dragEdge = $0 { false } else { true } } }
         }
-        return GuardCase(displays: displays, window: w, side: r.bool() ? .left : .right, width: Double(r.int(200...440)),
-                         behaviour: b, reduceMotion: r.bool(0.15), actions: actions)
+        var c = GuardCase(displays: displays, window: w, side: r.bool() ? .left : .right, width: Double(r.int(200...440)),
+                          behaviour: b, reduceMotion: r.bool(0.15), actions: actions)
+        c.during = (0..<2).map { _ in (show: r.bool(0.3) ? during(&r) : [], hide: r.bool(0.3) ? during(&r) : []) }
+        return c
     }
 
     /// Whether the browser can give the sidebar its least width out of `frame`.
     func canOpen(from frame: CGRect) -> Bool {
-        behaviour.sizesStick && max(behaviour.minWidth, frame.width - width, 1) <= frame.width - SidebarGeometry.widths.lowerBound
+        behaviour.sizesStick && behaviour.minWidth <= frame.width - SidebarGeometry.widths.lowerBound
     }
 
-    /// Show, what the person does, hide; twice. The problems found, each with its step.
+    /// Show, what the person does, hide; twice, each show and hide with what
+    /// happens while it is carried out. The problems found, each with its step.
     func run() -> [String] {
         let rig = SidebarRig(displays: displays, frame: window, side: side, width: width, behaviour: behaviour, reduceMotion: reduceMotion)
         var check = RuleCheck(rig, displays: displays)
         for (round, todo) in actions.enumerated() {
             let start = rig.fake.frame
-            rig.toggle()
-            check.shown(from: start, mustOpen: canOpen(from: start), "show \(round + 1)")
+            let showDuring = round < during.count ? during[round].show : []
+            if showDuring.isEmpty { rig.toggle() } else { rig.toggle(during: showDuring) }
+            let show = "show \(round + 1)"
+            check.timely(show)
+            if let put = rig.personPut {
+                check.personDid(put, "\(show), moved or resized by the person while it was carried out")
+            } else if rig.askedOpen {
+                check.shown(from: start, mustOpen: canOpen(from: start), show)
+            } else {
+                check.hidden(from: start, sidebar: 0, wasOpen: false, "\(show), pressed again while it was carried out")
+            }
+            if !rig.open, rig.askedOpen, rig.personPut == nil {
+                // Refused: the window is the person's again. Moved to a fresh frame, it stays there.
+                var f = rig.fake.frame
+                f.origin.x += round == 0 ? -37 : 23
+                rig.personSets(f)
+                check.personDid(f, "\(show), refused, then the person moves the window")
+            }
             if rig.open {
                 for (i, a) in todo.enumerated() {
-                    let step = "show \(round + 1), the person \(a) (\(i + 1))"
+                    let step = "\(show), the person \(a) (\(i + 1))"
                     let before = rig.fake.frame
                     switch a {
                     case .moveBrowser(let dx, let dy):
@@ -744,8 +945,32 @@ struct GuardCase: CustomStringConvertible {
             }
             let wasOpen = rig.open
             let b = rig.fake.frame, w = rig.sidebarWidth
-            if wasOpen { rig.toggle() }
-            check.hidden(from: b, sidebar: w, wasOpen: wasOpen, "hide \(round + 1)")
+            let hide = "hide \(round + 1)"
+            if wasOpen {
+                let hideDuring = round < during.count ? during[round].hide : []
+                if hideDuring.isEmpty { rig.toggle() } else { rig.toggle(during: hideDuring) }
+                check.timely(hide)
+                if let put = rig.personPut {
+                    check.personDid(put, "\(hide), moved or resized by the person while it was carried out")
+                } else if rig.askedOpen {
+                    let pair = pairFrame(browser: b, sidebar: w, side: side)
+                    check.shown(from: pair, mustOpen: canOpen(from: pair), "\(hide), pressed again while it was carried out")
+                    if rig.open {
+                        let b2 = rig.fake.frame, w2 = rig.sidebarWidth
+                        rig.toggle()
+                        check.hidden(from: b2, sidebar: w2, wasOpen: true, "\(hide), then hidden")
+                    }
+                } else {
+                    check.hidden(from: b, sidebar: w, wasOpen: true, hide)
+                }
+            } else {
+                check.hidden(from: b, sidebar: w, wasOpen: false, hide)
+            }
+            if rig.open { // the person's change came after it had opened again: hidden now
+                let b3 = rig.fake.frame, w3 = rig.sidebarWidth
+                rig.toggle()
+                check.hidden(from: b3, sidebar: w3, wasOpen: true, "\(hide), then hidden")
+            }
             if !check.problems.isEmpty { break }
         }
         return check.problems
@@ -877,6 +1102,7 @@ struct GuardCase: CustomStringConvertible {
                 for f in frames {
                     let start = CGRect(x: f.minX, y: f.minY, width: max(f.width, 615), height: f.height)
                     rig.personSets(start)
+                    #expect(GuardFrames.same(rig.fake.frame, start), "\(b): placed at \(start), window at \(rig.fake.frame)")
                     rig.toggle()
                     let what = "\(b), \(start), hidden again \(within.map { "after \($0) s" } ?? "once it rests")"
                     if rig.open {
@@ -886,6 +1112,60 @@ struct GuardCase: CustomStringConvertible {
                     #expect(!rig.open, "\(what): still open")
                     #expect(GuardFrames.same(rig.fake.frame, start), "\(what): window at \(rig.fake.frame)")
                 }
+            }
+        }
+    }
+
+    /// The same refusal as the person sees it, at 28f7a44: Brave squeezed to
+    /// 615 beside an open sidebar for 2.5 s while it was asked again for a
+    /// width it had already shown it can't take; a press meanwhile started
+    /// it over; and the frame put back over the tester's own placements.
+    /// Now: decided within 0.2 s of the browser stopping short, the sidebar
+    /// never shown beside the squeezed window for longer, a press during it
+    /// taken as asked (the last press wins: hide, or try again), and the
+    /// person's move during it kept.
+    @Test func braveTooNarrowIsRefusedAtOnce() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let start = CGRect(x: 1256, y: 0, width: 800, height: 1259)
+        for b in [BrowserBehaviour(minWidth: 615), BrowserBehaviour(minWidth: 615, animation: 0.25)] {
+            let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: b)
+            rig.toggle(during: [])
+            #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(b): open \(rig.open), window at \(rig.fake.frame)")
+            let s = rig.samples
+            if let refused = s.firstIndex(where: \.hidden) {
+                // The browser stopped short: its width the same from then until the refusal.
+                let w = s[max(0, refused - 1)].browser.width
+                let stopped = (s[..<refused].lastIndex { abs($0.browser.width - w) >= 0.5 }).map { s[$0 + 1].t } ?? s[0].t
+                #expect(s[refused].t - stopped <= 0.2, "\(b): refused \(Int((s[refused].t - stopped) * 1000)) ms after the browser stopped at \(Int(w))")
+            } else {
+                Issue.record("\(b): never refused")
+            }
+            let squeezed = Double(s.filter { $0.shown > 1 && $0.browser.width < start.width - 2 }.count) / 120
+            #expect(squeezed <= 0.2, "\(b): the sidebar shown beside the squeezed window for \(Int(squeezed * 1000)) ms")
+            var check = RuleCheck(rig, displays: [screen])
+            check.timely("refused")
+            #expect(check.problems.isEmpty, "\(b): \(check.problems)")
+
+            // Pressed again while it is carried out: the last press wins.
+            for presses in [[0.05], [0.05, 0.1], [0.3], [0.1, 0.4]] {
+                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: b)
+                rig.toggle(during: presses.map { ($0, SidebarRig.During.press) })
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(b), pressed at \(presses): open \(rig.open), window at \(rig.fake.frame)")
+                var check = RuleCheck(rig, displays: [screen])
+                check.timely("pressed at \(presses)")
+                #expect(check.problems.isEmpty, "\(b): \(check.problems)")
+            }
+            // The person moves it while it is carried out: their frame stays.
+            for at in [0.0, 0.02, 0.08, 0.3, 0.6] {
+                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: b)
+                rig.toggle(during: [(at, .person(left: -150, right: -150, dy: -20))])
+                let put = rig.personPut ?? .null
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, put), "\(b), moved at \(at) s to \(put): open \(rig.open), window at \(rig.fake.frame)")
+                // And again, now the window is closed: it stays where it is put.
+                let f = rig.fake.frame.offsetBy(dx: 40, dy: 0)
+                rig.personSets(f)
+                #expect(GuardFrames.same(rig.fake.frame, f), "\(b), moved at \(at) s, then to \(f): window at \(rig.fake.frame)")
             }
         }
     }
