@@ -22,7 +22,13 @@ import CoreGraphics
 /// asked is sent once more first, since macOS 27 can hold an animation
 /// partway: if the window moves again it goes on, and if it stays still
 /// another `still` (plus the longest the window took to start on a call of
-/// these steps, since that animation too can begin late) it has stopped there. A window that hasn't moved at all since the call
+/// these steps, since that animation too can begin late) it has stopped there.
+/// A call taken over (`after:`) that isn't one of these steps' own is the
+/// press before's: it is never sent again, nor checked. Held still, it has
+/// landed where it holds (the next call, these steps' own, cuts short what
+/// is left of it); not started, it is waited for up to the deadline, since
+/// it may yet land and these steps' calls are worked out from where the
+/// window is. A window that hasn't moved at all since the call
 /// hasn't started on it yet: that is waited for, and only `deadline` ends
 /// the wait (a call that changes nothing within `patience` is sent once
 /// more meanwhile, since a call can be dropped).
@@ -47,7 +53,7 @@ import CoreGraphics
 ///   where the window is toward where it was sent, all the way across
 ///   (macOS doesn't stop a move sideways). Only that call is weighed: every
 ///   call before it has landed (steps that take over from others wait for
-///   their call in flight first, as their own), so it is the only one of
+///   their call in flight first), so it is the only one of
 ///   betterlink's that can be moving the window. Nothing is remembered past
 ///   the steps.
 /// - `resends`: the steps' end, the final target sent whole once more, its
@@ -123,6 +129,12 @@ public struct WindowSteps: Sendable {
     private var sent: (call: Call, at: Double, last: CGRect, changed: Double, from: CGRect, moved: Bool, checkedAt: Double?, resumed: Bool)?
     /// The call in flight was the steps' these took over from.
     private var inherited = false
+    /// And it is not one of these steps' own (a size or a position these
+    /// would not ask): the press before's, which the last press overrides.
+    /// It is waited for, never sent again and never checked (review of
+    /// ce5bf39, F5): held still, it has landed where it holds; not started,
+    /// it is waited for up to the deadline.
+    private var foreign = false
     /// `resends`: the call in flight was sent again once already.
     private var resent = false
     /// That call, once landed: a size these would ask too is taken as theirs.
@@ -160,6 +172,7 @@ public struct WindowSteps: Sendable {
         if let earlier, !earlier.done {
             sent = earlier.sent
             inherited = sent != nil
+            foreign = sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
         }
     }
@@ -227,8 +240,10 @@ public struct WindowSteps: Sendable {
             let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still) && (!settling || now - s.changed >= Self.still)
             // Held still short of what it asked, carrying out a show or hide or sending the final target:
             // sent once more, since macOS 27 can hold an animation partway. Moving again, it goes on;
-            // still another `still`, it has stopped there (its minimum, or a screen's edge).
-            if capped || resends, still, !Self.reached(s.call, seen), s.checkedAt == nil {
+            // still another `still`, it has stopped there (its minimum, or a screen's edge). Not a call
+            // taken over that isn't these steps' own: it has landed where it holds, and the next call
+            // (these steps' own) cuts short whatever of it is still to come.
+            if capped || resends, !foreign, still, !Self.reached(s.call, seen), s.checkedAt == nil {
                 s.checkedAt = now
                 s.changed = now
                 sent = s
@@ -240,7 +255,11 @@ public struct WindowSteps: Sendable {
                 guard !s.moved, now - s.at >= patience else { return nil }
                 // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
                 // or hide, waited for up to the deadline; the final target's, once; a drag's, or one the
-                // final target took over, let go (it lands before the final target's all the same).
+                // final target took over, let go (it lands before the final target's all the same). One a
+                // show or hide took over that isn't its own: waited for up to the deadline too, never sent
+                // again (the press before's, which this press overrides). It may yet land, and these steps'
+                // calls are worked out from where the window is, so it isn't let go either.
+                if capped, foreign { return nil }
                 if capped || (resends && !resent && !inherited) {
                     resent = true
                     s.at = now
@@ -253,13 +272,15 @@ public struct WindowSteps: Sendable {
             if s.moved { slowest = max(slowest, s.changed - s.at) }
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
-            if checks, case .position(let f) = s.call, s.moved, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {
+            // Not one taken over that isn't these steps' own: never checked, it may be held partway.
+            if checks, !foreign, case .position(let f) = s.call, s.moved, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {
                 interrupted = true
                 done = true
                 return nil
             }
             if inherited {
                 inherited = false
+                foreign = false
                 adopt = (s.call, s.from, s.moved)
             }
         }
@@ -361,6 +382,8 @@ public struct WindowSteps: Sendable {
 
     private mutating func send(_ c: Call, _ seen: CGRect, _ now: Double) -> Call {
         sent = (c, now, seen, now, seen, false, nil, false)
+        inherited = false
+        foreign = false
         resent = false
         return c
     }
