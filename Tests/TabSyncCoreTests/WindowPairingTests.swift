@@ -230,4 +230,67 @@ struct WindowPairingTests {
         var p = WindowPairing()
         #expect(p.update([ours(100, "Inbox")], in: []) == [100: .notConnected])
     }
+
+    // MARK: - Round 2: no pairing outlives its evidence, and a word on the focus must hold
+
+    /// One look at `time` (seconds).
+    private func look(_ p: inout WindowPairing, _ time: Double, _ windows: [WindowPairing.Window], _ entries: [SnapshotWindow]) -> [Int: WindowPairing.Found] {
+        p.update(windows, in: [session("/a", entries)], now: time)
+    }
+
+    @Test func aPairIsNeverKeptOnceTitleAndFrameBothSayOtherwise() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "New Tab")], [theirs(1, "New Tab")]) == [100: hit("/a", 1)])
+        // Window 1 itself isn't listed; the one that looked like it no longer does.
+        #expect(look(&p, 1, [ours(100, "New Tab")], [theirs(1, "Docs", at: 900)]) == [100: .unseen])
+    }
+
+    /// 102 belongs to a profile without the extension. It takes the focus, and
+    /// the browser's word that window 1 lost it is still on its way.
+    @Test func aStaleWordOnTheFocusNeverHandsAnEntryToALookAlike() {
+        var p = WindowPairing()
+        _ = look(&p, 0, [ours(100, "New Tab")], [theirs(1, "New Tab")])
+        let stale = [theirs(1, "New Tab", focused: true)], current = [theirs(1, "New Tab")]
+        let windows = [ours(100, "New Tab"), ours(102, "New Tab", focused: true)]
+        for (time, entries) in [(1.0, stale), (1.05, current), (1.5, current), (3, current)] {
+            let found = look(&p, time, windows, entries)
+            #expect(found[102] != hit("/a", 1))
+            #expect(found[100] != hit("/a", 2))
+        }
+    }
+
+    /// The same from a pairing the focus made.
+    @Test func aStaleWordOnTheFocusTakesNothingFromTheWindowTheFocusPaired() {
+        var p = WindowPairing()
+        let first = [ours(100, "New Tab", focused: true), ours(102, "New Tab")], second = [ours(100, "New Tab"), ours(102, "New Tab", focused: true)]
+        let onOne = [theirs(1, "New Tab", focused: true)], onNone = [theirs(1, "New Tab")]
+        var found: [Int: WindowPairing.Found] = [:]
+        for (time, windows, entries) in [(0.0, first, onOne), (0.4, first, onOne), (1, second, onOne), (1.05, second, onNone), (1.5, second, onNone)] {
+            found = look(&p, time, windows, entries)
+            #expect(found[102] != hit("/a", 1))
+        }
+        #expect(found[100] == hit("/a", 1))
+    }
+
+    /// 100 has entry 1. A new window 101 opens at the same place on the same
+    /// page and the browser reports it (entry 2) with the focus. Then macOS
+    /// says 100 has the focus before the browser says so.
+    @Test func aStaleWordOnTheFocusNeverSwapsTwoLookAlikes() {
+        for settledFirst in [true, false] { // the new window's focus held before the next, or not
+            var p = WindowPairing()
+            _ = look(&p, 0, [ours(100, "New Tab")], [theirs(1, "New Tab")])
+            let new = [ours(100, "New Tab"), ours(101, "New Tab", focused: true)], back = [ours(100, "New Tab", focused: true), ours(101, "New Tab")]
+            let onTwo = [theirs(1, "New Tab"), theirs(2, "New Tab", focused: true)], onOne = [theirs(1, "New Tab", focused: true), theirs(2, "New Tab")]
+            var steps: [(Double, [WindowPairing.Window], [SnapshotWindow])] = [(1, new, onTwo)]
+            if settledFirst { steps.append((1.4, new, onTwo)) }
+            steps += [(2, back, onTwo), (2.05, back, onOne), (2.5, back, onOne)]
+            var found: [Int: WindowPairing.Found] = [:]
+            for (time, windows, entries) in steps {
+                found = look(&p, time, windows, entries)
+                #expect(found[100] != hit("/a", 2))
+                #expect(found[101] != hit("/a", 1))
+            }
+            #expect(found == [100: hit("/a", 1), 101: hit("/a", 2)])
+        }
+    }
 }

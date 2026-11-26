@@ -81,6 +81,14 @@ public struct WindowPairing: Sendable {
         return mine.isEmpty ? sessions.filter { $0.browser == app } : mine
     }
 
+    /// The same at a given time, for the tests of the rules to come: these
+    /// rules have no clock.
+    public mutating func update(_ windows: [Window], in sessions: [BrowserSession], now: Double) -> [Int: Found] {
+        update(windows, in: sessions)
+    }
+    public var settlesAt: Double? { nil }
+    public static let moment = 0.3
+
     /// Pairs `windows` (every one there is, whatever app is in front) with the
     /// browsers' own windows.
     public mutating func update(_ windows: [Window], in sessions: [BrowserSession]) -> [Int: Found] {
