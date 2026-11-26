@@ -111,6 +111,65 @@ struct AgentSidebarTests {
         #expect(!still.expanded)
     }
 
+    // MARK: Folder icons
+
+    @Test func aFolderGetsAnEmojiOrASymbolAndLosesIt() throws {
+        let f = try folder()
+        let fid = try #require((call("sidebar.folders.add", ["name": "Docs"], in: f).data as? [String: Any])?["id"] as? String)
+        let r = call("sidebar.folders.icon", ["id": String(fid.prefix(6)), "emoji": "🚀"], in: f)
+        #expect(r.ok, "\(r.error ?? "")")
+        #expect(try lib(f).profiles[0].folder(UUID(uuidString: fid)!)?.icon == .emoji("🚀"))
+        // The answer is the Sidebar Profile, with the icon on the folder.
+        let items = try #require((r.data as? [String: Any])?["items"] as? [[String: Any]])
+        #expect(items.first?["icon"] as? [String: String] == ["emoji": "🚀"])
+
+        #expect(call("sidebar.folders.icon", ["id": fid, "symbol": "star.fill"], in: f).ok)
+        #expect(try lib(f).profiles[0].folder(UUID(uuidString: fid)!)?.icon == .symbol("star.fill"))
+
+        #expect(call("sidebar.folders.icon", ["id": fid, "clear": true], in: f).ok)
+        #expect(try lib(f).profiles[0].folder(UUID(uuidString: fid)!)?.icon == nil)
+    }
+
+    @Test func theListingShowsAFoldersIconAndLeavesItOutWhenThereIsNone() throws {
+        let f = try folder()
+        let a = try #require((call("sidebar.folders.add", ["name": "A"], in: f).data as? [String: Any])?["id"] as? String)
+        _ = call("sidebar.folders.add", ["name": "B"], in: f)
+        _ = call("sidebar.folders.icon", ["id": a, "symbol": "star.fill"], in: f)
+        let items = try #require((call("sidebar.list", in: f).data as? [[String: Any]])?.first?["items"] as? [[String: Any]])
+        #expect(items[0]["icon"] as? [String: String] == ["symbol": "star.fill"])
+        #expect(items[1]["icon"] == nil)
+    }
+
+    @Test func folderIconsRefuseWhatTheyCantShow() throws {
+        let f = try folder()
+        let fid = try #require((call("sidebar.folders.add", ["name": "Docs"], in: f).data as? [String: Any])?["id"] as? String)
+        let lid = try #require((call("sidebar.links.add", ["url": "https://a.example"], in: f).data as? [String: Any])?["id"] as? String)
+        func refused(_ input: [String: Any], _ says: String) {
+            let r = call("sidebar.folders.icon", input, in: f)
+            #expect(!r.ok && r.error?.contains(says) == true, "\(input): \(r.error ?? "accepted")")
+        }
+        refused(["id": lid, "emoji": "🚀"], "folder")                       // a saved link shows its site's icon
+        refused(["id": fid], "Give emoji")                                  // nothing to set
+        refused(["id": fid, "emoji": "🚀", "symbol": "star.fill"], "one of") // two at once
+        refused(["id": fid, "emoji": "🚀", "clear": true], "one of")
+        refused(["id": fid, "emoji": "ab"], "one emoji")
+        refused(["id": fid, "emoji": "a"], "isn't an emoji")
+        refused(["id": fid, "symbol": "star fill"], "isn't a symbol name")
+        refused(["id": fid, "clear": "yes"], "true or false")
+        #expect(try lib(f).profiles[0].folder(UUID(uuidString: fid)!)?.icon == nil)
+    }
+
+    /// In the app the symbol is checked against the Mac's own symbols.
+    @Test func aSymbolTheMacLacksIsRefused() throws {
+        let f = try folder()
+        let fid = try #require((call("sidebar.folders.add", ["name": "Docs"], in: f).data as? [String: Any])?["id"] as? String)
+        let env = AgentEnvironment(folder: f, installed: [], symbolExists: { $0 == "star.fill" })
+        #expect(Agent.run("sidebar.folders.icon", input: ["id": fid, "symbol": "star.fill"], env: env).ok)
+        let r = Agent.run("sidebar.folders.icon", input: ["id": fid, "symbol": "star.sparkly"], env: env)
+        #expect(!r.ok && r.error?.contains("no symbol called") == true)
+        #expect(try lib(f).profiles[0].folder(UUID(uuidString: fid)!)?.icon == .symbol("star.fill"))
+    }
+
     @Test func idPrefixesMustBeUniqueAndLongEnough() throws {
         let f = try folder()
         let lid = try #require((call("sidebar.links.add", ["url": "https://a.example"], in: f).data as? [String: Any])?["id"] as? String)
