@@ -1158,9 +1158,7 @@ private struct ResizeHandle: View {
             .accessibilityLabel("Sidebar width")
             .accessibilityValue("\(Int(sidebar.width)) points")
             .accessibilityAdjustableAction { direction in
-                guard sidebar.beginResize() else { return }
-                sidebar.resize(by: direction == .increment ? 10 : -10)
-                sidebar.endResize()
+                sidebar.nudge(by: direction == .increment ? 10 : -10)
             }
     }
 }
