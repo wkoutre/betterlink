@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "betterlink Tabs (preview)",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "description": "Connects this browser to the betterlink app for Mac: shows your tabs in betterlink's sidebar and runs its tab commands.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAyhlPp0ikPyiPRQ3u90F98/uPmhQWOGb55GFKHpuGBeuF03JHdQDZLJakuNdUTxihB6SMW9T43h/2C0GIuCsdlDxqEQ3uaLkD6fJFcwE2SB2ojRuaQAq7yNiYajK2uGER+oLiHE8PVGl9lnjWYwia4/9c9NnoPbWQGqS7QBpcv6w7yJ/q+E6PH7kfhIJ8yM9K24N85P67/7lHpnJqqRV39qAb4GKvtVfjgPNkDhetgmGWme2Q4cK/b+6mqXFc1q0YeRTGslEk4/AkPn2ZDXDI8glLChzLUwxS/YGE+JOczATmeLIl/RQaFVXNqs3HgEgl3v+rDq/wfQ+/HQ6/o/jnaQIDAQAB",
   "minimum_chrome_version": "116",

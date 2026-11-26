@@ -227,9 +227,11 @@ struct WindowTypeTests {
         #expect(s.windows[2]?.isNormal == false)
         // An extension older than 0.3.2 says nothing: normal, as before.
         #expect(s.windows[3]?.isNormal == true)
-        var app = s.windows[1]!
-        app.type = "app"
-        #expect(!app.isNormal)
+        var other = s.windows[1]!
+        for type in ["app", "devtools", "panel"] {
+            other.type = type
+            #expect(!other.isNormal)
+        }
     }
 
     @Test func theNormalWindowsOnlyLeavesOutPopupsAndTheirTabs() {

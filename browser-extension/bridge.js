@@ -13,6 +13,13 @@ export const PROTOCOL = 1;
 // the installed extension can do (an older copy keeps working, with less).
 export const OPS = ["snapshot", "open", "close", "activate", "move", "mute", "duplicate", "reload", "navigate", "closeMany", "newWindow", "reloadSelf"];
 
+// The windows the app is told of: the snapshot lists these types, and the
+// window events are asked for the same ones (left to itself Chrome sends them
+// only for normal and popup windows, so an app window would open unannounced).
+export const WINDOW_TYPES = ["normal", "popup", "app"];
+// Every type there is, to ask what one window is.
+const EVERY_WINDOW_TYPE = ["normal", "popup", "panel", "app", "devtools"];
+
 // What the app may ask a tab to load. Never javascript: or data:.
 const OPENABLE = /^(https?|chrome|about|file):/i;
 
@@ -49,6 +56,26 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
   const iconSent = new Map(); // tabId -> page URL whose icon was last sent
   const tabSent = new Map(); // tabId -> the tab as last sent in an update
+  const told = new Set(); // windows the app has been sent, by the snapshot or their own event
+  let snapped = false;
+
+  const windowBody = (w) => ({ windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, windowType: w.type || null, ...bounds(w) });
+
+  // A tab can name a window the app was never sent (one of a type that has no
+  // events here, or whose event is still to come). The app must not take it
+  // for a normal window, so the window is asked for and sent as its own
+  // event, right behind the tab's. Once per window; nothing before the first
+  // snapshot, which lists the windows itself.
+  async function tellWindow(windowId) {
+    if (!snapped || !Number.isInteger(windowId) || told.has(windowId)) return;
+    told.add(windowId);
+    try {
+      const w = await chrome.windows.get(windowId, { windowTypes: EVERY_WINDOW_TYPE });
+      if (told.has(windowId)) emit("windowCreated", windowBody(w));
+    } catch {
+      told.delete(windowId); // gone already, or not to be had
+    }
+  }
 
   async function sendFavicon(tab) {
     const page = tab.url || tab.pendingUrl || "";
@@ -62,7 +89,10 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   // Each window goes with the browser's own word for what it is (`windowType`:
   // normal, popup or app), so the app pairs a sidebar only with a normal one.
   async function snapshot() {
-    const wins = await chrome.windows.getAll({ populate: true, windowTypes: ["normal", "popup", "app"] });
+    const wins = await chrome.windows.getAll({ populate: true, windowTypes: WINDOW_TYPES });
+    told.clear();
+    for (const w of wins) told.add(w.id);
+    snapped = true;
     // seq is assigned AFTER the await so no event can slip between the
     // snapshot's contents and its sequence number.
     send({
@@ -84,8 +114,13 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     for (const w of wins) for (const t of w.tabs || []) sendFavicon(t);
   }
 
+  // The window events take a filter of window types; the tab events take none.
+  const windowFilter = { windowTypes: WINDOW_TYPES };
   const listeners = [
-    [chrome.tabs.onCreated, (tab) => emit("tabCreated", { tab: serializeTab(tab) })],
+    [chrome.tabs.onCreated, (tab) => {
+      emit("tabCreated", { tab: serializeTab(tab) });
+      tellWindow(tab.windowId);
+    }],
     [chrome.tabs.onUpdated, (tabId, changes, tab) => {
       // Chrome also fires for what the app never sees (groups, freezing, a
       // title set to what it was): nothing to say then.
@@ -105,15 +140,24 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     [chrome.tabs.onMoved, (tabId, info) => emit("tabMoved", { tabId, windowId: info.windowId, fromIndex: info.fromIndex, toIndex: info.toIndex })],
     [chrome.tabs.onActivated, (info) => emit("tabActivated", { tabId: info.tabId, windowId: info.windowId })],
     [chrome.tabs.onDetached, (tabId, info) => emit("tabDetached", { tabId, windowId: info.oldWindowId, fromIndex: info.oldPosition })],
-    [chrome.tabs.onAttached, (tabId, info) => emit("tabAttached", { tabId, windowId: info.newWindowId, toIndex: info.newPosition })],
+    [chrome.tabs.onAttached, (tabId, info) => {
+      emit("tabAttached", { tabId, windowId: info.newWindowId, toIndex: info.newPosition });
+      tellWindow(info.newWindowId);
+    }],
     [chrome.tabs.onReplaced, async (addedTabId, removedTabId) => {
       let tab = null;
       try { tab = serializeTab(await chrome.tabs.get(addedTabId)); } catch {}
       emit("tabReplaced", { tabId: addedTabId, removedTabId, tab });
     }],
-    [chrome.windows.onCreated, (w) => emit("windowCreated", { windowId: w.id, focused: !!w.focused, incognito: !!w.incognito, windowType: w.type || null, ...bounds(w) })],
-    [chrome.windows.onRemoved, (windowId) => emit("windowRemoved", { windowId })],
-    [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId })],
+    [chrome.windows.onCreated, (w) => {
+      told.add(w.id);
+      emit("windowCreated", windowBody(w));
+    }, windowFilter],
+    [chrome.windows.onRemoved, (windowId) => {
+      told.delete(windowId);
+      emit("windowRemoved", { windowId });
+    }, windowFilter],
+    [chrome.windows.onFocusChanged, (windowId) => emit("windowFocused", { windowId }), windowFilter],
   ];
   // Where each window is on screen, so the app can tell which browser profile
   // owns the window in front (every profile runs its own copy of this extension).
@@ -122,7 +166,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   }
 
   function attach() {
-    for (const [ev, fn] of listeners) ev.addListener(fn);
+    for (const [ev, fn, filter] of listeners) filter ? ev.addListener(fn, filter) : ev.addListener(fn);
   }
   function detach() {
     for (const [ev, fn] of listeners) ev.removeListener(fn);
