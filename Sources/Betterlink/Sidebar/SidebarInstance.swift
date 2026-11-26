@@ -420,6 +420,10 @@ final class SidebarInstance: ObservableObject {
         var waits = false
     }
     private var resizing: Resize?
+    /// False while the browser has stopped answering (BrowserWatcher): each
+    /// call to its window would wait out a second, so the resize leaves it
+    /// alone until it speaks again.
+    private var browserAnswers: Bool { window.watcher?.isStalled != true }
     /// Ends a single step whose window has not answered in time.
     private var stepEnd: DispatchWorkItem?
 
@@ -469,7 +473,7 @@ final class SidebarInstance: ObservableObject {
     func resize(by delta: CGFloat) {
         guard var r = resizing else { return }
         r.delta = delta
-        let ask = r.drag.ask(delta: delta).flatMap { $0 == r.asked ? nil : $0 }
+        let ask = browserAnswers ? r.drag.ask(delta: delta).flatMap { $0 == r.asked ? nil : $0 } : nil
         if let ask { r.asked = ask; r.put = nil }
         resizing = r
         if let ask {
@@ -486,7 +490,7 @@ final class SidebarInstance: ObservableObject {
     /// Mid-drag: a window that narrowed where it stood (an answer that came
     /// late) goes back to the far edge the drag began with.
     private func keepFarEdge() {
-        guard var r = resizing, let at = r.drag.kept(window.target.frame), at != r.put else { return }
+        guard browserAnswers, var r = resizing, let at = r.drag.kept(window.target.frame), at != r.put else { return }
         r.put = at
         resizing = r
         tracker.setFrame(at, of: window)
@@ -520,9 +524,10 @@ final class SidebarInstance: ObservableObject {
         resizing?.waits = false
         guard let r = resizing else { return }
         // Where the window is now, an answer still on its way included: the
-        // width saved and the loan are what it really gave.
-        window.watcher?.refresh(window)
-        if let at = r.drag.kept(window.target.frame) { tracker.setFrame(at, of: window) }
+        // width saved and the loan are what it really gave. A browser that
+        // has stopped answering is taken as last seen.
+        if browserAnswers { window.watcher?.refresh(window) }
+        if browserAnswers, let at = r.drag.kept(window.target.frame) { tracker.setFrame(at, of: window) }
         trackResize()
         resizing = nil
         sidebar.widthChosen(width, for: self)
