@@ -65,7 +65,8 @@ enum AgentCommand {
         guard Agent.commands.contains(command) else {
             return emit(AgentResponseJSON.failure("Unknown command \(command). Commands: \(allCommands.joined(separator: ", "))."))
         }
-        let response = Agent.run(command, input: input, env: AgentEnvironment(folder: folder, installed: installed, compiler: compiler))
+        let response = Agent.run(command, input: input, env: AgentEnvironment(folder: folder, installed: installed, compiler: compiler,
+                                                                            symbolExists: { SymbolCheck.exists($0) }))
         let out = response.json()
         if changes(command) && response.ok { notifyApp() }
         return emit(out)
@@ -327,5 +328,13 @@ enum AgentResponseJSON {
     static func failure(_ message: String) -> Data { encode(["version": 1, "ok": false, "error": message]) }
     private static func encode(_ obj: [String: Any]) -> Data {
         (try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys])) ?? Data()
+    }
+}
+
+/// Whether this Mac draws a built-in symbol (SF Symbols) by that name: what a
+/// folder icon's symbol is checked against, from the menu and the command.
+enum SymbolCheck {
+    static func exists(_ name: String) -> Bool {
+        NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil
     }
 }

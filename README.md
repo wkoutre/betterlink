@@ -155,7 +155,7 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - automatic update checks;
 - the link toast;
 - default browser;
-- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
+- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close, and a folder's icon: an emoji or a built-in symbol), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
 - open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open);
 - a browser's tab helper (the Sidebar page's Set Up);
 - Sync: the folder, what syncs, and off;
@@ -167,6 +167,7 @@ The app keeps its log in memory only, so the command can't read it. A few sideba
 betterlink sidebar list                                       # every Sidebar Profile, with ids
 betterlink sidebar add-link --url https://mail.google.com --to favorites
 betterlink sidebar add-folder --name Reading
+betterlink sidebar icon set 3f2a --emoji 📚                   # a folder's icon: an emoji, or --symbol star.fill
 betterlink sidebar move 3f2a --to favorites --position 1      # the first 4+ characters of an id are enough
 betterlink sidebar profiles assign --profile Work --browser "Google Chrome" --browserProfile "Profile 1"
 betterlink sidebar settings set --side left --width 300

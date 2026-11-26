@@ -9,13 +9,13 @@ import Foundation
 // A Sidebar Profile is named by its id or its name (`profile`); left out, it
 // is the only one there is. A favorite, folder or saved link is named by its
 // id, or by the start of its id when that start is unique (`id`). Positions
-// count from 1.
+// count from 1. A folder's icon is an emoji or a built-in symbol's name.
 extension Agent {
     static let sidebarCommands: [String] = [
         "sidebar.list",
         "sidebar.profiles.add", "sidebar.profiles.rename", "sidebar.profiles.remove",
         "sidebar.profiles.assign", "sidebar.profiles.unassign",
-        "sidebar.folders.add", "sidebar.links.add",
+        "sidebar.folders.add", "sidebar.folders.icon", "sidebar.links.add",
         "sidebar.items.update", "sidebar.items.move", "sidebar.items.remove", "sidebar.items.expand",
         "sidebar.import",
     ]
@@ -40,6 +40,7 @@ extension Agent {
         case "sidebar.profiles.assign": return try assign(input, env)
         case "sidebar.profiles.unassign": return try unassign(input, env)
         case "sidebar.folders.add": return try foldersAdd(input, env)
+        case "sidebar.folders.icon": return try foldersIcon(input, env)
         case "sidebar.links.add": return try linksAdd(input, env)
         case "sidebar.items.update": return try itemsUpdate(input, env)
         case "sidebar.items.move": return try itemsMove(input, env)
@@ -85,7 +86,20 @@ extension Agent {
         switch item {
         case .link(let l): return describeLink(l)
         case .folder(let f):
-            return ["id": f.id.uuidString, "kind": "folder", "name": f.name, "expanded": f.expanded, "items": f.items.map(describeItem)]
+            var out: [String: Any] = ["id": f.id.uuidString, "kind": "folder", "name": f.name, "expanded": f.expanded,
+                                      "items": f.items.map(describeItem)]
+            if let icon = f.icon { out["icon"] = describeIcon(icon) }
+            return out
+        }
+    }
+
+    /// {"emoji": "🚀"} or {"symbol": "star.fill"}; a kind this betterlink
+    /// doesn't know (a newer one wrote it) as {"other": its raw string}.
+    static func describeIcon(_ icon: FolderIcon) -> [String: String] {
+        switch icon {
+        case .emoji(let e): return ["emoji": e]
+        case .symbol(let s): return ["symbol": s]
+        case .unknown(let raw): return ["other": raw]
         }
     }
 
@@ -240,6 +254,30 @@ extension Agent {
             }
         }
         return made.map { _ in .success(["id": made!.uuidString, "profile": r.data as Any]) } ?? r
+    }
+
+    /// Gives a folder an icon (`emoji`, or `symbol`: a built-in symbol's
+    /// name) or takes it away (`clear: true`). Exactly one of the three.
+    static func foldersIcon(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
+        let emoji = try string(input, "emoji"), symbol = try string(input, "symbol")
+        let clear = try bool(input, "clear") == true
+        let given = [emoji != nil, symbol != nil, clear].filter { $0 }.count
+        guard given > 0 else { throw fail("Give emoji (one emoji), symbol (a built-in symbol's name, such as star.fill) or clear: true.") }
+        guard given == 1 else { throw fail("Give only one of emoji, symbol and clear.") }
+        let icon: FolderIcon?
+        do {
+            if let emoji { icon = try FolderIcon.checkedEmoji(emoji) }
+            else if let symbol { icon = try FolderIcon.checkedSymbol(symbol, exists: env.symbolExists) }
+            else { icon = nil }
+        } catch let e as FolderIcon.Invalid {
+            throw fail(e.message)
+        }
+        return try edit(input, env) { lib, pid in
+            let p = lib.profiles.first { $0.id == pid }!
+            guard let id = try itemID(input, "id", in: p) else { throw fail("Give id: the folder's id (sidebar list).") }
+            guard isFolder(id, in: p) else { throw fail("Only a folder has an icon; a Favorite or saved link shows its site's.") }
+            lib.update(pid) { $0.setIcon(id, to: icon) }
+        }
     }
 
     static func linksAdd(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
