@@ -570,15 +570,17 @@ final class SidebarInstance: ObservableObject {
         layout()
     }
 
-    /// The panel gone at once, mid-slide too. Ordered out first, and only
-    /// then its mask lifted for the next show: the mask change is committed
-    /// at once (`SidebarPanel.reshape`), so lifted first it drew the whole
-    /// panel over the browser until the order-out (Nick on 0.3.27; live on
-    /// 3d5c1e4, a 280 pt flash 220 ms after the slide had hidden the panel).
+    /// The panel gone at once, mid-slide too: cleared and ordered out
+    /// (`SidebarPanel.hideNow`), its mask left as it was. The next show sets
+    /// the mask before it orders the panel in (`open`, `present`). Lifted
+    /// before the order-out it drew the whole panel over the browser until
+    /// then (Nick on 0.3.27; live on 3d5c1e4, a 280 pt flash 220 ms after the
+    /// slide had hidden the panel); lifted right after, the window server
+    /// could still draw it before the order-out landed (live on macOS 27,
+    /// MINI-16 at 5c5adae: one frame of the whole panel, 1 of 20 hides).
     private func closePanelNow() {
         slideRun = nil
         panel?.hideNow()
-        panel?.reveal = nil
         isShown = false
     }
 
@@ -878,14 +880,15 @@ final class SidebarInstance: ObservableObject {
         DragTrace.log(String(format: "slide %@: %d frames in %.0f ms, window asked %@ got %@ (%@)",
                              run.out ? "out" : "in", run.frames, ms, "\(asked)", "\(got)", SidebarGeometry.same(asked, got) ? "as asked" : "not as asked"))
         if run.out {
-            // Ordered out first, then the mask lifted: the whole panel never flashes (`closePanelNow`).
+            // Cleared and ordered out, its mask left as the slide ended it: the whole panel never flashes (`closePanelNow`).
             panel?.hideNow()
             isShown = false
             closing = nil
             unpair()
+        } else {
+            panel?.reveal = nil
+            follow()
         }
-        panel?.reveal = nil
-        if !run.out { follow() }
         layout()
     }
 
@@ -1050,10 +1053,9 @@ final class SidebarInstance: ObservableObject {
         steps = nil
         afterSteps = nil
         stopTicker()
-        // The sidebar goes: ordered out before its mask is lifted, so it is never drawn whole over the
-        // browser, mid-slide too, while the browser is given its space back (`closePanelNow`).
+        // The sidebar goes: cleared and ordered out, its mask left as it was, so it is never drawn whole over
+        // the browser, mid-slide too, while the browser is given its space back (`closePanelNow`).
         panel?.hideNow()
-        panel?.reveal = nil
         isShown = false
         // Mid-slide, the slide's closed frame; an open, a new width or a hide
         // under way, the frame it began in (review F1).

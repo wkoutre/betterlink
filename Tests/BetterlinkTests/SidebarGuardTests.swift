@@ -3150,6 +3150,102 @@ struct GuardCase: CustomStringConvertible {
         }
     }
 
+    /// Live on macOS 27 (MAC-MINI-16, Brave, left sidebar, 312 px panel):
+    /// 1 of 20 idle hides drew the whole panel for one frame (784 ms) after
+    /// the slide had shown none of it (767 ms), before the panel was gone
+    /// (841 ms). The order-out and the panel's mask reach the window server
+    /// by two routes (the window's ordering, and the panel's layers'
+    /// commit), so a mask lifted right after the order-out can be drawn
+    /// before the order-out lands. On every path that takes the panel off
+    /// the screen (a hide's end, a refusal, someone else's change mid-hide,
+    /// a show turned back, turning the sidebar off, quitting), from its
+    /// order-out until it is ordered in again nothing of it may be drawable
+    /// that wasn't showing when it went: its alpha and its outline, read as
+    /// if the window server had not taken it away yet.
+    @Test func aPanelGoingAwayIsNeverDrawableMoreThanItShowed() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        /// Each change to the panel's outline or ordering: ordered in or not, and how much of it would be drawn,
+        /// its alpha read then, if it were.
+        func record(_ rig: SidebarRig) -> () -> [(ordered: Bool, drawable: CGFloat)] {
+            var log: [(ordered: Bool, drawable: CGFloat)] = []
+            func note(_ p: SidebarPanel) {
+                let left = p.attachedSide == .left
+                let outer = left ? p.frame.minX : p.frame.maxX
+                let seam = p.reveal ?? (left ? p.frame.maxX : p.frame.minX)
+                let drawn = min(p.frame.width, max(0, left ? seam - outer : outer - seam))
+                log.append((p.isVisible, p.alphaValue > 0.001 ? drawn : 0))
+            }
+            // As it is now: an open sidebar's panel is on screen already.
+            if let p = rig.instance.panel { note(p) }
+            let rigs = SidebarPanel.watch
+            SidebarPanel.watch = { p in
+                rigs?(p)
+                note(p)
+            }
+            return { log }
+        }
+        func check(_ log: [(ordered: Bool, drawable: CGFloat)], _ what: String) {
+            var showed: CGFloat?
+            var last: CGFloat = 0
+            var outs = 0
+            var wasIn = false
+            for x in log {
+                if x.ordered { wasIn = true; showed = nil; last = x.drawable; continue }
+                // Made and shaped before it was first ordered in: nothing of it was ever on screen.
+                guard wasIn else { continue }
+                if showed == nil { showed = last; outs += 1 }
+                if let s = showed, x.drawable > s + 0.5 {
+                    Issue.record("\(what): \(Int(x.drawable)) pt of the panel drawable after it was ordered out showing \(Int(s))")
+                    return
+                }
+            }
+            #expect(outs > 0, "\(what): the panel was never ordered out")
+        }
+        for side in SidebarSide.allCases {
+            for b in [BrowserBehaviour(), BrowserBehaviour(animation: 0.25), BrowserBehaviour(timing: .late, lateBy: 0.3)] {
+                // A hide's end.
+                var rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b.clamped(on: side) ? BrowserBehaviour() : b)
+                rig.toggle()
+                rig.fake.behaviour = b
+                var log = record(rig)
+                rig.toggle()
+                check(log(), "\(side) \(b): hide")
+                // A show turned back mid-slide.
+                rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b)
+                log = record(rig)
+                rig.toggle(during: [(0.06, .press)])
+                check(log(), "\(side) \(b): show turned back")
+                // Someone else's change mid-hide.
+                rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b.clamped(on: side) ? BrowserBehaviour() : b)
+                rig.toggle()
+                rig.fake.behaviour = b
+                log = record(rig)
+                rig.toggle(during: [(0.03, .person(left: 0, right: -40, dy: 0))])
+                check(log(), "\(side) \(b): moved mid-hide")
+                // Turned off, and quitting, open and mid-hide.
+                for gone in [SidebarRig.During.turnOff, .quit] {
+                    for at in [0.0, 0.08] {
+                        rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b.clamped(on: side) ? BrowserBehaviour() : b)
+                        rig.toggle()
+                        rig.fake.behaviour = b
+                        log = record(rig)
+                        rig.toggle(during: [(at, gone)])
+                        check(log(), "\(side) \(b): \(gone) \(at) s into a hide")
+                    }
+                }
+            }
+            // Refused (Brave at 615 pt beside the screen's right edge).
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 1256, y: 0, width: 800, height: 1259), side: side, width: 280,
+                                 behaviour: BrowserBehaviour(minWidth: 615))
+            let log = record(rig)
+            rig.toggle()
+            check(log(), "\(side): refused")
+        }
+        SidebarPanel.watch = nil
+    }
+
     /// The browser's enhanced UI (on, as Nick's Chrome and Brave have it)
     /// is set back to what it was on every path a motion can end by: a show
     /// and a hide that land, a refusal (no room; no size taken at all, at
