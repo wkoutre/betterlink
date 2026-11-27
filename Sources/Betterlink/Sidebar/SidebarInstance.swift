@@ -256,6 +256,9 @@ final class SidebarInstance: ObservableObject {
     /// and the browser's moves tick by tick (`stepSlide`), as the timer does.
     var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     var clock: () -> CFTimeInterval = CACurrentMediaTime
+    /// Whether the person is dragging the window now: the window tracker's
+    /// live drag, unless a test sets its own.
+    var isDragged: (() -> Bool)?
     /// Waiting on the main thread, for quitting, which has no later.
     var pause: (Double) -> Void = AXWindow.sleep
     /// An open without a slide is under way (a new width, a window followed

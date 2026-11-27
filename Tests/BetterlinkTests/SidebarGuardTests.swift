@@ -1052,6 +1052,29 @@ final class SidebarRig {
         events()
     }
 
+    /// The person puts the browser at `f`; the window tracker reports it at
+    /// rest (as `rest` does, 1 s on); `after` seconds later they begin
+    /// dragging the window and hold it still, `held` seconds, tick by tick,
+    /// then let go (the rest is the caller's: `rest`). How many calls the
+    /// browser was sent from the rest to the end of the drag.
+    func personSetsThenDrags(_ f: CGRect, after: Double, held: Double) -> Int {
+        appCallsBefore = FakeApps.shared.calls.count
+        fake.person(f)
+        events()
+        time += 0.5
+        _ = fake.answer()
+        time += 0.5
+        events()
+        instance.settle(window.target)
+        let calls = fake.setCalls
+        let began = time
+        while time - began < after { tick() }
+        instance.isDragged = { true }
+        while time - began < after + held { tick() }
+        instance.isDragged = nil
+        return fake.setCalls - calls
+    }
+
     /// The person drags the edge between the sidebar and the browser: the
     /// pointer moves there over 0.2 s (a move every 1/60 s), the button comes
     /// up, and the app finishes; then the window rests. Sampled from the
@@ -3317,6 +3340,30 @@ struct GuardCase: CustomStringConvertible {
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
         }
+        }
+    }
+
+    /// The review of 33444c7: a refit waits for the tile to hold still, and
+    /// the person may begin dragging the window meanwhile. Nothing is sent to
+    /// it while they drag (not even once the wait's cap is out): the refit
+    /// is weighed again once the window comes to rest, and the pair fits
+    /// again then, in the tile.
+    @Test func aDragDuringTheRefitsWaitGetsNoRefitUntilItRests() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let tile = CGRect(x: 1027, y: 0, width: 1028, height: 1259)
+        for after in [0.0, 0.02, 0.04] {
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 400, y: 0, width: 1256, height: 1259), side: .right, width: 280,
+                                 behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open, "didn't open")
+            let step = "a drag begun \(Int(after * 1000)) ms into the refit's wait"
+            let sent = rig.personSetsThenDrags(tile, after: after, held: 0.4)
+            #expect(sent == 0, "\(step): \(sent) calls sent during the drag, browser at \(rig.fake.frame)")
+            #expect(GuardFrames.same(rig.fake.frame, tile), "\(step): the browser at \(rig.fake.frame) during the drag")
+            rig.rest()
+            #expect(rig.open && abs(rig.sidebarWidth - 280) < 2 && GuardFrames.same(rig.fake.frame, CGRect(x: 1027, y: 0, width: 748, height: 1259)),
+                    "\(step): at rest, open \(rig.open), sidebar \(rig.sidebarWidth), browser \(rig.fake.frame)")
         }
     }
 
