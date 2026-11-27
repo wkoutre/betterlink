@@ -54,8 +54,9 @@ protocol EnhancedUIApp: AnyObject {
 /// Crash safety: before a flag is set off, the browser's pid, the time its
 /// process started (the kernel's, `sysctl` KERN_PROC_PID: a browser started
 /// by a script or launchd has no LaunchServices launch date) and the value
-/// it had are written to `enhanced-ui.json`
-/// in betterlink's settings folder (this Mac's, never the sync folder), and
+/// it had are written to `enhanced-ui.json`, this Mac's alone: in
+/// `this-mac/` in the standard Application Support folder, never in the
+/// settings folder, which may be synced (`journalURL`), and
 /// removed once it is set back. If betterlink stops in between (a crash, a
 /// force quit), the next launch (`recover`) sets the flag back for each
 /// recorded browser that is still the same process: the same pid started at
@@ -68,8 +69,21 @@ protocol EnhancedUIApp: AnyObject {
 /// ends, only a crash in between would leave it off.
 @MainActor
 final class EnhancedUI {
-    static let shared = EnhancedUI(app: AXEnhancedUIApp(),
-                                   journal: SettingsFolder.resolve().directory.appendingPathComponent("enhanced-ui.json"))
+    static let shared = EnhancedUI(app: AXEnhancedUIApp(), journal: journalURL())
+
+    /// Where the crash record is kept: this Mac's alone, never the settings
+    /// folder, which the person can make one they sync (README, Settings
+    /// folder): there another Mac's launch would set back flags by this
+    /// Mac's pids, and the Macs would race on the file (review F2 of
+    /// 1df43a3). `this-mac/` in the standard Application Support folder,
+    /// which betterlink never syncs, whichever settings folder is chosen;
+    /// with `BETTERLINK_HOME` (tests, development), `this-mac/` under it, so
+    /// each test folder keeps its own.
+    nonisolated static func journalURL(environment: [String: String] = ProcessInfo.processInfo.environment) -> URL {
+        let base = environment["BETTERLINK_HOME"].flatMap { $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true) }
+            ?? SettingsFolder.defaultDirectory
+        return base.appendingPathComponent("this-mac", isDirectory: true).appendingPathComponent("enhanced-ui.json")
+    }
 
     var app: EnhancedUIApp
     var journal: URL

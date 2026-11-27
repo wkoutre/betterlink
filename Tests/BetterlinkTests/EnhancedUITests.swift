@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import BetterlinkCore
 @testable import Betterlink
 
 /// The browser's enhanced user interface held off for a motion and set back
@@ -156,6 +157,31 @@ import Testing
         #expect(apps.flags[pid + 2] == false)
         #expect(later.read().isEmpty && !FileManager.default.fileExists(atPath: journal.path))
     }
+
+    /// The crash record is this Mac's alone: never in the settings folder,
+    /// which can be one the person syncs (README, Settings folder), where
+    /// another Mac's launch would set back flags by this Mac's pids and the
+    /// two would race on the file (review F2 of 1df43a3). With
+    /// `BETTERLINK_HOME` (tests, development), under it, so tests stay apart.
+    @Test func theCrashRecordIsThisMacsAndNeverInTheSettingsFolder() {
+        let synced = URL(fileURLWithPath: "/Users/someone/Dropbox/betterlink", isDirectory: true)
+        let defaults = UserDefaults(suiteName: "enhanced-ui-journal-\(UUID().uuidString)")!
+        defaults.set(synced.path, forKey: SettingsFolder.defaultsKey)
+        let chosen = SettingsFolder.resolve(environment: [:], defaults: defaults).directory
+        #expect(chosen.standardizedFileURL == synced.standardizedFileURL)
+        let url = EnhancedUI.journalURL(environment: [:])
+        #expect(!url.standardizedFileURL.path.hasPrefix(synced.standardizedFileURL.path), "\(url.path)")
+        #expect(url.deletingLastPathComponent().standardizedFileURL != SettingsFolder.defaultDirectory.standardizedFileURL, "\(url.path)")
+        #expect(url.standardizedFileURL.path.hasPrefix(SettingsFolder.defaultDirectory.standardizedFileURL.path), "\(url.path)")
+        #expect(url.lastPathComponent == "enhanced-ui.json")
+        // Tests and development: under BETTERLINK_HOME, still never the folder itself.
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("bl-home-\(UUID().uuidString)")
+        let inHome = EnhancedUI.journalURL(environment: ["BETTERLINK_HOME": home.path])
+        #expect(inHome.standardizedFileURL.path.hasPrefix(home.standardizedFileURL.path), "\(inHome.path)")
+        #expect(inHome.deletingLastPathComponent().standardizedFileURL != home.standardizedFileURL, "\(inHome.path)")
+        // The app's own: the shared instance uses this place.
+        #expect(EnhancedUI.journalURL().standardizedFileURL == EnhancedUI.journalURL(environment: ProcessInfo.processInfo.environment).standardizedFileURL)
+    }
 }
 
 /// `FakeApps` with one pid no longer running.
@@ -168,4 +194,5 @@ private final class FakeAppsGone: EnhancedUIApp {
     func set(_ pid: pid_t, _ on: Bool, wait: Double) -> Bool { apps.set(pid, on, wait: wait) }
     func launched(_ pid: pid_t) -> Date? { pid == gone ? nil : apps.launched(pid) }
     var lastAnswer: Int32 { apps.lastAnswer }
+
 }
