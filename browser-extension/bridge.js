@@ -53,7 +53,31 @@ export function bounds(w) {
 // betterlink app replaces the files when it updates.
 export function createBridge(chrome, send, now = () => Date.now(), favicon = async () => "", diskVersion = async () => "") {
   let seq = 0;
-  const emit = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
+  // While a snapshot is being collected, events and acks wait here and go out
+  // right behind it. Sent at once, an event that fired while
+  // chrome.windows.getAll was still reading could be missing from the
+  // snapshot and yet numbered before it, so the app would drop it as covered
+  // and never ask again (#49); an ack could reach the app before the tab it
+  // names. An event that puts a tab at an index can't be played over a
+  // snapshot that may already show it (the order would come out wrong), so
+  // the snapshot is read again instead, and such an event that fired before
+  // that reading began is dropped: the reading shows it. Every other event
+  // sets its tab or window to where the browser says, so it is sent after.
+  let collecting = 0;
+  let waiting = [];
+  const emitNow = (kind, body) => send({ type: "event", kind, seq: ++seq, t: now(), ...body });
+  const emit = (kind, body) => (collecting ? waiting.push({ kind, body }) : emitNow(kind, body));
+  const reply = (msg) => (collecting ? waiting.push({ msg }) : send(msg));
+  function flush() {
+    if (collecting) return;
+    const out = waiting;
+    waiting = [];
+    for (const w of out) w.msg ? send(w.msg) : emitNow(w.kind, w.body);
+  }
+  const PLACES = new Set(["tabCreated", "tabMoved", "tabAttached", "tabDetached", "tabReplaced"]);
+  const placesATab = (w) => !!w.kind && PLACES.has(w.kind);
+  // At most this many readings for one snapshot, while tabs keep moving under it.
+  const READS = 3;
   const iconSent = new Map(); // tabId -> page URL whose icon was last sent
   const tabSent = new Map(); // tabId -> the tab as last sent in an update
   const told = new Set(); // windows the app has been sent, by the snapshot or their own event
@@ -88,8 +112,26 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
 
   // Each window goes with the browser's own word for what it is (`windowType`:
   // normal, popup or app), so the app pairs a sidebar only with a normal one.
-  async function snapshot() {
-    const wins = await chrome.windows.getAll({ populate: true, windowTypes: WINDOW_TYPES });
+  // `icons: false` (the app checking a list it already has, see
+  // `Command.refresh`) leaves out the icons: the app keeps the ones it has
+  // for tabs still at the same address.
+  async function snapshot({ icons = true } = {}) {
+    collecting++;
+    let wins;
+    try {
+      for (let read = 1; ; read++) {
+        const start = waiting.length; // held before this reading began
+        wins = await chrome.windows.getAll({ populate: true, windowTypes: WINDOW_TYPES });
+        const moved = waiting.slice(start).some(placesATab);
+        // This reading began after those, so it shows them.
+        waiting = waiting.filter((w, i) => i >= start || !placesATab(w));
+        if (!moved || read >= READS) break;
+      }
+    } catch (e) {
+      collecting--;
+      flush();
+      throw e;
+    }
     told.clear();
     for (const w of wins) told.add(w.id);
     snapped = true;
@@ -108,9 +150,15 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
         tabs: (w.tabs || []).map(serializeTab),
       })),
     });
+    collecting--;
+    flush();
     // Icons follow the snapshot, one event per tab, so the list appears at once.
-    iconSent.clear();
-    tabSent.clear();
+    // A check (`icons: false`) sends only those of pages not sent yet: the app
+    // keeps the rest.
+    if (icons) {
+      iconSent.clear();
+      tabSent.clear();
+    }
     for (const w of wins) for (const t of w.tabs || []) sendFavicon(t);
   }
 
@@ -193,7 +241,7 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
   async function run(cmd) {
     switch (cmd.op) {
       case "snapshot":
-        await snapshot();
+        await snapshot({ icons: cmd.icons !== false });
         return;
       case "open": {
         const url = String(cmd.url || "");
@@ -269,11 +317,11 @@ export function createBridge(chrome, send, now = () => Date.now(), favicon = asy
     if (!msg || msg.type !== "cmd") return;
     try {
       const { reload, ...extra } = (await run(msg)) || {};
-      send({ type: "ack", id: msg.id, ok: true, t: now(), ...extra });
+      reply({ type: "ack", id: msg.id, ok: true, t: now(), ...extra });
       // After the ack, so the app hears yes before this copy restarts.
       if (reload) chrome.runtime.reload();
     } catch (e) {
-      send({ type: "ack", id: msg.id, ok: false, error: String((e && e.message) || e), t: now() });
+      reply({ type: "ack", id: msg.id, ok: false, error: String((e && e.message) || e), t: now() });
     }
   }
 

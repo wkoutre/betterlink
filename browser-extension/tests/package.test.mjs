@@ -27,7 +27,7 @@ test("the store package leaves out the key, the tests and package.json", () => {
     assert.deepEqual({ ...manifest, key: source.key }, source, "nothing else differs");
     assert.deepEqual(
       names.filter((n) => !n.endsWith("/")),
-      ["background.js", "bridge.js", "icons/128.png", "icons/16.png", "icons/32.png", "icons/48.png", "manifest.json"],
+      ["background.js", "bridge.js", "icons/128.png", "icons/16.png", "icons/32.png", "icons/48.png", "manifest.json", "reconnect.js"],
     );
   } finally {
     rmSync(out, { recursive: true, force: true });

@@ -140,7 +140,7 @@ build: fetch icon cli
 	# load it from (ExtensionCopy). The same files the store zip holds, plus
 	# the manifest's key, so an unpacked copy has the store item's id.
 	mkdir -p $(CONTENTS)/Resources/browser-extension/icons
-	cp browser-extension/manifest.json browser-extension/background.js browser-extension/bridge.js $(CONTENTS)/Resources/browser-extension/
+	cp browser-extension/manifest.json browser-extension/background.js browser-extension/bridge.js browser-extension/reconnect.js $(CONTENTS)/Resources/browser-extension/
 	cp browser-extension/icons/*.png $(CONTENTS)/Resources/browser-extension/icons/
 	cp .build/betterlink-cli $(CONTENTS)/Helpers/betterlink
 	cp .build/release/betterlink-tabhost $(CONTENTS)/Helpers/betterlink-tabhost

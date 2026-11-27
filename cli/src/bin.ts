@@ -430,7 +430,7 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     run: () => core('tabs.extension'),
   })
   .command('helpers', {
-    description: 'Each installed browser the sidebar can attach to, and whether its tab helper is set up',
+    description: 'Each installed browser the sidebar can attach to, whether its tab helper is set up, and which of its profiles have the Tabs extension connected',
     run: () => core('tabs.helper.list'),
   })
   .command('setup', {

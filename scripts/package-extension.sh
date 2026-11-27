@@ -22,10 +22,10 @@ fs.writeFileSync(process.argv[1] + "/manifest.json", JSON.stringify(m, null, 2) 
 process.stdout.write(m.version);
 ' "$stage")"
 
-cp browser-extension/background.js browser-extension/bridge.js "$stage/"
+cp browser-extension/background.js browser-extension/bridge.js browser-extension/reconnect.js "$stage/"
 cp -R browser-extension/icons "$stage/icons"
 
 zip="$out/betterlink-tabs-$version.zip"
 rm -f "$zip"
-(cd "$stage" && zip -q -r -X "$zip" manifest.json background.js bridge.js icons)
+(cd "$stage" && zip -q -r -X "$zip" manifest.json background.js bridge.js reconnect.js icons)
 echo "$zip"
