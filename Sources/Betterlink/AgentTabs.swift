@@ -157,23 +157,27 @@ extension AgentCommand {
         // settings folder doesn't move: a test or a dev build would repoint
         // the installed betterlink's helper at itself.
         if !(ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty {
-            return AgentResponseJSON.failure("BETTERLINK_HOME is set, and this writes into \(browser.name)'s own folder (~/Library/Application Support/\(folder)), which BETTERLINK_HOME doesn't move. Run it without BETTERLINK_HOME to set up the installed betterlink.")
+            return AgentResponseJSON.failure("BETTERLINK_HOME is set, and this writes into the folder \(browser.name) reads (~/Library/Application Support/\(HostRegistration.readFolder(dataFolder: folder))), which BETTERLINK_HOME doesn't move. Run it without BETTERLINK_HOME to set up the installed betterlink.")
         }
         var remove = false
         if let v = input["remove"] {
             guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return AgentResponseJSON.failure("remove must be true or false.") }
             remove = n.boolValue
         }
+        var kept: String?
         do {
-            if remove { try HostRegistration.uninstall(dataFolder: folder) }
-            else { try HostRegistration.install(dataFolder: folder, hostPath: TabsModel.hostPath) }
+            if remove {
+                if case .keptFor(let others) = try HostRegistration.uninstall(dataFolder: folder, sharers: TabsModel.sharers) {
+                    kept = TabsModel.keptNote(browser, others)
+                }
+            } else { try HostRegistration.install(dataFolder: folder, hostPath: TabsModel.hostPath) }
         } catch {
             return AgentResponseJSON.failure(remove ? "Couldn't remove \(browser.name)'s tab helper file: \(error.localizedDescription)"
                                                     : "Couldn't set up \(browser.name): \(error.localizedDescription). Open \(browser.name) once first, so its folder exists.")
         }
         return AgentResponseJSON.success([
             "browser": browser.name, "bundleId": browser.bundleId, "helper": helperState(browser),
-            "next": remove ? "Removed. The Tabs extension in \(browser.name) can no longer reach betterlink."
+            "next": remove ? (kept ?? "Removed. The Tabs extension in \(browser.name) can no longer reach betterlink.")
                            : "Add the Tabs extension in \(browser.name), once per browser profile (tabs extension says how), then restart the extension or the browser.",
         ])
     }

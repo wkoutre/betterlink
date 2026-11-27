@@ -57,6 +57,8 @@ e2e/                         full pipe test
 1. Build and run betterlink (CONTRIBUTING.md: use a `BETTERLINK_HOME` temp folder).
 2. Sidebar page › Sidebar › **Show the sidebar**, on. The rest of the page (Browsers, the sidebar's side and shortcut, Options, Import) shows only while it is on.
 3. Sidebar page › Browsers › **Set Up** next to the browser. That writes one file, `NativeMessagingHosts/com.wkoutre.betterlink.tabs.json`, in that browser's data folder, pointing at this betterlink's `Contents/Helpers/betterlink-tabhost`. **Uninstall** deletes it.
+
+   Brave is the exception: on macOS it reads Google Chrome's folder (`Google/Chrome/NativeMessagingHosts`) and never its own (verified on Brave 1.100 with its default and a custom data folder, 2026-11-27). So Set Up for Brave writes the file into both folders, and the Sidebar row checks the one in Chrome's folder (and that Brave's own is there, so Uninstall in Brave reads as done). Since the file is shared, Set Up in one also shows the other as set up. Chrome and Brave then share that file: Uninstall in one leaves it while the other is set up (for Chrome, while Brave's own file is there; for Brave, while Chrome has ever run on this Mac) and says so. A Brave set up by an older betterlink, with only its own file, gets the shared one when the Sidebar page or the sidebar first starts.
 4. In that browser: chrome://extensions › Developer mode › Load unpacked › `browser-extension/` (the repository's folder while you are changing the extension; see below for an installed betterlink).
 
 ## The extension on a Mac without the repository
@@ -151,7 +153,7 @@ Sidebar page › Sidebar › **Show the sidebar** puts a panel flush against the
 
 ## Browser coverage
 
-- Chromium family (Chrome, Brave, Edge, Arc, Vivaldi, Dia): this extension as is. Each browser keeps its own `NativeMessagingHosts` folder under the data folder betterlink already knows (`Browser.dataFolder`).
+- Chromium family (Chrome, Brave, Edge, Arc, Vivaldi, Dia): this extension as is. Each browser keeps its own `NativeMessagingHosts` folder under the data folder betterlink already knows (`Browser.dataFolder`), except Brave, which reads Chrome's (`HostRegistration.readFolder`).
 - Firefox: same design; it needs `browser_specific_settings`, a host manifest under `~/Library/Application Support/Mozilla/NativeMessagingHosts`, and `browser.*` (the events are the same).
 - Safari: a Safari Web Extension inside the app bundle, talking to the app through `SFSafariApplication`/app groups instead of a stdio host. Same events, different transport.
 

@@ -333,12 +333,15 @@ public final class SyncSession {
         let restored = done ? Set(report.restored.map(\.id)) : []
         let keepDone = done && report.keepDone
         let unresolved = report.notes.unresolvedRules.sorted { $0.uuidString < $1.uuidString }
+        let missing = Dictionary(uniqueKeysWithValues: report.notes.missingProfiles.map { ($0.key.uuidString, $0.value) })
         let before = localNotes.load()
         guard !recorded.isEmpty || !restored.isEmpty || keepDone
-                || (done && (!before.restore.isEmpty || (before.unresolvedRules ?? []) != unresolved)) else { return }
+                || (done && (!before.restore.isEmpty || (before.unresolvedRules ?? []) != unresolved
+                             || (before.missingProfiles ?? [:]) != missing)) else { return }
         try localNotes.update { notes in
             if done {
                 notes.unresolvedRules = unresolved.isEmpty ? nil : unresolved
+                notes.missingProfiles = missing.isEmpty ? nil : missing
                 // Asked for and done, or no longer in the history: either way, settled.
                 let known = Set(notes.history.map(\.id))
                 notes.restore.removeAll { restored.contains($0) || !known.contains($0) }
@@ -401,6 +404,7 @@ public final class SyncSession {
         let r = SyncModel.materialize(merged, rules: snap.rules, library: snap.library, selection: selection, resolve: resolve)
         // A sync that starts over may have moved things already: keep its notes.
         report.notes.unresolvedRules = r.notes.unresolvedRules
+        report.notes.missingProfiles = r.notes.missingProfiles
         report.notes.orphansMovedToTop += r.notes.orphansMovedToTop.filter { !report.notes.orphansMovedToTop.contains($0) }
         report.notes.cyclesBroken += r.notes.cyclesBroken.filter { !report.notes.cyclesBroken.contains($0) }
 
