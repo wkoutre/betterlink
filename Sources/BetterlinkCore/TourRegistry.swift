@@ -165,7 +165,7 @@ public enum TourRegistry {
                      cli: nil, cliWhy: nil),
             TourStep(id: "sidebar-helper", revision: 2,
                      title: "Set up the tab helper",
-                     body: "Set Up writes one small file into the browser's own folder, so the browser can start betterlink's tab helper. Do it for each browser the sidebar should attach to. Once the Tabs extension is added, the browser's row names each profile it is connected in. Uninstall removes the file.",
+                     body: "Set Up writes one small file into the browser's own folder so the browser can start betterlink's tab helper, and Uninstall removes it. Do it for each browser the sidebar should attach to. Once the Tabs extension is added, the browser's row names each profile it is connected in.",
                      changed: "Each browser's row now names the profiles that have the Tabs extension connected, and says when one runs an older copy that needs reloading.", symbol: "sidebar.left",
                      status: .tabsHelper, control: .sidebarBrowsers, requires: .sidebarBrowser,
                      cli: "betterlink tabs setup --browser \"Google Chrome\"", cliWhy: nil),

@@ -77,4 +77,16 @@ struct ConnectionsTests {
         #expect(s.tabs[10]?.favIconUrl == "data:image/png;base64,AA==")
         #expect(s.tabs[11]?.favIconUrl == "https://b/i.png", "another page: its old icon is not its icon")
     }
+
+    /// A replacement played after a snapshot that already shows the new tab
+    /// (the extension couldn't read it, so the event carries none) keeps it.
+    @Test func aReplacementWithoutItsTabKeepsTheOneTheSnapshotShows() {
+        func decode(_ s: String) -> Inbound { try! JSONDecoder().decode(Inbound.self, from: Data(s.utf8)) }
+        var s = TabStore()
+        s.apply(decode(#"{"type":"snapshot","seq":1,"t":1,"windows":[{"id":1,"focused":true,"tabs":[{"id":20,"windowId":1,"index":0,"title":"T20","url":"https://t/20","favIconUrl":"","active":true,"pinned":false,"audible":false,"status":"complete"}]}]}"#))
+        s.apply(decode(#"{"type":"event","kind":"tabReplaced","seq":2,"tabId":20,"removedTabId":19}"#))
+        #expect(s.tabs[20]?.title == "T20")
+        #expect(s.tabs[20]?.windowId == 1)
+        #expect(s.windows[1]?.tabIds == [20])
+    }
 }

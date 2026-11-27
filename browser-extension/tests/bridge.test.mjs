@@ -384,24 +384,68 @@ test("reloadSelf does nothing when the files on disk can't be read", async () =>
   }
 });
 
+// getAll answers only when the test says, so events can fire while it reads.
+function slowGetAll(chrome) {
+  const real = chrome.windows.getAll;
+  const reads = [];
+  chrome.windows.getAll = () => new Promise((r) => reads.push(() => r(real())));
+  const started = async () => { while (!reads.length) await new Promise((r) => setTimeout(r, 0)); };
+  return { reads, started, next: async () => { await started(); reads.shift()(); } };
+}
+
 test("an event that fires while a snapshot is being read goes out right behind it, numbered after it (#49)", async () => {
   const { chrome, out, b } = setup();
-  let release;
-  const real = chrome.windows.getAll;
-  chrome.windows.getAll = () => new Promise((r) => { release = () => r(real()); });
+  const slow = slowGetAll(chrome);
   const pending = b.snapshot();
-  // Chrome fires these while getAll is still reading the windows.
+  chrome.tabs.onActivated.fire({ tabId: 10, windowId: 1 });
+  chrome.tabs.onUpdated.fire(10, { title: "A2" }, { id: 10, windowId: 1, index: 0, title: "A2", url: "https://a.test/" });
+  assert.equal(out.length, 0, "nothing goes out before the snapshot");
+  await slow.next();
+  await pending;
+  assert.equal(slow.reads.length, 0, "read once: nothing put a tab at an index");
+  assert.deepEqual(out.slice(0, 3).map((m) => m.type + ":" + (m.kind || "")), ["snapshot:", "event:tabActivated", "event:tabUpdated"]);
+  assert.deepEqual(out.slice(0, 3).map((m) => m.seq), [1, 2, 3], "consecutive after the snapshot, so the app applies them");
+  chrome.tabs.onRemoved.fire(10, { windowId: 1, isWindowClosing: false });
+  assert.equal(out.at(-1).kind, "tabRemoved", "once it is out, events go at once again");
+});
+
+test("a tab put at an index during the reading has the snapshot read again, not the event played over it", async () => {
+  const { chrome, out, b } = setup();
+  const slow = slowGetAll(chrome);
+  const pending = b.snapshot();
   chrome.tabs.onCreated.fire({ id: 12, windowId: 1, index: 1, title: "", url: "https://c.test/" });
   chrome.tabs.onActivated.fire({ tabId: 12, windowId: 1 });
-  assert.equal(out.length, 0, "nothing goes out before the snapshot");
-  release();
+  await slow.next(); // the first reading: a tab moved under it
+  await slow.next(); // the second shows it
   await pending;
-  assert.deepEqual(out.slice(0, 3).map((m) => m.type + ":" + (m.kind || "")), ["snapshot:", "event:tabCreated", "event:tabActivated"]);
-  assert.deepEqual(out.slice(0, 3).map((m) => m.seq), [1, 2, 3], "consecutive after the snapshot, so the app applies them");
-  // And once it is out, events go at once again.
-  chrome.tabs.onRemoved.fire(12, { windowId: 1, isWindowClosing: false });
-  assert.equal(out.at(-1).kind, "tabRemoved");
-  assert.equal(out.at(-1).seq, out.filter((m) => m.seq).length);
+  assert.deepEqual(out.map((m) => m.type + ":" + (m.kind || "")), ["snapshot:", "event:tabActivated"],
+    "the creation is in the second reading; the activation still follows");
+  assert.deepEqual(out.map((m) => m.seq), [1, 2]);
+});
+
+test("tabs that keep moving under the snapshot stop the readings at three, and the moves follow it", async () => {
+  const { chrome, out, b } = setup();
+  const slow = slowGetAll(chrome);
+  const pending = b.snapshot();
+  for (let i = 0; i < 3; i++) {
+    await slow.started();
+    chrome.tabs.onMoved.fire(10, { windowId: 1, fromIndex: 0, toIndex: i });
+    await slow.next();
+  }
+  await pending;
+  assert.deepEqual(out.map((m) => m.type + ":" + (m.kind || "")), ["snapshot:", "event:tabMoved"], "only the move during the last reading");
+  assert.equal(out[1].toIndex, 2);
+});
+
+test("an ack that comes while a snapshot is read waits behind it, so the app has the tab it names", async () => {
+  const { chrome, out, b } = setup();
+  const slow = slowGetAll(chrome);
+  const pending = b.snapshot();
+  await b.handle({ type: "cmd", id: "c9", op: "close", tabId: 10 });
+  assert.equal(out.length, 0);
+  await slow.next();
+  await pending;
+  assert.deepEqual(out.map((m) => m.type), ["snapshot", "ack"]);
 });
 
 test("a snapshot that fails still lets the events it held go out", async () => {
@@ -413,17 +457,23 @@ test("a snapshot that fails still lets the events it held go out", async () => {
   assert.deepEqual(out.map((m) => m.kind), ["tabActivated"]);
 });
 
-test("a check without icons sends the list and no icon events", async () => {
+test("a check without icons sends the list and only icons not sent yet", async () => {
   const chrome = fakeChrome();
   const out = [];
   const asked = [];
   const b = createBridge(chrome, (m) => out.push(m), () => 1, async (page) => { asked.push(page); return "data:image/png;base64,AA=="; });
-  await b.handle({ type: "cmd", id: "r1", op: "snapshot", icons: false });
-  await new Promise((r) => setTimeout(r, 0));
-  assert.deepEqual(out.map((m) => m.type), ["snapshot", "ack"]);
-  assert.deepEqual(asked, []);
-  // A plain snapshot (a connect, a gap) still brings every icon.
+  // The first list brings every icon.
   await b.handle({ type: "cmd", id: "s1", op: "snapshot" });
   await new Promise((r) => setTimeout(r, 0));
   assert.deepEqual(asked, ["https://a.test/"]);
+  out.length = 0;
+  // A check asks for none it already sent.
+  await b.handle({ type: "cmd", id: "r1", op: "snapshot", icons: false });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(out.map((m) => m.type), ["snapshot", "ack"]);
+  assert.deepEqual(asked, ["https://a.test/"]);
+  // A plain snapshot (a connect, a gap) brings every icon again.
+  await b.handle({ type: "cmd", id: "s2", op: "snapshot" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(asked, ["https://a.test/", "https://a.test/"]);
 });

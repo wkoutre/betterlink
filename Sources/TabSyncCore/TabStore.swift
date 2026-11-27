@@ -179,7 +179,9 @@ public struct TabStore: Equatable, Sendable {
             for (wid, w) in windows {
                 if let i = w.tabIds.firstIndex(of: removed) { windows[wid]!.tabIds[i] = added }
             }
-            var t = m.tab ?? tabs[removed] ?? Tab(id: added, windowId: tabs[removed]?.windowId ?? -1)
+            // A snapshot that already shows the new tab keeps it when the
+            // event carries none.
+            var t = m.tab ?? tabs[removed] ?? tabs[added] ?? Tab(id: added, windowId: -1)
             t.id = added
             tabs[removed] = nil
             tabs[added] = t

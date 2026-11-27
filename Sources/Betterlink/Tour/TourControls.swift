@@ -212,6 +212,14 @@ struct TourControlView: View {
                     case .stale: Button("Set Up Again") { tabs.setRegistered(true, b) }
                     }
                 }
+                // As on the Sidebar page: which profiles have the extension connected.
+                let connections = tabs.connections(b)
+                if let line = connections.line(browser: b.name, helperSetUp: state == .installed) {
+                    Text(line)
+                        .font(DS.TextStyle.caption)
+                        .foregroundStyle(connections.state == .outdated ? DS.Palette.warning : DS.Palette.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             if let problem = tabs.registrationError {
                 Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)

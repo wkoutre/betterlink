@@ -98,7 +98,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     const placed = JSON.parse(readFileSync(join(d, 'tabs-extension', 'manifest.json'), 'utf8'))
     expect(r.json.version).toBe(shipped.version)
     expect(placed).toEqual(shipped)
-    for (const f of ['background.js', 'bridge.js', 'icons/128.png']) {
+    for (const f of ['background.js', 'bridge.js', 'reconnect.js', 'icons/128.png']) {
       expect(readFileSync(join(d, 'tabs-extension', f))).toEqual(readFileSync(join(root, 'browser-extension', f)))
     }
     // Only what the browser runs: no tests, no package.json.
