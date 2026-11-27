@@ -27,6 +27,11 @@ final class SyncController: ObservableObject {
     @Published private(set) var history: [SyncHistoryEntry] = []
     /// Entries asked to be restored, until the next sync does it.
     @Published private(set) var restoring: Set<UUID> = []
+    /// The other Macs in the sync folder, with when each last synced.
+    @Published private(set) var peers: [SyncPeer] = []
+    /// Synced Link Rules whose browser profile this Mac doesn't have: the
+    /// Link Rules page marks them.
+    @Published private(set) var unresolvedRules: Set<UUID> = []
 
     private var settings: SettingsFolder?
     private var session: SyncSession?
@@ -144,17 +149,23 @@ final class SyncController: ObservableObject {
 
     /// The hold and the history, as sync-local.json has them now.
     private func refreshNotes() {
-        guard let settings else { held = nil; history = []; restoring = []; return }
+        guard let settings else { held = nil; history = []; restoring = []; unresolvedRules = []; return }
         let notes = SyncLocalStore(folder: settings).load()
         held = notes.held
         history = notes.history
         restoring = Set(notes.restore)
+        unresolvedRules = folder == nil ? [] : Set(notes.unresolvedRules ?? [])
     }
 
     // MARK: - Running
 
     private func restart() {
         watchers = []; timer?.invalidate(); timer = nil; session = nil; offered = []
+        peers = []
+        if folder == nil, let settings {
+            // Off: no rule is unresolved any more (the CLI's rules list reads this too).
+            try? SyncLocalStore(folder: settings).update { $0.unresolvedRules = nil }
+        }
         refreshNotes()
         guard let folder, let settings else { status = "Off"; held = nil; return }
         guard FileManager.default.fileExists(atPath: folder.path) else {
@@ -220,6 +231,7 @@ final class SyncController: ObservableObject {
             if !r.notes.cyclesBroken.isEmpty { note("Two Macs moved folders into each other; one is at the top of the sidebar now.") }
             if !r.newer.isEmpty { note("Another Mac uses a newer betterlink; update this one to sync with it.") }
             let others = Set(session.otherDevices)
+            peers = session.peers
             status = "Synced \(Date().formatted(date: .omitted, time: .shortened))" + (others.isEmpty ? "" : " with \(others.count) other Mac\(others.count == 1 ? "" : "s")")
             offered = session.offeredProfiles(localIDs: Set(selection.profiles.keys))
         } catch let e as SyncSession.Held {

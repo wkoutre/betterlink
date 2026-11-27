@@ -149,6 +149,7 @@ struct ProfileRulesDetail: View {
 /// of another profile that can take the same links.
 private struct ProfileRuleRow: View {
     @EnvironmentObject var model: AppModel
+    @ObservedObject private var sync = SyncController.shared
     let index: Int
     let rules: [Rule]
     let crossings: [RuleGroups.Crossing]
@@ -163,6 +164,12 @@ private struct ProfileRuleRow: View {
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
+            // A synced rule whose profile this Mac lacks (docs/sync.md, Rules on another Mac).
+            if sync.unresolvedRules.contains(rule.id) {
+                Text("This profile isn't on this Mac; links open in the fallback.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .padding(.leading, DS.Space.space6)
+            }
             ForEach(crossings, id: \.self) { x in
                 note(x, rule: rule)
                     // Under the sentence, past the number column.

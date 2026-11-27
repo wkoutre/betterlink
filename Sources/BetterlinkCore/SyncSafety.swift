@@ -128,6 +128,10 @@ public struct SyncLocal: Codable, Equatable, Sendable {
     public var restore: [UUID] = []
     /// Newest first.
     public var history: [SyncHistoryEntry] = []
+    /// Synced Link Rules whose browser profile this Mac doesn't have, as the
+    /// last sync found; they open in the fallback.
+    /// Optional, so notes written before it still read.
+    public var unresolvedRules: [UUID]?
 
     public init() {}
 

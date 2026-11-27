@@ -404,6 +404,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(now.on).toBe(true)
     expect(realpathSync(now.folder)).toBe(realpathSync(folder))
     expect(now.global).toBe(false)
+    expect(now.macs).toEqual([])   // no other Mac has written into the new folder
 
     // What of one Sidebar Profile syncs.
     expect(run(d, 'sidebar', 'profiles', 'add', '--name', 'Work').code).toBe(0)

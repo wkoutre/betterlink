@@ -1,6 +1,6 @@
 # Sync (design)
 
-Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession, SyncSafety; the app's SyncController and General › Sync). Not built yet: the Link Rules page's mark on a rule whose profile this Mac lacks.
+Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession, SyncSafety, SyncPeers; the app's SyncController, General › Sync and the Link Rules page's mark).
 
 betterlink syncs your settings between Macs through a folder that Dropbox, Google Drive or iCloud Drive already keeps in sync. There's no account, server or API key. You choose what syncs. Two Macs editing at the same time always end up identical, and nothing is lost silently.
 
@@ -73,6 +73,10 @@ Sync never deletes much without a person choosing it, and what it removes or rep
 
 **This Mac's notes** are `sync-local.json` in its settings folder, written under a lock beside it by the sync and the CLI: the device this folder last synced as, the hold and its answer, restores asked for, and the history (newest first, the last 50, nothing older than 30 days). They never sync and never go in the sync folder.
 
+## Other Macs
+
+Sync settings names each other Mac whose file it can read, and when that Mac last wrote it: "Nick's Mac mini, synced 3:12 PM", "synced yesterday at 9:05 AM", or the date for older. The time is the `written` field inside the file, not the file's date, which a cloud app sets when it downloads it. Since every Mac rewrites its file at least once a day while it runs, a file unchanged for 7 days or more is flagged: "hasn't synced in 9 days; it may be off or signed out of the sync folder". The status line above it stays. `betterlink sync get` lists the same under `macs`, with `stale` and `warning`.
+
 ## config.ts
 
 config.ts is code and can't be merged field by field.
@@ -83,7 +87,7 @@ config.ts is code and can't be merged field by field.
 ## Live
 
 - Every Mac watches the sync folder (FSEvents; the existing PathWatcher, 0.3 s debounce) and its settings folder (0.5 s), and syncs 0.2 s after either changes. It also checks every 30 s, since a cloud app can replace a file without the folder noticing. Live, a change reached the other copy in about a second.
-- A Mac rewrites its own file only when its state changed.
+- A Mac rewrites its own file when its state changed, and otherwise once a day, so the other Macs can tell it is still syncing (see Other Macs).
 - The CLI, an editor and the app can write the settings files while a sync runs. A sync works from one reading of them and writes rules.json or sidebar.json only if, under that file's lock, it is still what the sync read; otherwise it starts over. It keeps the other Macs' changes to a file only once that file holds them. Editors take no lock, so config.ts changes places with its new version in one step; what was displaced is then compared, and either kept as a .bak or, when someone saved meanwhile, put back before the sync starts over. A linked config.ts stays a link, with its .bak beside the real file.
 - A merge that changes anything saves rules.json and sidebar.json as usual. So the rest of betterlink, the CLI and the folder watch see ordinary file changes.
 
@@ -116,6 +120,6 @@ config.ts is code and can't be merged field by field.
 
 ## Rules on another Mac
 
-Link Rules, modifier rules and the fallback point at a browser profile by its folder in the browser ("Default", "Profile 1"), and the same Chrome profile can sit in a different folder on another Mac. So a synced rule also carries the profile's signed-in Google account and display name, from the browser's Local State. Each Mac finds the profile by account first, then by display name (Nick, 2026-11-24). A rule whose profile isn't on this Mac opens in the fallback (the same browser's Default profile when none is set), never in a profile that only shares the other Mac's folder name; the Log says how many such rules there are when that number changes (the Link Rules page's mark is not built yet). Only Chromium browsers keep profiles in Local State to match; rules for Safari, Firefox and its relatives, and for a Chromium browser whose Local State can't be read, apply as they are. A rule whose own folder here holds the same profile keeps that folder, so two profiles with one name never swap.
+Link Rules, modifier rules and the fallback point at a browser profile by its folder in the browser ("Default", "Profile 1"), and the same Chrome profile can sit in a different folder on another Mac. So a synced rule also carries the profile's signed-in Google account and display name, from the browser's Local State. Each Mac finds the profile by account first, then by display name (Nick, 2026-11-24). A rule whose profile isn't on this Mac opens in the fallback (the same browser's Default profile when none is set), never in a profile that only shares the other Mac's folder name; the Log says how many such rules there are when that number changes, and the Link Rules page marks each one: "This profile isn't on this Mac; links open in the fallback." `betterlink rules list` gives such a rule `unresolved: true`. The last sync's list is kept in this Mac's notes (sync-local.json) and cleared when Sync is turned off. Only Chromium browsers keep profiles in Local State to match; rules for Safari, Firefox and its relatives, and for a Chromium browser whose Local State can't be read, apply as they are. A rule whose own folder here holds the same profile keeps that folder, so two profiles with one name never swap.
 
 Each Mac remembers which of its own profiles it put in place for each synced rule (`applied` in its device file). While a rule still points there, the Mac sends the synced profile fields back unchanged, so two Macs with the profile in different folders never overwrite each other. Pointing the rule at another profile on any Mac is an edit and syncs as one. The fallback works the same way, and a synced fallback this Mac can't match leaves this Mac's own.

@@ -502,7 +502,7 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
 const sync = Cli.create('sync', {
   description: 'Sync between Macs through a folder your cloud drive keeps in sync (this Mac only: each Mac picks its own folder)',
 })
-  .command('get', { description: 'Show the sync folder and what this Mac syncs', run: () => core('sync.get') })
+  .command('get', { description: 'Show the sync folder, what this Mac syncs, and the other Macs with when each last synced', run: () => core('sync.get') })
   .command('set', {
     description: 'Choose the sync folder, turn Sync off, or choose what syncs; a running betterlink starts at once',
     options: z.object({

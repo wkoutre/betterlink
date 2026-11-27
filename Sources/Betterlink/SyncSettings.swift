@@ -20,6 +20,19 @@ struct SyncSettingsSection: View {
                 if sync.folder != nil { Button("Turn Off") { sync.turnOff() } }
                 Button(sync.folder == nil ? "Choose Folder…" : "Change…") { sync.chooseFolderWithPanel() }
             }
+            if sync.folder != nil {
+                // Each other Mac, and when it last synced; one quiet for a week is flagged.
+                ForEach(sync.peers) { peer in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(peer.summary(now: Date())).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textSecondary)
+                        if let warning = peer.warning(now: Date()) {
+                            Label("\(peer.name) \(warning).", systemImage: "exclamationmark.triangle.fill")
+                                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.warning)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+            }
             if sync.folder != nil, let held = sync.held {
                 VStack(alignment: .leading, spacing: DS.Space.space2) {
                     Text(held.reason).fixedSize(horizontal: false, vertical: true)

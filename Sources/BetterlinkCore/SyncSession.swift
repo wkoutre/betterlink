@@ -84,11 +84,19 @@ public final class SyncSession {
     public private(set) var state = SyncState()
     /// The other Macs whose files the last pull read, by name.
     public private(set) var otherDevices: [String] = []
+    /// The other Macs the last pull read, with when each last synced.
+    public private(set) var peers: [SyncPeer] = []
     private var clock: HLCClock
     /// What this Mac's file holds now, so it is rewritten whenever the state
     /// moves on, merged changes from other Macs included.
     private var written: SyncState?
     private var writtenApplied: [String: ProfileRef]?
+    /// When this Mac's file was last written. It is rewritten at least
+    /// daily even when nothing changed, so other Macs can tell this one is
+    /// still syncing (SyncPeer's warning).
+    private var writtenAt: Date?
+    /// How often an unchanged file is rewritten anyway.
+    public static let heartbeat: TimeInterval = 86_400
     /// What materialize last put in place for each synced target.
     private var applied: [String: ProfileRef] = [:]
     /// A push held back instead of deleting synced items (SyncGuard); nil
@@ -133,6 +141,7 @@ public final class SyncSession {
         if let mine = folder.readAll().files.first(where: { $0.device == device }) {
             state = mine.state
             written = mine.state
+            writtenAt = mine.written
             applied = mine.applied ?? [:]
             writtenApplied = mine.applied
             if let m = state.maxStamp { clock.observe(m) }
@@ -267,9 +276,11 @@ public final class SyncSession {
             }
         }
         guard state != written || applied != (writtenApplied ?? [:])
+                || writtenAt.map({ now.timeIntervalSince($0) >= Self.heartbeat }) ?? false
                 || !FileManager.default.fileExists(atPath: folder.file(for: device).path) else { return false }
         try folder.write(SyncDeviceFile(device: device, name: name, written: now, state: state, applied: applied))
         written = state
+        writtenAt = now
         writtenApplied = applied
         return true
     }
@@ -307,14 +318,20 @@ public final class SyncSession {
     }
 
     /// Saves what a pull applied in this Mac's notes: the history entries,
-    /// and, when it finished (`done`), the restores and the Keep it carried out.
+    /// and, when it finished (`done`), the restores, the Keep it carried out
+    /// and the rules whose profile this Mac lacks (for the Link Rules page
+    /// and `rules list`).
     private func saveNotes(_ found: [String: SyncHistoryEntry], _ report: Report, now: Date, done: Bool) throws {
         let recorded = found.values.sorted { $0.entity < $1.entity }
         let restored = done ? Set(report.restored.map(\.id)) : []
         let keepDone = done && report.keepDone
-        guard !recorded.isEmpty || !restored.isEmpty || keepDone || (done && !localNotes.load().restore.isEmpty) else { return }
+        let unresolved = report.notes.unresolvedRules.sorted { $0.uuidString < $1.uuidString }
+        let before = localNotes.load()
+        guard !recorded.isEmpty || !restored.isEmpty || keepDone
+                || (done && (!before.restore.isEmpty || (before.unresolvedRules ?? []) != unresolved)) else { return }
         try localNotes.update { notes in
             if done {
+                notes.unresolvedRules = unresolved.isEmpty ? nil : unresolved
                 // Asked for and done, or no longer in the history: either way, settled.
                 let known = Set(notes.history.map(\.id))
                 notes.restore.removeAll { restored.contains($0) || !known.contains($0) }
@@ -339,6 +356,7 @@ public final class SyncSession {
         var merged = state
         for f in read.files where f.device != device { merged = merged.merged(with: f.state) }
         otherDevices = read.files.filter { $0.device != device }.map(\.name)
+        peers = folder.peers(read.files.filter { $0.device != device })
         if let m = merged.maxStamp { clock.observe(m) }
 
         // What the merge deletes or replaces here goes in the history, with

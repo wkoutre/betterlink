@@ -259,6 +259,11 @@ enum AgentCommand {
             "on": SyncDefaults.folder(in: d) != nil,
             "folder": SyncDefaults.folder(in: d)?.path ?? NSNull(),
             "global": selection.global,
+            // The other Macs in the folder, with when each last synced.
+            "macs": SyncDefaults.folder(in: d).map { root in
+                let me = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"] ?? d.string(forKey: "sync.device")
+                return SyncFolder(root).peers(except: me).map { $0.describe(now: Date()) }
+            } ?? [],
             "profiles": selection.profiles.sorted { $0.key.uuidString < $1.key.uuidString }.map { entry -> [String: Any] in
                 ["id": entry.key.uuidString, "name": names[entry.key] ?? NSNull(),
                  "favorites": entry.value.favorites, "folders": entry.value.folders, "appearance": entry.value.appearance]
@@ -314,7 +319,11 @@ enum AgentCommand {
             return AgentResponseJSON.failure("Give any of folder, off, global, or profile with parts.")
         }
         if let target { SyncDefaults.setFolder(target, in: d) }
-        if off == true { SyncDefaults.setFolder(nil, in: d) }
+        if off == true {
+            SyncDefaults.setFolder(nil, in: d)
+            // Off: no rule is unresolved any more (rules list reads this).
+            try? SyncLocalStore(folder: folder).update { $0.unresolvedRules = nil }
+        }
         if target != nil || off == true {
             // A hold and its answer were about the old folder.
             try? SyncLocalStore(folder: folder).update { $0.held = nil; $0.decision = nil }

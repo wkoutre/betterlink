@@ -201,6 +201,8 @@ public enum Agent {
             throw fail("--browser narrows --profile: give a profile too.")
         }
         let crossings = RuleGroups.crossings(c.rules)
+        // Synced rules whose profile this Mac lacks (the last sync's notes).
+        let unresolved = Set(SyncLocalStore(folder: env.folder).load().unresolvedRules ?? [])
         func brief(_ i: Int) -> [String: Any] {
             let r = c.rules[i]
             return ["id": r.id.uuidString, "position": i + 1, "pattern": r.pattern,
@@ -214,6 +216,7 @@ public enum Agent {
                     "pattern": r.pattern, "browser": r.browser,
                     "browserName": Browser.known(bundleId: r.browser)?.name ?? r.browser,
                     "profile": r.profile, "profileName": p?.name ?? NSNull(), "problem": r.problem ?? NSNull(),
+                    "unresolved": unresolved.contains(r.id),
                     "hiddenBy": above.first(where: \.hidesLater).map { x -> Any in
                         var b = brief(x.earlier); b["example"] = x.example; return b
                     } ?? NSNull(),
