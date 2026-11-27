@@ -124,7 +124,7 @@ private struct RuleRow: View {
                 Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 62)
             }
             if sync.unresolvedRules.contains(rule.id) {
-                Text("This profile isn't on this Mac; links open in the fallback.")
+                Text(UnresolvedRuleNote.text)
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .padding(.leading, 62)
             }

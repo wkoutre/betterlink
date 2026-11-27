@@ -166,7 +166,7 @@ private struct ProfileRuleRow: View {
             .accessibilityElement(children: .combine)
             // A synced rule whose profile this Mac lacks (docs/sync.md, Rules on another Mac).
             if sync.unresolvedRules.contains(rule.id) {
-                Text("This profile isn't on this Mac; links open in the fallback.")
+                Text(UnresolvedRuleNote.text)
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .padding(.leading, DS.Space.space6)
             }
@@ -223,5 +223,22 @@ private struct ProfileRuleRow: View {
         if s.hasPrefix("https://") { s.removeFirst(8) }
         if s.hasSuffix("/"), s.firstIndex(of: "/") == s.index(before: s.endIndex) { s.removeLast() }
         return s
+    }
+}
+
+/// Under a synced rule whose profile this Mac lacks (docs/sync.md, Rules on
+/// another Mac). Sync points such a rule at the fallback, or the same
+/// browser's Default profile, and that is the profile the rule shows here.
+struct UnresolvedRuleNote: View {
+    static let text = "The profile this rule was made for isn't on this Mac, so its links open in the profile shown here."
+    let rule: UUID
+    var leading: CGFloat = DS.Space.space6
+    @ObservedObject private var sync = SyncController.shared
+    var body: some View {
+        if sync.unresolvedRules.contains(rule) {
+            Text(Self.text)
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                .padding(.leading, leading)
+        }
     }
 }

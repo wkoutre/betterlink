@@ -218,7 +218,7 @@ final class SyncController: ObservableObject {
             }
             let unresolved = Set(r.notes.unresolvedRules)
             if unresolved != lastUnresolved, !unresolved.isEmpty {
-                note("\(unresolved.count) synced rule(s) point at a Browser Profile this Mac doesn't have; they open in the fallback.")
+                note("\(unresolved.count) synced rule(s) point at a Browser Profile this Mac doesn't have; each opens in the fallback, or the same browser's Default profile when none is set.")
             }
             lastUnresolved = unresolved
             if r.unsafe != lastUnsafe {
