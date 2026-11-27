@@ -136,6 +136,10 @@ final class SidebarController: ObservableObject {
         if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
         let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
         if take != takeOverTabs { takeOverTabs = take }
+        let toggle = Shortcut.load(defaults, key: "sidebar.shortcut") ?? .sidebarDefault
+        if toggle != shortcut { shortcut = toggle }
+        let find = Shortcut.load(defaults, key: "sidebar.findShortcut") ?? .findTabDefault
+        if find != findShortcut { findShortcut = find }
         let on = defaults.bool(forKey: "sidebar.enabled")
         if on != enabled { enabled = on }
         applyForAll()

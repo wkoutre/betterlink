@@ -67,6 +67,40 @@ public struct Shortcut: Codable, Equatable, Sendable {
         return s + key
     }
 
+    /// Reads a shortcut as a person or an agent writes it: "ctrl+opt+f",
+    /// "control+shift+1", or the menu glyphs "⌃⌥F". Nil for anything else or
+    /// a shortcut that isn't `isValid`. Letters, digits and Space only.
+    public static func parse(_ text: String) -> Shortcut? {
+        let glyphs: [Character: UInt32] = ["⌃": control, "⌥": option, "⇧": shift, "⌘": command]
+        let names: [String: UInt32] = ["ctrl": control, "control": control, "opt": option, "option": option, "alt": option,
+                                       "shift": shift, "cmd": command, "command": command]
+        var mods: UInt32 = 0
+        var key: String
+        let t = text.trimmingCharacters(in: .whitespaces)
+        if t.contains("+") {
+            var parts = t.split(separator: "+").map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            guard parts.count >= 2, let last = parts.popLast() else { return nil }
+            for part in parts {
+                guard let m = names[part] else { return nil }
+                mods |= m
+            }
+            key = last
+        } else {
+            var rest = Substring(t)
+            while let c = rest.first, let m = glyphs[c] { mods |= m; rest = rest.dropFirst() }
+            key = String(rest).lowercased()
+        }
+        let codes: [String: UInt32] = [
+            "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7, "c": 8, "v": 9, "b": 11, "q": 12,
+            "w": 13, "e": 14, "r": 15, "y": 16, "t": 17, "1": 18, "2": 19, "3": 20, "4": 21, "6": 22, "5": 23,
+            "9": 25, "7": 26, "8": 28, "0": 29, "o": 31, "u": 32, "i": 34, "p": 35, "l": 37, "j": 38, "k": 40,
+            "n": 45, "m": 46, "space": 49,
+        ]
+        guard let code = codes[key] else { return nil }
+        let s = Shortcut(keyCode: code, modifiers: mods, key: key == "space" ? "Space" : key.uppercased())
+        return s.isValid ? s : nil
+    }
+
     public static func load(_ defaults: UserDefaults, key k: String) -> Shortcut? {
         defaults.data(forKey: k).flatMap { try? JSONDecoder().decode(Shortcut.self, from: $0) }.flatMap { $0.isValid ? $0 : nil }
     }

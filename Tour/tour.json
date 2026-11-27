@@ -325,7 +325,7 @@
           "id": "sidebar-find",
           "revision": 1,
           "title": "Find any open tab",
-          "body": "Press ⌃⌥F while a browser the sidebar attaches to is in front, then type part of a tab's title or address. It searches every open tab in every attached browser and profile, and Return switches to the one picked. Change the shortcut on the Sidebar page.",
+          "body": "Press ⌃⌥F while a browser the sidebar attaches to is in front, or click the magnifying glass at the top of the sidebar, then type part of a tab's title or address. It searches every open tab in every attached browser and profile, and Return switches to the one picked. Change the shortcut on the Sidebar page.",
           "cli": "betterlink tabs find mail",
           "covers": {
             "settings": [

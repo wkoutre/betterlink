@@ -323,7 +323,7 @@ extension AgentCommand {
             let found = TabSearch.find(query, in: TabSearch.items(sessions))
             return ["tabs": found.map { item in
                 ["id": item.tab.id, "window": item.tab.windowId, "title": item.tab.title, "url": item.tab.url,
-                 "active": item.tab.active, "browser": browsers[item.socketPath] ?? "", "label": labels[item.socketPath] ?? ""] as [String: Any]
+                 "active": item.tab.active, "audible": item.tab.audible, "muted": item.tab.muted, "browser": browsers[item.socketPath] ?? "", "label": labels[item.socketPath] ?? ""] as [String: Any]
             }]
         case "tabs.send":
             // The sidebar's Send to Another Profile: open the page in the other
@@ -401,6 +401,8 @@ extension AgentCommand {
             "side": (SidebarSide(rawValue: d.string(forKey: "sidebar.side") ?? "") ?? .right).rawValue,
             "width": w >= 200 ? w : 280,
             "takeOverTabs": d.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true,
+            "shortcut": (Shortcut.load(d, key: "sidebar.shortcut") ?? .sidebarDefault).display,
+            "findShortcut": (Shortcut.load(d, key: "sidebar.findShortcut") ?? .findTabDefault).display,
             // False: this macOS no longer says which browser window is which, and no window gets a sidebar.
             "canTellWindowsApart": AXWindow.numbersWindows,
             // False: betterlink can't read a window's corner radius on this Mac (its macOS wasn't checked,
@@ -452,9 +454,25 @@ extension AgentCommand {
             }
             browsers = Array(Set(ids)).sorted()
         }
-        if enabled == nil, shown == nil, take == nil, side == nil, width == nil, browsers == nil {
-            return AgentResponseJSON.failure("Give any of enabled, shown, side, width, takeOverTabs, browsers.")
+        // .some(nil) when not given; nil when given and unreadable.
+        func shortcut(_ k: String) -> Shortcut?? {
+            guard let v = input[k] else { return .some(nil) }
+            guard let text = v as? String, let s = Shortcut.parse(text) else { return nil }
+            return .some(s)
         }
+        guard let toggle = shortcut("shortcut"), let find = shortcut("findShortcut") else {
+            return AgentResponseJSON.failure("shortcut and findShortcut must be Control with a letter, digit or Space, and Option, Shift or Command if you like (\"ctrl+opt+f\" or \"⌃⌥F\"), and not one of the browser's own.")
+        }
+        let finalToggle = toggle ?? Shortcut.load(d, key: "sidebar.shortcut") ?? .sidebarDefault
+        let finalFind = find ?? Shortcut.load(d, key: "sidebar.findShortcut") ?? .findTabDefault
+        if (toggle != nil || find != nil), finalToggle == finalFind {
+            return AgentResponseJSON.failure("shortcut and findShortcut can't be the same keys (\(finalToggle.display)).")
+        }
+        if enabled == nil, shown == nil, take == nil, side == nil, width == nil, browsers == nil, toggle == nil, find == nil {
+            return AgentResponseJSON.failure("Give any of enabled, shown, side, width, takeOverTabs, browsers, shortcut, findShortcut.")
+        }
+        toggle?.save(d, key: "sidebar.shortcut")
+        find?.save(d, key: "sidebar.findShortcut")
         if let enabled { d.set(enabled, forKey: "sidebar.enabled") }
         // For every window, also one hidden or shown on its own: the running
         // app (or the next launch) takes the marks as "apply to all".
