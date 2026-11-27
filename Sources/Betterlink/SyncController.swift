@@ -20,6 +20,13 @@ final class SyncController: ObservableObject {
     @Published private(set) var status = "Off"
     /// Sidebar Profiles other Macs share that this Mac hasn't added.
     @Published private(set) var offered: [(id: UUID, name: String)] = []
+    /// Sync held back instead of deleting many synced items at once
+    /// (SyncGuard); nil while syncing.
+    @Published private(set) var held: SyncHold?
+    /// What sync deleted here or replaced with another Mac's edit, newest first.
+    @Published private(set) var history: [SyncHistoryEntry] = []
+    /// Entries asked to be restored, until the next sync does it.
+    @Published private(set) var restoring: Set<UUID> = []
 
     private var settings: SettingsFolder?
     private var session: SyncSession?
@@ -98,11 +105,51 @@ final class SyncController: ObservableObject {
     /// Adds a Sidebar Profile another Mac shares, with all its parts.
     func add(_ id: UUID) { selection.profiles[id] = .init() }
 
+    /// Answers a hold: delete those items on every Mac once, or keep them
+    /// and take the shared ones back on this Mac. `betterlink sync resolve`
+    /// writes the same answer.
+    func resolveHold(_ choice: SyncDecision.Choice) {
+        guard let settings else { return }
+        do {
+            try SyncLocalStore(folder: settings).update { notes in
+                guard let held = notes.held else { return }
+                notes.decision = SyncDecision(choice: choice, ids: held.ids)
+            }
+            note(choice == .delete ? "Deleting the held items on every Mac." : "Keeping the held items; this Mac takes them back from the others.")
+        } catch {
+            status = "Couldn't save the answer: \(error.localizedDescription)"
+        }
+        schedulePull()
+    }
+
+    /// Puts back what a history entry deleted or replaced, as a new edit on
+    /// this Mac (`betterlink sync restore`).
+    func restore(_ entry: SyncHistoryEntry) {
+        guard let settings else { return }
+        do {
+            try SyncLocalStore(folder: settings).update { if !$0.restore.contains(entry.id) { $0.restore.append(entry.id) } }
+        } catch {
+            status = "Couldn't restore: \(error.localizedDescription)"
+        }
+        refreshNotes()
+        schedulePull()
+    }
+
+    /// The hold and the history, as sync-local.json has them now.
+    private func refreshNotes() {
+        guard let settings else { held = nil; history = []; restoring = []; return }
+        let notes = SyncLocalStore(folder: settings).load()
+        held = notes.held
+        history = notes.history
+        restoring = Set(notes.restore)
+    }
+
     // MARK: - Running
 
     private func restart() {
         watchers = []; timer?.invalidate(); timer = nil; session = nil; offered = []
-        guard let folder, let settings else { status = "Off"; return }
+        refreshNotes()
+        guard let folder, let settings else { status = "Off"; held = nil; return }
         guard FileManager.default.fileExists(atPath: folder.path) else {
             status = "Paused: the sync folder isn't there (\(folder.lastPathComponent)). It resumes when it is back."
             // Check again later: the cloud app may still be starting.
@@ -141,8 +188,13 @@ final class SyncController: ObservableObject {
 
     private func pull() {
         guard let session else { return }
+        let wasHeld = held?.ids
+        defer { refreshNotes() }
         do {
             let r = try session.pull()
+            if !r.recorded.isEmpty {
+                note("Sync changed \(r.recorded.count) item(s) here from another Mac. Sync settings lists them under Recently changed by sync, with Restore.")
+            }
             if let bak = r.configReplaced {
                 note("config.ts was replaced by a newer one from another Mac. Yours is kept as \(bak.lastPathComponent).")
             }
@@ -163,6 +215,10 @@ final class SyncController: ObservableObject {
             let others = Set(session.otherDevices)
             status = "Synced \(Date().formatted(date: .omitted, time: .shortened))" + (others.isEmpty ? "" : " with \(others.count) other Mac\(others.count == 1 ? "" : "s")")
             offered = session.offeredProfiles(localIDs: Set(selection.profiles.keys))
+        } catch let e as SyncSession.Held {
+            if wasHeld != e.hold.ids { note(e.hold.reason) }
+            let n = e.hold.ids.count
+            status = "Paused: this Mac would delete \(n) synced item\(n == 1 ? "" : "s"). Choose below."
         } catch {
             status = "Couldn't sync: \(error.localizedDescription)"
         }

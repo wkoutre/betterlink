@@ -52,7 +52,7 @@ public enum Agent {
         "settings.get", "settings.set",
         "config.path", "config.init", "config.check",
         "test",
-    ] + sidebarCommands
+    ] + sidebarCommands + syncCommands
 
     public static func run(_ command: String, input: [String: Any], env: AgentEnvironment) -> AgentResponse {
         do {
@@ -84,6 +84,7 @@ public enum Agent {
             case "test": return try test(input, env)
             default:
                 if let r = try sidebarRun(command, input, env) { return r }
+                if let r = try syncRun(command, input, env) { return r }
                 return .failure("Unknown command \(command). Commands: \(commands.joined(separator: ", ")).")
             }
         } catch let e as AgentError {

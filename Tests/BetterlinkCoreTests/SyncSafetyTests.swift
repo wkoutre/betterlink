@@ -1,0 +1,283 @@
+import Foundation
+import Testing
+@testable import BetterlinkCore
+
+/// The delete guard and the history with Restore (docs/sync.md, Safety), on
+/// simulated Macs: each its own settings folder, sharing one sync folder.
+struct SyncSafetyTests {
+    let shared = UUID(uuidString: "00000000-0000-0000-0000-0000000000CC")!
+
+    func tempDir() -> URL {
+        let u = FileManager.default.temporaryDirectory.appendingPathComponent("bl-sync-safety-\(UUID().uuidString)")
+        try! FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        return u
+    }
+
+    func session(_ device: String, _ settings: SettingsFolder, _ sync: URL) -> SyncSession {
+        SyncSession(settings: settings, folder: SyncFolder(sync), device: device, name: "Mac \(device)",
+                    selection: SyncSelection(global: true, profiles: [shared: .init()]))
+    }
+
+    func mac(_ name: String, sync: URL) throws -> SyncSession {
+        let s = SettingsFolder(directory: tempDir())
+        _ = try SidebarStore(folder: s).update { $0 = SidebarLibrary(profiles: [SidebarProfile(id: shared, name: "Shared")]) }
+        _ = try RuleStore(folder: s).update { _ in }
+        return session(name, s, sync)
+    }
+
+    func t(_ s: Double) -> Date { Date(timeIntervalSince1970: 1_800_000_000 + s) }
+
+    func addRules(_ patterns: [String], _ s: SyncSession) throws {
+        _ = try RuleStore(folder: s.settings).update {
+            for p in patterns { $0.rules.append(Rule(kind: .domain, pattern: p, browser: "b", profile: "P")) }
+        }
+    }
+
+    func patterns(_ s: SyncSession) throws -> Set<String> { Set(try RuleStore(folder: s.settings).load().rules.map(\.pattern)) }
+
+    /// A and B both hold `count` rules.
+    func pair(rules count: Int) throws -> (SyncSession, SyncSession, URL) {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try addRules((1...count).map { "r\($0).com" }, a)
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        #expect(try patterns(b).count == count)
+        return (a, b, sync)
+    }
+
+    // MARK: The guard
+
+    @Test func theGuardTripsAtFiveOrOverHalf() {
+        #expect(!SyncGuard.trips(deleting: 0, live: 0, fresh: true))
+        #expect(!SyncGuard.trips(deleting: 1, live: 1, fresh: false))   // one item, even the only one
+        #expect(!SyncGuard.trips(deleting: 4, live: 20, fresh: false))
+        #expect(SyncGuard.trips(deleting: 5, live: 100, fresh: false))
+        #expect(SyncGuard.trips(deleting: 2, live: 3, fresh: false))    // over half of few
+        #expect(!SyncGuard.trips(deleting: 2, live: 4, fresh: false))   // exactly half
+        #expect(SyncGuard.trips(deleting: 1, live: 50, fresh: true))    // a new settings folder asks before any delete
+    }
+
+    @Test func deletingManyAtOnceIsHeldAndWritesNothing() throws {
+        let (a, b, _) = try pair(rules: 6)
+        let before = b.state
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        let hold = try #require(b.held)
+        #expect(hold.ids.count == 6 && !hold.fresh)
+        #expect(hold.reason.hasPrefix("This Mac would delete 6 synced items at once: Link Rule \u{201C}r"))
+        #expect(hold.reason.hasSuffix("Sync is paused until you choose."))
+        #expect(b.localNotes.load().held == hold)   // for the CLI
+        #expect(b.state == before)                  // nothing recorded
+        try a.pull(now: t(4))
+        #expect(try patterns(a).count == 6)         // nothing reached A
+        // Asking again changes nothing and keeps the same hold.
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(5)) }
+        #expect(b.localNotes.load().held?.since == hold.since)
+    }
+
+    @Test func aFewDeletesGoThroughWithoutAsking() throws {
+        let (a, b, _) = try pair(rules: 10)
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast(4) }
+        try b.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(try patterns(a).count == 6)
+        #expect(b.held == nil && b.localNotes.load().held == nil)
+    }
+
+    @Test func deletingMostOfAFewItemsAsks() throws {
+        let (_, b, _) = try pair(rules: 2)   // with the Sidebar Profile, three synced items
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+    }
+
+    /// The 2026-11-25 case: a copy with a fresh, empty settings folder that
+    /// shares this Mac's sync preferences (and so its device id).
+    @Test func aFreshSettingsFolderCantDeleteWhatIsShared() throws {
+        let (a, _, sync) = try pair(rules: 1)
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) { $0.addFavorite(SavedLink(title: "Mail", url: "https://mail.example")) } }
+        try a.pull(now: t(3))
+        let empty = SettingsFolder(directory: tempDir())
+        let copy = session("A", empty, sync)
+        #expect(throws: SyncSession.Held.self) { try copy.pull(now: t(4)) }
+        let hold = try #require(copy.held)
+        #expect(hold.fresh && hold.ids.count >= 2)
+        #expect(hold.reason.hasPrefix("This settings folder hasn't synced on this Mac before"))
+        // The shared state is untouched: A still has everything.
+        let fresh = session("A", a.settings, sync)
+        #expect(fresh.state.isLive(try #require(fresh.state.entities.keys.first { $0.hasPrefix("rule:") })))
+        try a.pull(now: t(5))
+        #expect(try patterns(a) == ["r1.com"])
+        #expect(try SidebarStore(folder: a.settings).load().profiles.first?.favorites.map(\.url) == ["https://mail.example"])
+    }
+
+    @Test func deleteThemEverywhereProceedsOnceThenAsksAgain() throws {
+        let (a, b, _) = try pair(rules: 8)
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast(6) }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        let hold = try #require(b.held)
+        try b.localNotes.update { $0.decision = SyncDecision(choice: .delete, ids: hold.ids) }
+        try b.pull(now: t(4)); try a.pull(now: t(5))
+        #expect(try patterns(a) == ["r1.com", "r2.com"])
+        #expect(b.localNotes.load().decision == nil && b.localNotes.load().held == nil)
+        // The answer was for those six only.
+        let (c, d, _) = try pair(rules: 8)
+        _ = try RuleStore(folder: d.settings).update { $0.rules.removeLast(6) }
+        #expect(throws: SyncSession.Held.self) { try d.pull(now: t(3)) }
+        let first = try #require(d.held)
+        try d.localNotes.update { $0.decision = SyncDecision(choice: .delete, ids: Array(first.ids.prefix(5))) }
+        #expect(throws: SyncSession.Held.self) { try d.pull(now: t(4)) }
+        try c.pull(now: t(5))
+        #expect(try patterns(c).count == 8)
+    }
+
+    @Test func keepThemBringsTheSharedItemsBack() throws {
+        let (a, b, _) = try pair(rules: 6)
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        let hold = try #require(b.held)
+        try b.localNotes.update { $0.decision = SyncDecision(choice: .keep, ids: hold.ids) }
+        let r = try b.pull(now: t(4))
+        #expect(r.keepDone)
+        #expect(try patterns(b).count == 6)
+        #expect(b.held == nil && b.localNotes.load().decision == nil && b.localNotes.load().held == nil)
+        try a.pull(now: t(5)); try b.pull(now: t(6))
+        #expect(try patterns(a).count == 6)
+        #expect(a.state == b.state)
+    }
+
+    @Test func aFreshFolderThatKeepsTakesEverythingShared() throws {
+        let (_, b, sync) = try pair(rules: 2)
+        let copy = session("A", SettingsFolder(directory: tempDir()), sync)
+        #expect(throws: SyncSession.Held.self) { try copy.pull(now: t(3)) }
+        try copy.localNotes.update { $0.decision = SyncDecision(choice: .keep, ids: copy.held!.ids) }
+        try copy.pull(now: t(4))
+        #expect(try patterns(copy) == ["r1.com", "r2.com"])
+        #expect(copy.localNotes.load().device == "A")
+        // From now on it is an ordinary folder: one delete needs no answer.
+        _ = try RuleStore(folder: copy.settings).update { $0.rules.removeLast() }
+        try copy.pull(now: t(5)); try b.pull(now: t(6))
+        #expect(try patterns(b) == ["r1.com"])
+    }
+
+    // MARK: History and Restore
+
+    @Test func theHistoryIsCappedByCountAndAge() {
+        var notes = SyncLocal()
+        let now = t(100 * 86_400)
+        func entry(_ daysAgo: Double) -> SyncHistoryEntry {
+            SyncHistoryEntry(date: now.addingTimeInterval(-daysAgo * 86_400), batch: UUID(), entity: "rule:x", kind: .deleted,
+                             what: "Link Rule", from: "Mac B", previous: [:])
+        }
+        notes.record([entry(40), entry(31)], now: now)
+        #expect(notes.history.isEmpty)   // older than 30 days
+        notes.record((0..<60).map { _ in entry(1) }, now: now)
+        #expect(notes.history.count == SyncLocal.historyLimit)
+        let newest = entry(0)
+        notes.record([newest], now: now)
+        #expect(notes.history.first == newest && notes.history.count == 50)
+    }
+
+    @Test func aDeleteAndAnEditFromAnotherMacAreRecordedAndRestoreWins() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try addRules(["old.com", "other.com"], a)
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) { $0.addFavorite(SavedLink(title: "Mail", url: "https://mail.example")) } }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        // A renames a rule and deletes the favorite.
+        _ = try RuleStore(folder: a.settings).update { c in c.rules = c.rules.map { var r = $0; if r.pattern == "old.com" { r.pattern = "new.com" }; return r } }
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) { $0.favorites.removeAll() } }
+        try a.pull(now: t(3))
+        let r = try b.pull(now: t(4))
+        #expect(r.recorded.count == 2)
+        let history = b.localNotes.load().history
+        let deleted = try #require(history.first { $0.kind == .deleted })
+        let changed = try #require(history.first { $0.kind == .changed })
+        #expect(deleted.summary == "Favorite \u{201C}Mail\u{201D} was deleted on Mac A.")
+        #expect(deleted.previous["url"] == .string("https://mail.example"))
+        #expect(changed.summary == "Link Rule \u{201C}old.com\u{201D}: pattern changed on Mac A.")
+        #expect(changed.previous == ["pattern": .string("old.com")])
+        #expect(try patterns(b) == ["new.com", "other.com"])
+
+        // Restore both on B: a new edit there, so it wins on A too.
+        try b.localNotes.update { $0.restore = [deleted.id, changed.id] }
+        let back = try b.pull(now: t(5))
+        #expect(back.restored.count == 2)
+        #expect(try patterns(b) == ["old.com", "other.com"])
+        #expect(try SidebarStore(folder: b.settings).load().profiles.first?.favorites.map(\.url) == ["https://mail.example"])
+        #expect(b.localNotes.load().restore.isEmpty)
+        #expect(!b.localNotes.load().history.contains { $0.id == deleted.id || $0.id == changed.id })
+        let onA = try a.pull(now: t(6)); try b.pull(now: t(7))
+        #expect(try patterns(a) == ["old.com", "other.com"])
+        #expect(try SidebarStore(folder: a.settings).load().profiles.first?.favorites.map(\.url) == ["https://mail.example"])
+        #expect(a.state == b.state)
+        // A sees B's restore as an edit from B, with a Restore of its own.
+        #expect(onA.recorded.map(\.kind) == [.changed])
+        #expect(a.localNotes.load().history.first?.from == "Mac B")
+    }
+
+    @Test func restoringADeletedFolderBringsBackWhatWasInIt() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try addRules((1...6).map { "keep\($0).com" }, a)   // enough synced items that three deletes don't ask
+        let folder = UUID()
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) {
+            $0.items = [.folder(SidebarFolder(id: folder, name: "Reading", items: [
+                .link(SavedLink(title: "One", url: "https://one.example")), .link(SavedLink(title: "Two", url: "https://two.example")),
+            ]))]
+        } }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) { $0.items = [] } }
+        try a.pull(now: t(3)); try b.pull(now: t(4))
+        let history = b.localNotes.load().history
+        #expect(history.count == 3)
+        let entry = try #require(history.first { $0.what == "folder \u{201C}Reading\u{201D}" })
+        try b.localNotes.update { $0.restore = [entry.id] }
+        try b.pull(now: t(5)); try a.pull(now: t(6))
+        for s in [a, b] {
+            let items = try #require(try SidebarStore(folder: s.settings).load().profiles.first?.items)
+            guard case .folder(let f) = try #require(items.first) else { Issue.record("no folder"); continue }
+            #expect(f.name == "Reading" && f.items.count == 2)
+        }
+        #expect(b.localNotes.load().history.isEmpty)
+    }
+
+    @Test func thisMacsOwnEditsAreNotRecorded() throws {
+        let (a, _, _) = try pair(rules: 3)
+        _ = try RuleStore(folder: a.settings).update { $0.rules.removeLast() }
+        try a.pull(now: t(3))
+        #expect(a.localNotes.load().history.isEmpty)
+    }
+
+    // MARK: The command
+
+    @Test func theCommandShowsTheHoldAndRecordsTheAnswer() throws {
+        let (_, b, _) = try pair(rules: 6)
+        let env = AgentEnvironment(folder: b.settings, installed: [])
+        func run(_ c: String, _ input: [String: Any] = [:]) -> AgentResponse { Agent.run(c, input: input, env: env) }
+        #expect((run("sync.paused").data as? [String: Any])?["paused"] as? Bool == false)
+        #expect(!run("sync.resolve", ["choice": "keep"]).ok)   // nothing to answer
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        let paused = try #require(run("sync.paused").data as? [String: Any])
+        #expect(paused["paused"] as? Bool == true && (paused["items"] as? [String])?.count == 6)
+        #expect(!run("sync.resolve", ["choice": "maybe"]).ok)
+        #expect(run("sync.resolve", ["choice": "keep"]).ok)
+        #expect(b.localNotes.load().decision?.choice == .keep)
+        try b.pull(now: t(4))
+        #expect(try patterns(b).count == 6)
+        #expect((run("sync.paused").data as? [String: Any])?["paused"] as? Bool == false)
+    }
+
+    @Test func theCommandListsAndRestoresHistory() throws {
+        let (a, b, _) = try pair(rules: 4)
+        _ = try RuleStore(folder: a.settings).update { $0.rules.removeLast() }
+        try a.pull(now: t(3)); try b.pull(now: t(4))
+        let env = AgentEnvironment(folder: b.settings, installed: [])
+        let list = try #require(Agent.run("sync.history", input: [:], env: env).data as? [[String: Any]])
+        let id = try #require(list.first?["id"] as? String)
+        #expect(list.first?["summary"] as? String == "Link Rule \u{201C}r4.com\u{201D} was deleted on Mac A.")
+        #expect(!Agent.run("sync.restore", input: ["id": "zzz"], env: env).ok)
+        #expect(Agent.run("sync.restore", input: ["id": String(id.prefix(8))], env: env).ok)
+        try b.pull(now: t(5)); try a.pull(now: t(6))
+        #expect(try patterns(a).count == 4)
+    }
+}

@@ -1,6 +1,6 @@
 # Sync (design)
 
-Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession; the app's SyncController and General › Sync). Not built yet: the Log note with a Restore button for a losing edit, and the Link Rules page's mark on a rule whose profile this Mac lacks.
+Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession, SyncSafety; the app's SyncController and General › Sync). Not built yet: the Link Rules page's mark on a rule whose profile this Mac lacks.
 
 betterlink syncs your settings between Macs through a folder that Dropbox, Google Drive or iCloud Drive already keeps in sync. There's no account, server or API key. You choose what syncs. Two Macs editing at the same time always end up identical, and nothing is lost silently.
 
@@ -42,7 +42,7 @@ Every field of every entity is stored with a **stamp**:
 Edits made at nearly the same time:
 
 - **Different fields of the same item merge.** One Mac renames a folder while another moves it: both happen.
-- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. (Planned, not built: when the losing edit was this Mac's own, a Log note with the losing value and a Restore button.) An edit is stamped with when its settings file was saved (rules.json for rules and global settings, config.ts for config.ts, sidebar.json for Sidebar Profiles), so of two saves moments apart on two Macs the later save wins (live: B saving 0.3 s after A won three times out of three).
+- **The same field resolves by stamp.** Both Macs rename one folder at once: the later edit wins, on every Mac. The Mac whose value lost lists it under Recently changed by sync, with a Restore button (see Safety). An edit is stamped with when its settings file was saved (rules.json for rules and global settings, config.ts for config.ts, sidebar.json for Sidebar Profiles), so of two saves moments apart on two Macs the later save wins (live: B saving 0.3 s after A won three times out of three).
 
 ## Lists and moves
 
@@ -57,6 +57,21 @@ Edits made at nearly the same time:
 - **Deleting a folder** marks it and everything in it, each with the same stamp.
 - **Orphans:** if one Mac adds a saved link to a folder that another Mac deletes, the link is kept and moves to the top level of that profile. The Log says where it went.
 - **Tombstones** stay in the files, small (an id and a stamp). Removing them could bring an item back when a long-offline Mac returns, so v1 keeps them.
+
+## Safety
+
+Sync never deletes much without a person choosing it, and what it removes or replaces on a Mac can be put back there.
+
+**The delete guard.** Before a push stamps `deleted: true`, it counts the synced items it would delete. It holds instead of writing when that is 5 or more at once, or 2 or more that are over half of this Mac's synced items, or anything at all from a settings folder that hasn't synced as this Mac before (a new folder that shares this Mac's sync preferences, as happened on 2026-11-25, when an empty test folder deleted 6 real items on every Mac). Global settings and config.ts aren't counted among this Mac's synced items. While held, the sync doesn't write this Mac's file and doesn't pull, so nothing changes anywhere. Sync settings names the items ("This Mac would delete 6 synced items at once: …") with two buttons:
+
+- **Delete Them Everywhere**: the next push deletes exactly those items. Anything else it would delete asks again.
+- **Keep Them**: the next push leaves them alone, and the pull that follows takes the shared ones back into this Mac's settings. After it, the folder counts as synced.
+
+`betterlink sync paused` shows the hold and `betterlink sync resolve --choice delete|keep` answers it. Both work through this Mac's notes (below), so the CLI's answer reaches the running app's sync on its next round.
+
+**Recently changed by sync.** Each pull notes what the merge takes away here, for what this Mac syncs: an item another Mac deleted (with all its fields), and a value another Mac's edit replaced (with the old value). A reorder alone isn't noted, and neither is this Mac's own edit. Sync settings lists the latest, each with **Restore**; `betterlink sync history` lists them all and `betterlink sync restore <id>` restores one. Restore stamps the old values (and `deleted: false` for a deleted item) as a new edit on this Mac, so they win the merge on every Mac. Restoring a deleted Sidebar Profile or folder also brings back what the same sync deleted inside it. The Mac that receives a restore notes it in its own list, so a restore can be undone the same way.
+
+**This Mac's notes** are `sync-local.json` in its settings folder, written under a lock beside it by the sync and the CLI: the device this folder last synced as, the hold and its answer, restores asked for, and the history (newest first, the last 50, nothing older than 30 days). They never sync and never go in the sync folder.
 
 ## config.ts
 
@@ -95,6 +110,8 @@ config.ts is code and can't be merged field by field.
   - a half-written file
   - a config.ts conflict and its `.bak`
   - selective sync (an unsynced profile never leaves this Mac or changes there)
+  - the delete guard: 5 at once and most of a few are held, fewer go through, a fresh settings folder deletes nothing shared, Delete proceeds only for what was held, Keep brings the shared items back
+  - history and Restore: a delete and a replaced value are noted with their old values, the list is capped, a restore wins on both Macs, a restored folder brings back its links
 - **Live:** two copies of betterlink on the Mac mini, each with its own settings folder and device id, pointed at one Dropbox folder. Edits on both at once must converge.
 
 ## Rules on another Mac

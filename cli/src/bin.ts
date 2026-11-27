@@ -527,6 +527,26 @@ const sync = Cli.create('sync', {
       })
     },
   })
+  .command('paused', {
+    description: 'Show whether Sync is paused because this Mac would delete many synced items at once, and which',
+    run: () => core('sync.paused'),
+  })
+  .command('resolve', {
+    description: 'Answer a pause: delete those items on every Mac once, or keep them and take them back on this Mac',
+    options: z.object({
+      choice: z.enum(['delete', 'keep']).describe('delete: delete them everywhere; keep: bring the shared ones back here'),
+    }),
+    run: (c) => core('sync.resolve', { choice: c.options.choice }),
+  })
+  .command('history', {
+    description: 'What sync deleted on this Mac or replaced with another Mac\'s edit, newest first (the last 50, up to 30 days)',
+    run: () => core('sync.history'),
+  })
+  .command('restore', {
+    description: 'Put back what a sync history entry deleted or replaced, as a new edit on this Mac, so it wins everywhere',
+    args: z.object({ id: z.string().describe('An entry id from sync history, or its start') }),
+    run: (c) => core('sync.restore', { id: c.args.id }),
+  })
 
 // The tour: the first-run flow and What's New (docs/tour.md). Step and topic
 // ids come from `tour status`.

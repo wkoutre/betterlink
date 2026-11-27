@@ -82,7 +82,7 @@ enum AgentCommand {
     static var allCommands: [String] { Agent.commands + appCommands + tabCommands + TourAgent.commands + ChangelogAgent.commands }
 
     private static func changes(_ command: String) -> Bool {
-        !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check"].contains(command)
+        !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check", "sync.paused", "sync.history"].contains(command)
     }
 
     private static func isOK(_ json: Data) -> Bool {

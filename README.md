@@ -178,6 +178,7 @@ betterlink tabs close-others --tab 1234
 betterlink tabs extension                                     # where the Tabs extension is, for Load unpacked
 betterlink tabs setup --browser "Google Chrome"               # set up a browser's tab helper, as the Sidebar page does
 betterlink sync set --folder ~/Dropbox/betterlink             # sync through a folder your cloud drive keeps in sync
+betterlink sync history                                       # what sync deleted or replaced here; sync restore <id> puts one back
 betterlink tour status                                        # every step of the tour, with the command that does it
 ```
 
