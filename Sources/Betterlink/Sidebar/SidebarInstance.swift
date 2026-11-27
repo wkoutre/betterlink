@@ -390,15 +390,22 @@ final class SidebarInstance: ObservableObject {
             // between is further off screen than its ends under an animation.
             let kept = keep.map { abs($0 == .left ? seen.maxX - frame.maxX : seen.minX - frame.minX) < 1 } ?? true
             if flagOff, !setsSlow, kept, let first = calls.first {
+                // A set that ends with a position after a size (a left hide): the position goes once the size has
+                // landed (`WindowSteps.follows`), since a browser that takes a position at once and a size late
+                // (Chromium often does) would show the position first, the far edge in by the sidebar's width.
+                let sizes = calls.contains { if case .size = $0 { true } else { false } }
+                let follows = calls.count > 1 && sizes && { if case .position = calls.last { true } else { false } }()
+                let now = follows ? Array(calls.dropLast()) : calls
                 var s = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops,
-                                    sending: calls.count > 1 ? .frame(frame) : first, from: seen, at: clock(),
-                                    between: WindowSet.between(from: seen, calls: calls))
+                                    sending: follows ? .size(frame) : calls.count > 1 ? .frame(frame) : first, from: seen, at: clock(),
+                                    between: WindowSet.between(from: seen, calls: calls), placeFollows: follows)
                 s.patience = patience
                 s.slack = systemSlack
                 steps = s
-                window.handle.send(calls.flatMap { AXWindow.sets($0, of: window.handle) })
-                let between = WindowSet.between(from: seen, calls: calls).map { ", between them \($0)" } ?? ""
-                DragTrace.log("set: window \(window.number) from \(seen) to \(frame), \(calls)\(between)")
+                window.handle.send(now.flatMap { AXWindow.sets($0, of: window.handle) })
+                let between = WindowSet.betweens(from: seen, calls: calls).map { "\($0)" }.joined(separator: ", ")
+                DragTrace.log("set: window \(window.number) from \(seen) to \(frame), \(calls)\(between.isEmpty ? "" : ", between them \(between)")"
+                              + (follows ? ", the position once the size has landed" : ""))
                 return runTicker()
             }
         }
@@ -651,11 +658,15 @@ final class SidebarInstance: ObservableObject {
     /// reflowing under the panel is the first thing that changes, and the
     /// panel never uncovers the browser before it is there (MINI-16 at
     /// f11622b: the panel dropped below the sidebar's width from 26 ms before
-    /// to 17 ms after the browser's last frame). Not there within
+    /// to 17 ms after the browser's last frame; MINI-24 at 12a43a4: once,
+    /// before the window server showed the nudge). Not there within
     /// `SidebarSlide.landedWait`: it slides out all the same, and `trace.log` says so.
     private func beginSlideOut(_ run: inout SlideRun, now: Double) {
         guard run.out, run.slide.phase == .shown, let ready = run.ready else { return }
-        if SidebarGeometry.same(onScreenFrame, run.hiddenWindow) {
+        // The window server's frame only, never Accessibility's read-back, which says a set is done before the window
+        // server shows it (`onScreenFrame` falls back to it when the window server's list gives no frame); and only once
+        // every call of the set has returned.
+        if !window.handle.sending, let shown = AXWindow.shownFrame(of: window.handle), SidebarGeometry.same(shown, run.hiddenWindow) {
             if run.landed == nil { run.landed = now }
         } else {
             run.landed = nil

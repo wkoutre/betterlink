@@ -143,6 +143,18 @@ public struct WindowSteps: Sendable {
     /// sent: the motion was that one set (no final resend is owed).
     public var clean: Bool { opened && done && more == 0 && !capped && !interrupted && !stoppedShort && landedAtOnce && short == nil }
     private var opened = false
+    /// The set's last call, its position, is these steps' to send once its
+    /// size has landed (`init(sending:placeFollows:)`), and is part of the set:
+    /// a position landing before a size sent ahead of it (a browser that
+    /// takes a position at once and a size late) would bring a left hide's
+    /// far edge in.
+    private var follows = false
+    /// That position is the call in flight.
+    private var placing = false
+    /// The steps these took over: their set was seen cut short (`partway`),
+    /// and the width their window's browser was seen to stop at (`stops`).
+    private var earlierCut = false
+    private var earlierStops: CGFloat?
     /// Made with their first call already sent (`init(sending:)`): a slide-over's one set.
     public var oneSet: Bool { opened }
     /// That set was seen partway: its position on its way, or cut short by its
@@ -221,6 +233,8 @@ public struct WindowSteps: Sendable {
             inherited = sent != nil
             foreign = sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
+            earlierCut = earlier.partway
+            earlierStops = earlier.stops
         }
     }
 
@@ -231,10 +245,11 @@ public struct WindowSteps: Sendable {
     /// from where it leaves the window, as after their own size: a browser
     /// that stops at its minimum, or stops short, is checked as then.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil) {
+                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil, placeFollows: Bool = false) {
         self.init(target: target, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
         opened = true
         self.between = between
+        follows = placeFollows
         sent = (call, at, from, at, from, false, nil, false)
         if case .position = call { phase = .placed } else { phase = .sizing(from: from, movedFirst: nil) }
     }
@@ -251,7 +266,8 @@ public struct WindowSteps: Sendable {
             x >= min(a, b) - max(1.5, slack) && x <= max(a, b) + max(1.5, slack)
         }
         switch c {
-        case .size: return near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
+        // A size keeps the top left (within `WindowSet`'s nudge, sent before a size that grows a window past its screen's edge).
+        case .size: return (near(p.minX, seen.minX) || abs(p.minX - seen.minX) <= WindowSet.nudgeBy + 0.5) && near(p.maxY, seen.maxY)
         case .position(let t):
             return near(p.width, seen.width) && near(p.height, seen.height)
                 && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
@@ -266,6 +282,17 @@ public struct WindowSteps: Sendable {
                 && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
             return topLeft || moving
         }
+    }
+
+    /// A whole frame (`.frame`) whose size asks a change the window hasn't
+    /// begun to make, its place landed (a browser that takes a position at
+    /// once and a size late). Not its place unstarted, its size landed: under
+    /// an animation (macOS 27's) the size cuts the place short where it
+    /// began, and the place never comes.
+    private static func halfUnstarted(_ c: Call, from: CGRect, seen: CGRect) -> Bool {
+        guard case .frame(let f) = c else { return false }
+        let sized = !near(f.width, from.width) || !near(f.height, from.height)
+        return sized && near(seen.width, from.width) && near(seen.height, from.height)
     }
 
     /// The size a call asks, if it asks one.
@@ -329,7 +356,15 @@ public struct WindowSteps: Sendable {
             // was seen to stop at (`stops`), at or above the width asked: not moving is its answer too.
             let atStop = capped && !foreign && Self.narrows(s.call, s.from) && !s.moved
                 && { if let f = Self.size(of: s.call), let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
-            let still = (s.moved || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
+            // A whole frame taken over from the press before, half of it landed and the other half not started (a
+            // browser that takes a position at once and a size late, as Chromium often does): not started either,
+            // and waited for as such, since its other half may still land (the guard at seed 20261126: the new
+            // press's calls went out while the size was on its way, and it landed on top of them).
+            // Not one seen cut short (its place cut where it began by its size, under an animation), whose other
+            // half never comes; nor a narrower size the window is already at its browser's minimum for.
+            let atMinimum = Self.size(of: s.call).map { f in earlierStops.map { f.width < s.from.width - 1 && seen.width <= $0 + 0.5 } ?? false } ?? false
+            let started = s.moved && !(foreign && !earlierCut && !atMinimum && Self.halfUnstarted(s.call, from: s.from, seen: seen))
+            let still = (started || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
             // narrower size, carrying out a show or hide or sending the final target, only once it has
             // held still too: a browser can take it and then widen itself back to its minimum.
@@ -356,7 +391,7 @@ public struct WindowSteps: Sendable {
             let stopped = s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false
             if stopped, atStop { stayed = true }
             if !arrived, !still, !stopped {
-                guard !s.moved, now - s.at >= patience else { return nil }
+                guard !started, now - s.at >= patience else { return nil }
                 // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
                 // or hide, waited for up to the deadline; the final target's, once; a drag's, or one the
                 // final target took over, let go (it lands before the final target's all the same). One a
@@ -374,7 +409,10 @@ public struct WindowSteps: Sendable {
                 }
             }
             sent = nil
-            if s.moved { slowest = max(slowest, s.changed - s.at); moves += 1 }
+            // The set's own position, sent once its size landed (`follows`): its time behind the window's queue,
+            // held by the browser answering the size, is the size's, not a sign the browser's sets don't land at once.
+            if s.moved { if !placing { slowest = max(slowest, s.changed - s.at) }; moves += 1 }
+            placing = false
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
             // Not one taken over that isn't these steps' own: never checked, it may be held partway.
@@ -476,7 +514,10 @@ public struct WindowSteps: Sendable {
             if abs(seen.width - target.width) >= 2 || abs(seen.height - target.height) >= 2 { short = at }
             phase = .placed
             if Self.near(at.minX, seen.minX), Self.near(at.maxY, seen.maxY) { return step(seen: seen, now: now) }
-            return send(.position(at), seen, now)
+            let place = send(.position(at), seen, now)
+            // The set's own position: not a call more than the set.
+            if follows { follows = false; more -= 1; placing = true }
+            return place
         case .placed:
             // As asked, or what it could: once more for what is missing.
             if SidebarGeometry.same(seen, target) || retried { done = true; return nil }
