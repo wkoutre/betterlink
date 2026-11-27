@@ -232,7 +232,8 @@ public final class SyncSession {
         let fresh = notes.device != device && (fm.fileExists(atPath: localNotes.file.path)
             || !(fm.fileExists(atPath: settings.rulesFile.path) || fm.fileExists(atPath: sidebar.file.path)))
         if !Set(deleting).isSubset(of: approved),
-           SyncGuard.trips(deleting: SyncSafety.roots(deleting, in: state).count, live: live, fresh: fresh) {
+           SyncGuard.trips(deleting: SyncSafety.roots(deleting, in: state).count, live: live, fresh: fresh)
+            || SyncSafety.wipesAKind(before: state, after: next, scope: scope) {
             var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }, fresh: fresh, since: now)
             if let was = notes.held, was.ids == hold.ids, was.fresh == hold.fresh { hold = was }
             else { let h = hold; try localNotes.update { $0.held = h } }

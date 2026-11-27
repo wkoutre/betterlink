@@ -178,6 +178,42 @@ struct SyncSafetyTests {
         #expect(try patterns(a).count == 3)
     }
 
+    /// The incident again, with a starter sidebar.json already in the new
+    /// folder: it isn't fresh by the marker rule, but it would leave this
+    /// Mac with no rules, which the shared state has two of.
+    @Test func anEmptyFolderWithAStarterSidebarStillCantWipeTheRules() throws {
+        let (a, _, sync) = try pair(rules: 2)
+        let empty = SettingsFolder(directory: tempDir())
+        _ = try SidebarStore(folder: empty).update { $0 = SidebarLibrary(profiles: [SidebarProfile(id: UUID(), name: "Primary")]) }
+        let copy = session("A", empty, sync)
+        #expect(throws: SyncSession.Held.self) { try copy.pull(now: t(3)) }
+        #expect(copy.held?.fresh == false)
+        try a.pull(now: t(4))
+        #expect(try patterns(a) == ["r1.com", "r2.com"])
+    }
+
+    @Test func removingEverySyncedProfileAsksWhateverTheCount() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        let extra = UUID()
+        for s in [a, b] { s.selection.profiles[extra] = .init() }
+        try addRules((1...10).map { "r\($0).com" }, a)
+        _ = try SidebarStore(folder: a.settings).update { $0.profiles.append(SidebarProfile(id: extra, name: "Extra")) }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        _ = try SidebarStore(folder: b.settings).update { $0.profiles = [SidebarProfile(id: UUID(), name: "Starter")] }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }   // two roots of twelve would not ask
+        #expect(b.held?.ids.count == 2)
+    }
+
+    @Test func deletingTheOnlyRuleDoesntNag() throws {
+        let (a, b, _) = try pair(rules: 1)
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        try b.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(b.held == nil)
+        #expect(try patterns(a).isEmpty)
+        #expect(!SyncSafety.wipesAKind(before: b.state, after: b.state, scope: { _ in true }))
+    }
+
     @Test func deleteThemEverywhereProceedsOnceThenAsksAgain() throws {
         let (a, b, _) = try pair(rules: 8)
         _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast(6) }

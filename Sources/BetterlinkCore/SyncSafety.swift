@@ -228,6 +228,22 @@ public enum SyncSafety {
         return deleting.filter { !inside($0) }
     }
 
+    /// The kinds the empty-settings rule watches: Sidebar Profiles, and Link
+    /// Rules with modifier rules.
+    static let kinds: [(String) -> Bool] = [{ $0.hasPrefix("sp:") }, { $0.hasPrefix("rule:") || $0.hasPrefix("mod:") }]
+
+    /// Whether a push would leave this Mac with none of a kind it shares 2
+    /// or more of: every synced Sidebar Profile gone, or every rule. That is
+    /// what an empty settings folder does (2026-11-25), whatever is counted,
+    /// so it asks even when the folder has a starter sidebar.json. Deleting
+    /// the only one of a kind follows the other rules.
+    public static func wipesAKind(before: SyncState, after: SyncState, scope: (String) -> Bool) -> Bool {
+        kinds.contains { kind in
+            let had = before.entities.keys.filter { kind($0) && scope($0) && before.isLive($0) }
+            return had.count >= 2 && !after.entities.keys.contains { kind($0) && scope($0) && after.isLive($0) }
+        }
+    }
+
     /// The entries to put back for `wanted`: each one, and for a deleted
     /// Sidebar Profile or folder, what was deleted in it by the same sync.
     public static func restoring(_ wanted: [UUID], from history: [SyncHistoryEntry]) -> [SyncHistoryEntry] {
