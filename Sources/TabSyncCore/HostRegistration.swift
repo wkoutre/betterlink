@@ -55,9 +55,14 @@ public enum HostRegistration {
         case stale(path: String)
     }
 
-    /// Whether the file the browser reads (`readURL`) is set up for this betterlink.
+    /// Whether the file the browser reads (`readURL`) is set up for this
+    /// betterlink. A browser that reads another's folder also needs its own
+    /// file, the mark of its own Set Up: Uninstall there then reads as not
+    /// set up, though the shared file stays for the other browser.
     public static func state(dataFolder: String, hostPath: String, home: URL = FileManager.default.homeDirectoryForCurrentUser) -> State {
-        ownState(readURL(dataFolder: dataFolder, home: home), hostPath: hostPath)
+        let own = manifestURL(dataFolder: dataFolder, home: home), read = readURL(dataFolder: dataFolder, home: home)
+        if own != read, !FileManager.default.fileExists(atPath: own.path) { return .notInstalled }
+        return ownState(read, hostPath: hostPath)
     }
 
     /// Writes the manifest into the browser's own folder and, for a browser

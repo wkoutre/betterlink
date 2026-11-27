@@ -165,6 +165,9 @@ struct TabStoreTests {
         // Uninstall in Brave: Chrome has run here, so the shared file stays for it; Brave's own goes.
         #expect(try HostRegistration.uninstall(dataFolder: brave, sharers: sharers, home: home) == .keptFor([chrome]))
         #expect(!FileManager.default.fileExists(atPath: own.path) && FileManager.default.fileExists(atPath: read.path))
+        // Brave reads as uninstalled, as asked, though the file stays for Chrome.
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .notInstalled)
+        #expect(HostRegistration.state(dataFolder: chrome, hostPath: "/x/host", home: home) == .installed)
         // Then Chrome's Uninstall removes it.
         #expect(try HostRegistration.uninstall(dataFolder: chrome, sharers: sharers, home: home) == .removed)
         #expect(!FileManager.default.fileExists(atPath: read.path))
