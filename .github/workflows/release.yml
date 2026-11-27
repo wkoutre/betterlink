@@ -1,6 +1,7 @@
 name: release
 # Every merge to main ships a release, end to end:
-#   test     make test + make test-cli on the merged commit (no secrets)
+#   test     make test + make test-cli on the merged commit (no secrets),
+#            in parallel parts (see the job)
 #   version  picks the version and tags it (no secrets, can push):
 #              - Info.plist's version has no tag yet (a PR set it, e.g. 0.4.0):
 #                release it as is, no bump commit
@@ -86,36 +87,58 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
-  test:
+  # main's tip, picked once, so every part of the tests below and the
+  # version job see the same commit. Not the pushed commit: a merge that
+  # queued behind an earlier release must see that release's bump commit.
+  pick:
     if: >-
       github.ref == 'refs/heads/main' &&
       github.actor != 'github-actions[bot]' &&
       (github.event_name == 'push' || inputs.publish)
-    runs-on: macos-latest
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: read
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
-      # main's tip, not the pushed commit: a merge that queued behind an
-      # earlier release must see that release's bump commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           persist-credentials: false
       - id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # make test + make test-cli, split into parts that run on separate
+  # machines at once (.github/test-part.sh says what each runs and why).
+  # Every guard case still runs, and each guard part checks it ran its share.
+  test:
+    needs: pick
+    strategy:
+      matrix:
+        part: [app, cli, guard-1, guard-2]
+    name: test (${{ matrix.part }})
+    runs-on: macos-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.pick.outputs.sha }}
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.4
           no-cache: true
       - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
-      - run: make test
-      - run: make test-cli
+      - run: ./.github/test-part.sh "$PART"
+        env:
+          PART: ${{ matrix.part }}
+          GUARD_PARTS: 2 # the guard-K parts in the matrix above
 
   version:
-    needs: test
+    needs: [pick, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     environment: release-bot # holds the release bot's key; main only
@@ -142,7 +165,7 @@ jobs:
 
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.test.outputs.sha }} # exactly what the tests passed on
+          ref: ${{ needs.pick.outputs.sha }} # exactly what the tests passed on
           fetch-depth: 0 # tags, and main's history for the retry below
           token: ${{ steps.bot.outputs.token || github.token }}
           persist-credentials: true # zizmor: ignore[artipacked] this job pushes the bump commit and tag

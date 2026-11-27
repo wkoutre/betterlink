@@ -2016,22 +2016,34 @@ struct GuardCase: CustomStringConvertible {
 
     /// `BETTERLINK_GUARD_SEED` and `BETTERLINK_GUARD_CASES` override the seed
     /// and the count; a failure prints the seed and the case to rerun it.
-    @Test func everyCaseKeepsTheFourRules() {
+    /// `BETTERLINK_GUARD_SHARD=k/n` runs only every n-th case from the k-th
+    /// (1...n): the release workflow runs the n parts on n machines at once,
+    /// which together run every case. Each case comes from its own number, so
+    /// a case is the same whichever part runs it.
+    @Test func everyCaseKeepsTheFourRules() throws {
         let env = ProcessInfo.processInfo.environment
         let seed = env["BETTERLINK_GUARD_SEED"].flatMap { UInt64($0) } ?? 0x5EED_92
         let count = env["BETTERLINK_GUARD_CASES"].flatMap { Int($0) } ?? 2000
         var failed: [(Int, GuardCase, [String])] = []
         let only = env["BETTERLINK_GUARD_ONLY"].map { Set($0.split(separator: ",").compactMap { Int($0) }) }
+        var part = (k: 1, n: 1)
+        if let shard = env["BETTERLINK_GUARD_SHARD"], !shard.isEmpty {
+            let kn = shard.split(separator: "/").compactMap { Int($0) }
+            try #require(kn.count == 2 && kn[1] >= 1 && (1...kn[1]).contains(kn[0]), "BETTERLINK_GUARD_SHARD is k/n with 1 <= k <= n, not \(shard)")
+            part = (kn[0], kn[1])
+        }
         GuardCase.verbose = only != nil
         DragTrace.echo = only != nil ? { print("trace: \($0)") } : nil
         defer { DragTrace.echo = nil }
-        for i in 0..<count where only?.contains(i) ?? true {
+        var ran = 0
+        for i in 0..<count where (only?.contains(i) ?? true) && i % part.n == part.k - 1 {
             var r = GuardRandom(seed: seed &+ UInt64(i) &* 0x9E37_79B9)
             let c = GuardCase.random(&r)
             let problems = c.run()
+            ran += 1
             if !problems.isEmpty { failed.append((i, c, problems)) }
         }
-        print("SidebarGuard: \(count) random cases from seed \(seed), \(failed.count) failed")
+        print("SidebarGuard: part \(part.k) of \(part.n), \(ran) of \(count) random cases from seed \(seed), \(failed.count) failed")
         // BETTERLINK_GUARD_LIST=1: each failed case's first problem, one line each.
         if env["BETTERLINK_GUARD_LIST"] == "1" {
             for (i, c, problems) in failed { print("SidebarGuard case \(i): \(problems[0]) || \(c.behaviour) || \(c.side) \(Int(c.width)) window \(c.window)") }

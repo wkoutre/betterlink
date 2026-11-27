@@ -18,10 +18,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   # macOS minutes cost ten times Linux ones, so a PR that changes nothing
-  # swift-test exercises (docs, other workflows, setup helpers) skips it.
-  # A job skipped by its `if` reports success, so the required swift-test
-  # check still passes and the PR can merge. Anything not on the list below
-  # runs the tests, so a new kind of file is tested by default.
+  # swift-test exercises (docs, other workflows, setup helpers) skips its
+  # parts, and the required swift-test check passes without them. Anything
+  # not on the list below runs the tests, so a new kind of file is tested by
+  # default.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -51,11 +51,18 @@ jobs:
             echo "swift=false" >> "$GITHUB_OUTPUT"
           fi
 
-  swift-test:
+  # make test + make test-cli, split into parts that run on separate
+  # machines at once (.github/test-part.sh says what each runs and why), then
+  # what only this workflow checks, on the cli part, which built the app.
+  swift-test-part:
     needs: changes
     # Runs unless changes said "false": if changes itself failed, test anyway
     # rather than let a skipped check pass.
     if: ${{ !cancelled() && needs.changes.outputs.swift != 'false' }}
+    strategy:
+      matrix:
+        part: [app, cli, guard-1, guard-2]
+    name: swift-test (${{ matrix.part }})
     runs-on: macos-latest
     timeout-minutes: 30
     permissions:
@@ -70,18 +77,44 @@ jobs:
           bun-version: 1.4.4
       - run: ./scripts/check-bun.sh # the same check the release jobs make
       - run: swift --version
-      - run: make test
-      - run: make test-cli
-      - run: make test-tabs
+      - run: ./.github/test-part.sh "$PART"
+        env:
+          PART: ${{ matrix.part }}
+          GUARD_PARTS: 2 # the guard-K parts in the matrix above
+      - if: matrix.part == 'cli'
+        run: make test-tabs
       # Against the app test-cli built, with Sync on and the sidebar beside a
       # browser window of its own.
-      - run: ./scripts/check-idle.sh
+      - if: matrix.part == 'cli'
+        run: ./scripts/check-idle.sh
         env:
           CHECK_IDLE_SIDEBAR: /Applications/Google Chrome.app
       # Package.resolved pins Sparkle to a commit. A build that had to change
       # it means the committed pins are stale: run `swift package resolve`
       # and commit the result.
       - run: git diff --exit-code -- Package.resolved
+
+  # The required check: passes when every part did, or when changes said
+  # nothing here needs testing (the parts skipped). One name for the main
+  # rulesets and the dependabot job, whatever the parts are.
+  swift-test:
+    needs: [changes, swift-test-part]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - env:
+          PARTS: ${{ needs.swift-test-part.result }}
+          SWIFT: ${{ needs.changes.outputs.swift }}
+        run: |
+          if [ "$PARTS" = success ]; then exit 0; fi
+          if [ "$PARTS" = skipped ] && [ "$SWIFT" = false ]; then
+            echo "::notice::Only docs, other workflows or setup helpers changed; nothing to test."
+            exit 0
+          fi
+          echo "::error::The swift-test parts ended $PARTS."
+          exit 1
 
   # Dependabot intake. Runs only on Dependabot's own PRs, after swift-test
   # passed. It waits for every other check on the PR (zizmor, outside apps),
@@ -101,7 +134,7 @@ jobs:
   # next release a person merges, which retests it on main first.
   dependabot:
     needs: swift-test
-    # swift-test is skipped when a bump touches only other workflows.
+    # swift-test passes without its parts when a bump touches only other workflows.
     if: >-
       !cancelled() &&
       (needs.swift-test.result == 'success' || needs.swift-test.result == 'skipped') &&
