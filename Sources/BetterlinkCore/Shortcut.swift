@@ -19,6 +19,8 @@ public struct Shortcut: Codable, Equatable, Sendable {
 
     /// Control-Option-S (kVK_ANSI_S is 1).
     public static let sidebarDefault = Shortcut(keyCode: 1, modifiers: control | option, key: "S")
+    /// Control-Option-F (kVK_ANSI_F is 3): the Find Tab panel.
+    public static let findTabDefault = Shortcut(keyCode: 3, modifiers: control | option, key: "F")
 
     /// Usable as a system-wide shortcut: a key with Control. Without Control
     /// it would take something else while the browser is in front: Command

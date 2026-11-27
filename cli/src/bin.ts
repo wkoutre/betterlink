@@ -463,6 +463,11 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
       return core('tabs.close', { tabs: ids, browser: c.options.browser })
     },
   })
+  .command('find', {
+    description: 'Find open tabs in every connected browser and profile by words from their title or address (the Find Tab panel); then tabs activate',
+    args: z.object({ query: z.string().describe('Words from the title or address, in any order') }),
+    run: (c) => core('tabs.find', { query: c.args.query }),
+  })
   .command('activate', { description: 'Switch to a tab', options: tabId, run: (c) => core('tabs.activate', c.options) })
   .command('move', {
     description: 'Move a tab within its window, or into another window',

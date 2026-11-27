@@ -9,7 +9,7 @@ import TabSyncCore
 struct SidebarPagePlan: Equatable {
     enum Section: Hashable { case sidebar, browsers, options, imports }
     /// A row of the Sidebar section.
-    enum Row: Hashable { case show, windowsWarning, cornersNote, accessibility, side, shortcut }
+    enum Row: Hashable { case show, windowsWarning, cornersNote, accessibility, side, shortcut, findShortcut }
 
     let sections: [Section]
     let rows: [Row]
@@ -25,7 +25,7 @@ struct SidebarPagePlan: Equatable {
         if !canTellWindowsApart { rows.append(.windowsWarning) }
         if !readsWindowCorners { rows.append(.cornersNote) }
         if !trusted { rows.append(.accessibility) }
-        self.rows = rows + [.side, .shortcut]
+        self.rows = rows + [.side, .shortcut, .findShortcut]
     }
 }
 
@@ -138,6 +138,18 @@ struct SidebarPage: View {
                             }
                         }
                         if let problem = sidebar.hotKeyProblem {
+                            Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
+                        }
+                    }
+                case .findShortcut:
+                    LabeledContent("Find a tab") {
+                        HStack {
+                            ShortcutRecorder(shortcut: $sidebar.findShortcut)
+                            if sidebar.findShortcut != .findTabDefault {
+                                Button("Reset") { sidebar.findShortcut = .findTabDefault }
+                            }
+                        }
+                        if let problem = sidebar.findHotKeyProblem {
                             Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
                         }
                     }

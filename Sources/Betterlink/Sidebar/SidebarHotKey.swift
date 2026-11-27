@@ -7,8 +7,17 @@ import Foundation
 /// needed for a registered hot key (unlike watching every key press).
 @MainActor
 final class SidebarHotKey {
+    /// Which of betterlink's shortcuts this is: each press names the one
+    /// pressed, and every handler hears every press.
+    private let number: UInt32
+
+    init(number: UInt32 = 1, shortcut: Shortcut = .sidebarDefault) {
+        self.number = number
+        self.shortcut = shortcut
+    }
+
     /// Changing it re-registers at once when it is registered.
-    var shortcut = Shortcut.sidebarDefault {
+    var shortcut: Shortcut {
         didSet {
             guard shortcut != oldValue else { return }
             refused = nil; problem = nil
@@ -35,9 +44,14 @@ final class SidebarHotKey {
         if handler == nil {
             var spec = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
             let me = Unmanaged.passUnretained(self).toOpaque()
-            let installed = InstallEventHandler(GetApplicationEventTarget(), { _, _, refcon in
+            let installed = InstallEventHandler(GetApplicationEventTarget(), { _, event, refcon in
                 guard let refcon else { return noErr }
+                var pressed = EventHotKeyID()
+                let read = GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID),
+                                             nil, MemoryLayout<EventHotKeyID>.size, nil, &pressed)
                 let hk = Unmanaged<SidebarHotKey>.fromOpaque(refcon).takeUnretainedValue()
+                // Another of betterlink's shortcuts: leave it to its own handler.
+                guard read == noErr, pressed.id == hk.number else { return OSStatus(eventNotHandledErr) }
                 MainActor.assumeIsolated { hk.onPress?() }
                 return noErr
             }, 1, &spec, me, &handler)
@@ -48,7 +62,7 @@ final class SidebarHotKey {
                 return
             }
         }
-        let id = EventHotKeyID(signature: OSType(0x626C_7362), id: 1) // "blsb"
+        let id = EventHotKeyID(signature: OSType(0x626C_7362), id: number) // "blsb"
         let status = RegisterEventHotKey(shortcut.keyCode, shortcut.modifiers, id, GetApplicationEventTarget(), 0, &ref)
         if status != noErr {
             ref = nil

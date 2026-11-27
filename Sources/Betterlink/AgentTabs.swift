@@ -10,7 +10,7 @@ import TabSyncCore
 extension AgentCommand {
     static let tabCommands = [
         "tabs.list", "tabs.open", "tabs.close", "tabs.activate", "tabs.move", "tabs.mute",
-        "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below", "tabs.send",
+        "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below", "tabs.send", "tabs.find",
         "tabs.extension", "tabs.helper.list", "tabs.helper.set",
         "sidebar.settings.get", "sidebar.settings.set",
     ]
@@ -32,7 +32,7 @@ extension AgentCommand {
         do {
             let out = try tabCommand(command, input, hub, sessions, acks)
             // Give the host a moment to take the command before this process exits.
-            if command != "tabs.list" { Thread.sleep(forTimeInterval: 0.3) }
+            if command != "tabs.list" && command != "tabs.find" { Thread.sleep(forTimeInterval: 0.3) }
             return AgentResponseJSON.success(out)
         } catch let e as TabError {
             return AgentResponseJSON.failure(e.message)
@@ -312,6 +312,19 @@ extension AgentCommand {
             try need(s, .newWindow)
             hub.send(.newWindow(with: id), to: s.socketPath)
             return ["movedToNewWindow": id]
+        case "tabs.find":
+            // The Find Tab panel: every open tab in every connected browser and
+            // profile whose title or address has every word typed.
+            guard let query = input["query"] as? String, !query.trimmingCharacters(in: .whitespaces).isEmpty else {
+                throw TabError(message: "Give query: words from a tab's title or address.")
+            }
+            let labels = Dictionary(sessions.map { ($0.socketPath, profileLabel($0)) }, uniquingKeysWith: { a, _ in a })
+            let browsers = Dictionary(sessions.map { ($0.socketPath, $0.browser) }, uniquingKeysWith: { a, _ in a })
+            let found = TabSearch.find(query, in: TabSearch.items(sessions))
+            return ["tabs": found.map { item in
+                ["id": item.tab.id, "window": item.tab.windowId, "title": item.tab.title, "url": item.tab.url,
+                 "active": item.tab.active, "browser": browsers[item.socketPath] ?? "", "profile": labels[item.socketPath] ?? ""] as [String: Any]
+            }]
         case "tabs.send":
             // The sidebar's Send to Another Profile: open the page in the other
             // profile, and close the tab here only once that browser says it opened.

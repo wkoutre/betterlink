@@ -283,6 +283,10 @@ struct SidebarView: View {
                 .disabled(lib.library.profiles.count <= 1)
         }
         Divider()
+        // After this menu has closed, so the panel can take the keyboard.
+        Button("Find a Tab…  \(SidebarController.shared.findShortcut.display)") {
+            DispatchQueue.main.async { FindTabPanel.shared.show() }
+        }
         Button("Sidebar Settings…") { BetterlinkWindow.open(.sidebar) }
     }
 
