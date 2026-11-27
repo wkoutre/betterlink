@@ -111,6 +111,10 @@ public struct WindowGlide: Sendable {
     public private(set) var late = 0
     /// No call sent yet: the first goes out with the press (`step`).
     private var sentAny = false
+    /// How far (points, every edge) the system may move the window on its own
+    /// during a refit without it counting as someone else's change
+    /// (`WindowSteps.slack`).
+    public var slack: CGFloat = 0
 
     /// `proven`: this window's sets were seen to land at once before. Until
     /// they are, the first frame is a probe: its size alone, and only once
@@ -172,7 +176,8 @@ public struct WindowGlide: Sendable {
     /// edge, height and left edge between where it was and where it was sent.
     private func ours(_ seen: CGRect) -> Bool {
         guard let b = before, let a = asked else { return true }
-        func within(_ v: CGFloat, _ xs: [CGFloat]) -> Bool { v >= (xs.min() ?? v) - 1.5 && v <= (xs.max() ?? v) + 1.5 }
+        let by = max(1.5, slack)
+        func within(_ v: CGFloat, _ xs: [CGFloat]) -> Bool { v >= (xs.min() ?? v) - by && v <= (xs.max() ?? v) + by }
         var xs = [b.minX, a.minX]
         if let e = expect { xs.append(e.minX) }
         if let w = took { xs.append(side == .left ? a.maxX - w : a.minX) }
@@ -251,7 +256,14 @@ public struct WindowGlide: Sendable {
                 return nil
             }
         }
-        guard let b = before else { return nil }
+        guard var b = before else { return nil }
+        if !Self.landed(seen, b), slack > 0, abs(seen.minX - b.minX) <= slack, abs(seen.maxX - b.maxX) <= slack,
+           abs(seen.minY - b.minY) <= slack, abs(seen.maxY - b.maxY) <= slack {
+            // The system settled the window by a point or two between two frames (a refit's): the next frame goes on
+            // from where it is.
+            before = seen
+            b = seen
+        }
         if !Self.landed(seen, b) {
             // Resized between two frames, its top left kept: the browser's own (back to its minimum). The rest is the steps'.
             if Self.near(seen.minX, b.minX), Self.near(seen.maxY, b.maxY), Self.near(seen.height, b.height) {

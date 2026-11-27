@@ -115,6 +115,14 @@ public struct WindowSteps: Sendable {
     /// again (with a `deadline`) or taken as not taken: `timeout`, or less
     /// for a browser known to answer quickly (a drag of the sidebar's edge).
     public var patience = WindowSteps.timeout
+    /// How far (in points, on every edge) the system may move the window on
+    /// its own while these steps carry out a refit (`SidebarInstance`'s, of a
+    /// window the person has just tiled) without it counting as someone
+    /// else's change: macOS's tiling settles a window it has just tiled by a
+    /// point after it reports it at rest (MINI-16 on macOS 27 at 6ebd0da,
+    /// 1027 then 1028). 0: none. A change bigger than this is someone else's,
+    /// as always; frames within 2 pt are the same (`SidebarGeometry.same`).
+    public var slack: CGFloat = 0
     /// The longest any call took to land (its last change), in seconds.
     public private(set) var slowest = 0.0
     /// How many calls moved the window.
@@ -245,7 +253,11 @@ public struct WindowSteps: Sendable {
     /// Whether the call in flight, `c`, can take a window at `p` to `seen`:
     /// a size keeps the top left, at any size (a browser takes what it can);
     /// a position keeps the size and goes toward where it was sent.
-    private static func can(_ c: Call, from p: CGRect, to seen: CGRect) -> Bool {
+    private static func can(_ c: Call, from p: CGRect, to seen: CGRect, slack: CGFloat = 0) -> Bool {
+        func near(_ a: CGFloat, _ b: CGFloat) -> Bool { Self.near(a, b) || abs(a - b) <= slack }
+        func between(_ x: CGFloat, _ a: CGFloat, _ b: CGFloat) -> Bool {
+            x >= min(a, b) - max(1.5, slack) && x <= max(a, b) + max(1.5, slack)
+        }
         switch c {
         case .size: return near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
         case .position(let t):
@@ -279,7 +291,7 @@ public struct WindowSteps: Sendable {
         let capped = deadline != nil
         if var s = sent {
             if seen != s.last {
-                guard !checks || Self.can(s.call, from: s.last, to: seen) else {
+                guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) else {
                     interrupted = true
                     done = true
                     return nil
@@ -340,7 +352,8 @@ public struct WindowSteps: Sendable {
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
             // Not one taken over that isn't these steps' own: never checked, it may be held partway.
-            if checks, !foreign, case .position(let f) = s.call, s.moved, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX) {
+            if checks, !foreign, case .position(let f) = s.call, s.moved, !Self.near(seen.minX, f.minX), !Self.near(seen.minX, s.from.minX),
+               abs(seen.minX - f.minX) > slack {
                 interrupted = true
                 done = true
                 return nil

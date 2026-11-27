@@ -124,20 +124,28 @@ public enum SidebarGeometry {
     /// 3d5c1e4: Window › Fill or a tiling app put the browser on the whole
     /// visible frame, and the sidebar was left off the screen). Both must
     /// hold: it was placed, not dragged (both horizontal edges moved, as
-    /// Fill, a zoom or tiling to a half or a quarter move them, or it is on a
-    /// display's whole visible frame, as Fill puts a pair that filled it
-    /// already); and the sidebar beside the new frame would be further
-    /// outside the visible frames of the displays at its height (`visible`)
-    /// than it was beside the old one. Then the browser's new frame is the
-    /// pair's, and the sidebar opens in it again (rule 2). A drag of one
-    /// horizontal edge, or of a corner, is the person's and stands wherever
-    /// it leaves the sidebar (rule 3; review F1 of 1df43a3, the review of
-    /// 9354d68), and so does a move alone (the same size).
+    /// Fill, a zoom or tiling to a half or a quarter move them, or it spans
+    /// a display's whole visible width within 2 pt with its top or its
+    /// bottom on that visible frame's, within 2 pt, as Fill puts a pair that
+    /// filled it already, and tiling a pair that filled the screen's width
+    /// to its top or bottom half: review round 3 of PR 105, F2, narrowed in
+    /// the review of 33444c7); and the sidebar beside the new frame would be
+    /// further outside the visible frames of the displays at its height
+    /// (`visible`) than it was beside the old one. Then the browser's new
+    /// frame is the pair's, and the sidebar opens in it again (rule 2). A
+    /// drag of one horizontal edge, or of a corner, is the person's and
+    /// stands wherever it leaves the sidebar (rule 3; review F1 of 1df43a3,
+    /// the review of 9354d68), even to a whole visible width while the
+    /// window is short of its top and its bottom; one that ends on exactly
+    /// the whole visible frame is Fill's frame, and refits. A move alone
+    /// (the same size) stands.
     public static func refitsAfterResize(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, visible displays: [CGRect]) -> Bool {
         guard abs(was.width - now.width) >= 2 || abs(was.height - now.height) >= 2 else { return false }
         let bothEdges = abs(was.minX - now.minX) >= 2 && abs(was.maxX - now.maxX) >= 2
-        let filled = displays.contains { abs($0.minX - now.minX) < 2 && abs($0.maxX - now.maxX) < 2 && abs($0.minY - now.minY) < 2 && abs($0.maxY - now.maxY) < 2 }
-        guard bothEdges || filled else { return false }
+        let tiledAcross = displays.contains {
+            abs($0.minX - now.minX) < 2 && abs($0.maxX - now.maxX) < 2 && (abs($0.minY - now.minY) < 2 || abs($0.maxY - now.maxY) < 2)
+        }
+        guard bothEdges || tiledAcross else { return false }
         let before = offScreen(strip(beside: was, width: width, side: side), displays: displays)
         return offScreen(strip(beside: now, width: width, side: side), displays: displays) > before + 1
     }
