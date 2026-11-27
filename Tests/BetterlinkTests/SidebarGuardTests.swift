@@ -353,6 +353,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func position() -> CGPoint? {
+        readBetween()
         if hung() { lastReadFailed = true; return nil }
         let p = readPosition()
         lastReadFailed = p == nil
@@ -367,6 +368,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func size() -> CGSize? {
+        readBetween()
         if hung() { lastReadFailed = true; return nil }
         let s = readSize()
         lastReadFailed = s == nil
@@ -415,6 +417,18 @@ final class FakeBrowser: WindowHandle {
         pairedPositions += 1
         if pairedPositions % h.every == 0 { wait(h.by) }
     }
+
+    /// Live on macOS 26.5.2 and 27 (PR 105, a left show's last frames): a
+    /// read of the window between two sets of one frame let the window
+    /// server show the first set alone for a refresh and the second a
+    /// refresh later (a size, its width read back, then the position: the
+    /// far edge in by up to 120 pt for one frame). Sets back to back showed
+    /// together. On: a set that changes the window after a read that came
+    /// after another set of the same moment shows a tick (1/120 s) late.
+    var readSplitsPair = false
+    private var lastSetTime: Double?
+    private var readSinceSet = false
+    private func readBetween() { if let t = lastSetTime, now() - t < 1e-9 { readSinceSet = true } }
 
     private func holdCaller() {
         guard holdFor > 0, setCalls == holdAt else { return }
@@ -556,6 +570,11 @@ final class FakeBrowser: WindowHandle {
     /// cutting short the animation in flight there.
     private func set(_ f: CGRect) {
         let at = real
+        if readSplitsPair, readSinceSet, let t = lastSetTime, now() - t < 1e-9, f != at, lag == nil {
+            // Shown a refresh late: the frame on screen until then is the one before this set.
+            lag = (frame, now() + 1.0 / 120)
+        }
+        if readSplitsPair { readSinceSet = false; lastSetTime = now() }
         if lagArmed > 0, setCalls >= lagAt, f != at {
             // The window server shows this change, and what follows it meanwhile, only after a while.
             lag = (frame, now() + lagArmed)
@@ -3050,6 +3069,31 @@ struct GuardCase: CustomStringConvertible {
             #expect(FakeApps.shared.flag(rig.pid), "\(side): the flag is off")
             #expect(!lines.contains { $0.hasPrefix("glide:") }, "\(side): glided with VoiceOver on")
             #expect(lines.filter { $0.contains("left alone, VoiceOver on") }.count == 2, "\(side): \(lines.filter { $0.contains("enhanced UI") })")
+        }
+    }
+
+    /// The left side's last-tick drift (live on macOS 26 and 27, after PR
+    /// 105): a show sent each frame's size, read the width back, then sent
+    /// the position, and the read between let the window server show the
+    /// new width a refresh before the new position, the far edge in by up
+    /// to 120 pt for one frame (macOS 27, show 3: x 234 w 1686, then x 234
+    /// w 1644, then x 276). With a browser whose window server does that
+    /// (`readSplitsPair`), three shows and hides on the left, flag off and
+    /// on, keep the far edge within `oneSmoothMotion`'s tolerance at every tick.
+    @Test func aLeftShowsPairLandsAsOneFrame() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1049), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 1920, height: 1049)
+        for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+            let rig = SidebarRig(displays: [screen], frame: full, side: .left, width: 280, behaviour: b)
+            rig.fake.readSplitsPair = true
+            var check = RuleCheck(rig, displays: [screen])
+            for k in 0..<6 {
+                rig.toggle()
+                check.oneSmoothMotion(pair: full, "\(b): \(k % 2 == 0 ? "show" : "hide") \(k / 2 + 1)")
+            }
+            #expect(!rig.open && GuardFrames.same(rig.fake.frame, full), "\(b): ended open \(rig.open) at \(rig.fake.frame)")
+            #expect(check.problems.isEmpty, "\(check.problems.prefix(6).joined(separator: "\n"))")
         }
     }
 
