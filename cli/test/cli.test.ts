@@ -363,7 +363,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
   // (scripts/gen-tour.py checks each step's command and options exist).
   test('the tour, Sync and tab helper commands are listed for agents', () => {
     const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
-    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'tabs helpers', 'tabs setup', 'changelog list']) {
+    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'sync paused', 'sync resolve', 'sync history', 'sync restore', 'tabs helpers', 'tabs setup', 'changelog list']) {
       expect(llms).toContain(`betterlink ${c}`)
     }
   })
@@ -417,6 +417,17 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     }
     expect(run(d, 'sync', 'set', '--off', 'on').code).toBe(0)
     expect(run(d, 'sync', 'get').json).toMatchObject({ on: false, folder: null })
+  })
+
+  // The hold and the history are filled by the app's sync (SyncSafetyTests);
+  // here, what the commands say and refuse when there is nothing yet.
+  test('sync: paused, resolve, history and restore with nothing to answer', () => {
+    const d = home()
+    expect(run(d, 'sync', 'paused').json).toEqual({ paused: false })
+    expect(run(d, 'sync', 'resolve', '--choice', 'keep').code).not.toBe(0)
+    expect(run(d, 'sync', 'resolve', '--choice', 'maybe').code).not.toBe(0)
+    expect(run(d, 'sync', 'history').json).toEqual([])
+    expect(run(d, 'sync', 'restore', '1234').code).not.toBe(0)
   })
 
   // Read only: setting a helper up writes into the browser's own folder,

@@ -20,6 +20,18 @@ struct SyncSettingsSection: View {
                 if sync.folder != nil { Button("Turn Off") { sync.turnOff() } }
                 Button(sync.folder == nil ? "Choose Folder…" : "Change…") { sync.chooseFolderWithPanel() }
             }
+            if sync.folder != nil, let held = sync.held {
+                VStack(alignment: .leading, spacing: DS.Space.space2) {
+                    Text(held.reason).fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: DS.Space.space2) {
+                        Spacer()
+                        Button("Keep Them") { sync.resolveHold(.keep) }
+                            .help("Take the synced items back into this Mac's settings. Nothing is deleted.")
+                        Button("Delete Them Everywhere", role: .destructive) { sync.resolveHold(.delete) }
+                            .help("Delete these items on every Mac, this once.")
+                    }
+                }
+            }
             if sync.folder != nil {
                 Toggle(isOn: $sync.selection.global) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -41,6 +53,7 @@ struct SyncSettingsSection: View {
                         Button("Add") { sync.add(o.id) }
                     }
                 }
+                if !sync.history.isEmpty { recentlyChanged }
             }
         } header: {
             Text("Sync")
@@ -48,6 +61,36 @@ struct SyncSettingsSection: View {
             Text("Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes only its own file there and reads the others', so edits made on two Macs at once both land; when both change the same thing, the later change wins and the Log says so. Which Sidebar Profile each Chrome profile shows stays on each Mac.")
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// What sync deleted here or replaced with another Mac's edit (this Mac
+    /// only, the last 50 over 30 days), each with Restore.
+    private var recentlyChanged: some View {
+        VStack(alignment: .leading, spacing: DS.Space.space2) {
+            Text("Recently changed by sync")
+            Text("Restore puts the earlier value back as a new edit on this Mac, so it wins on every Mac.")
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+            ForEach(sync.history.prefix(10)) { entry in
+                HStack(spacing: DS.Space.space2) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(entry.summary).lineLimit(2)
+                        Text(entry.date.formatted(date: .abbreviated, time: .shortened))
+                            .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    }
+                    Spacer()
+                    if sync.restoring.contains(entry.id) {
+                        Text("Restoring").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    } else {
+                        Button("Restore") { sync.restore(entry) }
+                    }
+                }
+            }
+            if sync.history.count > 10 {
+                Text("\(sync.history.count - 10) more: betterlink sync history")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+            }
         }
     }
 

@@ -91,6 +91,21 @@ public final class SyncSession {
     private var writtenApplied: [String: ProfileRef]?
     /// What materialize last put in place for each synced target.
     private var applied: [String: ProfileRef] = [:]
+    /// A push held back instead of deleting synced items (SyncGuard); nil
+    /// while syncing. It is also in sync-local.json, for the CLI.
+    public private(set) var held: SyncHold?
+    /// The last push stamped this Mac's settings older than everything shared
+    /// (joining, or a settings folder new here): what the merge then replaces
+    /// is expected, not news for the history.
+    private var joinedLastPush = false
+    /// This Mac's own notes: the hold, the answer to it, and what sync changed here.
+    public var localNotes: SyncLocalStore { SyncLocalStore(folder: settings) }
+
+    /// Thrown by a push or pull that is held.
+    public struct Held: LocalizedError {
+        public let hold: SyncHold
+        public var errorDescription: String? { hold.reason }
+    }
 
     /// What the last pull changed that wasn't this Mac's own choice, for the Log.
     public struct Report: Equatable, Sendable {
@@ -100,6 +115,12 @@ public final class SyncSession {
         public var skipped: [String] = []
         public var newer: [String] = []
         public var unsafe: [String] = []
+        /// What sync deleted or replaced here, now in the history.
+        public var recorded: [SyncHistoryEntry] = []
+        /// History entries put back.
+        public var restored: [SyncHistoryEntry] = []
+        /// A "keep" answer to a hold was carried out.
+        public var keepDone = false
     }
 
     public init(settings: SettingsFolder, folder: SyncFolder, device: String, name: String, selection: SyncSelection,
@@ -174,18 +195,26 @@ public final class SyncSession {
                                       identity: identity, state: state, applied: applied)
         if selection.global { local[SyncModel.configID] = ["text": .of(snap.config)] }
         let scope = SyncModel.scope(selection, state: state)
+        let notes = localNotes.load()
+        // Kept after a hold: not deleted, and the pull that follows brings them back.
+        let keep = Set(notes.decision?.keep ?? [])
+        let approved = Set(notes.decision?.delete ?? [])
         // Joining means this Mac has never written a file here. One that is
         // there but couldn't be read (half-downloaded, refused) doesn't count:
         // treating that Mac as new would undo its edits since its last sync.
-        if written == nil, !FileManager.default.fileExists(atPath: folder.file(for: device).path),
-           folder.readAll().files.contains(where: { $0.device != device }) {
-            // This Mac joins Macs already syncing: what it has is stamped
-            // older than anything they shared, so shared settings win and
-            // only what is this Mac's alone is added. (The first Mac in a
-            // folder stamps normally, so the next one to join can't win.)
-            var zero = HLCClock(device: device)
-            state.record(local, scope: { _ in false }, clock: &zero, now: 0)
-        } else {
+        let joining = written == nil && !FileManager.default.fileExists(atPath: folder.file(for: device).path)
+            && folder.readAll().files.contains(where: { $0.device != device })
+        // A settings folder is new to sync here when its notes name another
+        // device, or when it has no notes and no settings either (an empty
+        // folder, as on 2026-11-25). One with settings but no notes yet is a
+        // Mac that synced before the notes existed: it just gets its marker.
+        let fm = FileManager.default
+        let fresh = notes.device != device && (notes.device != nil
+            || !(fm.fileExists(atPath: settings.rulesFile.path) || fm.fileExists(atPath: sidebar.file.path)))
+
+        // What this Mac's settings say, stamped as edits: what the guard judges.
+        var next = state, nextClock = clock
+        if !joining {
             // Stamp an edit with when its file was saved, not when it was
             // noticed, so of two saves moments apart on two Macs the later
             // one wins. Each file stamps only its own settings.
@@ -193,8 +222,48 @@ public final class SyncSession {
                 (snap.rulesSaved, Self.isRules), (snap.configSaved, Self.isConfig), (snap.librarySaved, Self.isLibrary),
             ]
             for (saved, mine) in groups {
-                state.record(local.filter { mine($0.key) }, scope: { mine($0) && scope($0) }, clock: &clock,
-                             now: Self.ms(saved.map { min($0, now) } ?? now))
+                next.record(local.filter { mine($0.key) }, scope: { mine($0) && scope($0) && !keep.contains($0) }, clock: &nextClock,
+                            now: Self.ms(saved.map { min($0, now) } ?? now))
+            }
+        }
+        // The guard (SyncGuard): deleting many synced items at once, or any
+        // from a settings folder new to sync here, waits for a person to
+        // choose. Nothing is written meanwhile, and the pull doesn't run.
+        let deleting = next.entities.keys.filter { state.isLive($0) && !next.isLive($0) }.sorted()
+        let live = state.entities.keys.filter { scope($0) && state.isLive($0) && $0 != SyncModel.globalID && $0 != SyncModel.configID }.count
+        if !Set(deleting).isSubset(of: approved),
+           SyncGuard.trips(deleting: SyncSafety.roots(deleting, in: state).count, live: live, fresh: fresh)
+            || SyncSafety.wipesAKind(before: state, after: next, scope: scope) {
+            var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, fresh: fresh, since: now)
+            if let was = notes.held, was.ids == hold.ids, was.fresh == hold.fresh { hold = was }
+            else { let h = hold; try localNotes.update { $0.held = h } }
+            held = hold
+            throw Held(hold: hold)
+        }
+        if joining || fresh {
+            // This Mac joins Macs already syncing, or its settings folder is
+            // new here: what it has is stamped older than anything shared, so
+            // shared settings win every field (config.ts, the fallback, Show
+            // log included) and only what is this Mac's alone is added. (The
+            // first Mac in a folder stamps normally, so the next one to join
+            // can't win.) Deletes it was told to make are the one exception.
+            var zero = HLCClock(device: device), mine = SyncState()
+            mine.record(local, scope: { _ in false }, clock: &zero, now: 0)
+            next = state.merged(with: mine)
+            nextClock = clock
+            for id in deleting where next.isLive(id) {
+                next.entities[id, default: [:]]["deleted"] = Stamped(.bool(true), nextClock.tick(now: Self.ms(now)))
+            }
+        }
+        joinedLastPush = joining || fresh
+        state = next; clock = nextClock; held = nil
+        // This folder has synced as this Mac now; a hold is over, and a
+        // "delete" answer is used up.
+        if notes.device != device || notes.held != nil || !(notes.decision?.delete.isEmpty ?? true) {
+            try localNotes.update {
+                $0.device = device; $0.held = nil
+                $0.decision?.delete = []
+                if $0.decision?.isEmpty == true { $0.decision = nil }
             }
         }
         guard state != written || applied != (writtenApplied ?? [:])
@@ -215,19 +284,55 @@ public final class SyncSession {
     @discardableResult
     public func pull(now: Date = Date()) throws -> Report {
         var report = Report()
-        for attempt in 1... {
-            do { try pullOnce(now: now, &report); break }
-            catch is ConfigSwap.Changed { if attempt == 10 { throw ChangedMeanwhile() } }
-            catch let e as ChangedMeanwhile { if attempt == 10 { throw e } }
+        // What this pull takes away here, by entity: a sync that starts over
+        // may already have applied some of it, so the first finding counts.
+        var found: [String: SyncHistoryEntry] = [:]
+        let batch = UUID()
+        do {
+            for attempt in 1... {
+                do { try pullOnce(now: now, batch: batch, &found, &report); break }
+                catch is ConfigSwap.Changed { if attempt == 10 { throw ChangedMeanwhile() } }
+                catch let e as ChangedMeanwhile { if attempt == 10 { throw e } }
+            }
+        } catch {
+            // What an attempt already applied here stays in the history.
+            try? saveNotes(found, report, now: now, done: false)
+            throw error
         }
+        // Before the last push, which can still be held: what this pull did is noted.
+        try saveNotes(found, report, now: now, done: true)
+        report.recorded = found.values.sorted { $0.entity < $1.entity }
         try push(now: now)
         return report
     }
 
-    private func pullOnce(now: Date, _ report: inout Report) throws {
+    /// Saves what a pull applied in this Mac's notes: the history entries,
+    /// and, when it finished (`done`), the restores and the Keep it carried out.
+    private func saveNotes(_ found: [String: SyncHistoryEntry], _ report: Report, now: Date, done: Bool) throws {
+        let recorded = found.values.sorted { $0.entity < $1.entity }
+        let restored = done ? Set(report.restored.map(\.id)) : []
+        let keepDone = done && report.keepDone
+        guard !recorded.isEmpty || !restored.isEmpty || keepDone || (done && !localNotes.load().restore.isEmpty) else { return }
+        try localNotes.update { notes in
+            if done {
+                // Asked for and done, or no longer in the history: either way, settled.
+                let known = Set(notes.history.map(\.id))
+                notes.restore.removeAll { restored.contains($0) || !known.contains($0) }
+            }
+            notes.history.removeAll { restored.contains($0.id) }
+            notes.record(recorded, now: now)
+            if keepDone {
+                notes.decision?.keep = []
+                if notes.decision?.isEmpty == true { notes.decision = nil }
+            }
+        }
+    }
+
+    private func pullOnce(now: Date, batch: UUID, _ found: inout [String: SyncHistoryEntry], _ report: inout Report) throws {
         // Local edits first, so they are stamped before anything newer lands.
         let snap = try snapshot()
         _ = try push(snap, now: now)
+        let notes = localNotes.load()
         // This Mac's own file says nothing it doesn't know, and can be megabytes.
         let read = folder.readAll(except: device)
         report.skipped = read.skipped; report.newer = read.newer; report.unsafe = read.unsafe
@@ -236,12 +341,37 @@ public final class SyncSession {
         otherDevices = read.files.filter { $0.device != device }.map(\.name)
         if let m = merged.maxStamp { clock.observe(m) }
 
+        // What the merge deletes or replaces here goes in the history, with
+        // the value it had, so Sync settings can put it back.
+        // Not on a Mac's first sync: its own values losing then is expected.
+        // An entry counts once its group of settings is written (adopt below).
+        let names = Dictionary(read.files.map { ($0.device, $0.name) }, uniquingKeysWith: { a, _ in a })
+        var pending: [String: SyncHistoryEntry] = [:]
+        if !joinedLastPush {
+            for e in SyncSafety.changes(from: state, to: merged, scope: SyncModel.scope(selection, state: state), names: names,
+                                        now: now, batch: batch) where found[e.entity] == nil {
+                pending[e.entity] = e
+            }
+        }
+        // A Restore is a new edit on this Mac: the old values, stamped now,
+        // so they win on every Mac.
+        report.restored = SyncSafety.restoring(notes.restore, from: notes.history)
+        for e in report.restored {
+            for (k, v) in e.previous.sorted(by: { $0.key < $1.key }) {
+                merged.entities[e.entity, default: [:]][k] = Stamped(v, clock.tick(now: Self.ms(now)))
+            }
+            if e.kind == .deleted { merged.entities[e.entity, default: [:]]["deleted"] = Stamped(.bool(false), clock.tick(now: Self.ms(now))) }
+            pending[e.entity] = nil; found[e.entity] = nil
+        }
+        report.keepDone = !(notes.decision?.keep.isEmpty ?? true)
+
         // `state` takes the merge one file at a time, once that file holds it:
         // the next push records whatever the files say that `state` doesn't,
         // so merging ahead of a file that isn't written would stamp this Mac's
         // old values as new edits and revert the other Mac's.
         func adopt(_ mine: (String) -> Bool) {
             for (id, fields) in merged.entities where mine(id) { state.entities[id] = fields }
+            for (id, e) in pending where mine(id) { found[id] = e }
         }
         let r = SyncModel.materialize(merged, rules: snap.rules, library: snap.library, selection: selection, resolve: resolve)
         // A sync that starts over may have moved things already: keep its notes.

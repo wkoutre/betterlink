@@ -82,7 +82,7 @@ enum AgentCommand {
     static var allCommands: [String] { Agent.commands + appCommands + tabCommands + TourAgent.commands + ChangelogAgent.commands }
 
     private static func changes(_ command: String) -> Bool {
-        !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check"].contains(command)
+        !command.hasSuffix(".get") && !command.hasSuffix(".list") && !["status", "test", "config.path", "config.check", "sync.paused", "sync.history"].contains(command)
     }
 
     private static func isOK(_ json: Data) -> Bool {
@@ -315,6 +315,10 @@ enum AgentCommand {
         }
         if let target { SyncDefaults.setFolder(target, in: d) }
         if off == true { SyncDefaults.setFolder(nil, in: d) }
+        if target != nil || off == true {
+            // A hold and its answer were about the old folder.
+            try? SyncLocalStore(folder: folder).update { $0.held = nil; $0.decision = nil }
+        }
         if changedSelection { SyncDefaults.setSelection(selection, in: d) }
         d.synchronize()  // the running app reads it as soon as it is notified
         var out = syncSettings(folder: folder)
