@@ -886,11 +886,11 @@ final class SidebarInstance: ObservableObject {
             open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
-        // Placed anew (both horizontal edges moved, or across a display's whole visible width at any height: Window ›
-        // Fill, a tiling app, a zoom, a full-width pair tiled to the top or bottom half) so that the sidebar would be
-        // further off the screen than it was: the browser's new frame is the pair's, and the sidebar slides back on in
-        // it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a corner short of that, and any other resize
-        // of theirs, stands.
+        // Placed anew (both horizontal edges moved, or across a display's whole visible width with its top or bottom
+        // on that visible frame's: Window › Fill, a tiling app, a zoom, a full-width pair tiled to the top or bottom
+        // half) so that the sidebar would be further off the screen than it was: the browser's new frame is the pair's,
+        // and the sidebar slides back on in it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a corner
+        // short of that, and any other resize of theirs, stands.
         // Not at once: macOS's tiling can settle the window a point after it reports it at rest (MINI-16 on macOS 27
         // at 6ebd0da: 1027, then 1028, after the refit had begun, which took it for the person's move). The refit
         // starts once the window server's frame has held still for `refitQuiet`, or at `refitWaitCap` whatever it
