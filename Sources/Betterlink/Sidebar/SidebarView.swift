@@ -347,10 +347,10 @@ struct SidebarView: View {
                 // tile's corner, a button of its own.
                 .overlay(alignment: .topTrailing) {
                     if let tab {
-                        TabSpeaker(tab: tab, name: link.title, canMute: m.session.can(.mute)) {
+                        TabSpeaker(tab: tab, name: link.title, canMute: m.session.can(.mute), onTile: true) {
                             tabs.setMuted(!tab.muted, tab, in: m.session)
                         }
-                        .offset(x: 4, y: -4)
+                        .offset(x: 2, y: -2)
                     }
                 }
                 .id(SidebarRowID.favorite(link.id))
@@ -1172,7 +1172,9 @@ private struct SidebarTabRow: View {
                 .lineLimit(1)
                 .foregroundStyle(pal.text)
         } trailing: {
-            TabSpeaker(tab: tab, name: name, canMute: canMute, mute: mute)
+            // The close button comes in to the left of the speaker, so the
+            // speaker never moves under the pointer and a click meant to
+            // mute can't close the tab.
             if hovering || focused {
                 Button(action: close) { RowIcon("xmark") }
                     .buttonStyle(PressStyle())
@@ -1181,6 +1183,7 @@ private struct SidebarTabRow: View {
                     .accessibilityLabel("Close \(name)")
                     .transition(.opacity)
             }
+            TabSpeaker(tab: tab, name: name, canMute: canMute, mute: mute)
         }
         .animation(Motion.hover(reduceMotion), value: hovering)
         .onHover { hovering = $0 }
@@ -1195,6 +1198,9 @@ private struct TabSpeaker: View {
     let tab: BrowserTab
     let name: String
     let canMute: Bool
+    /// On a Favorite's tile: on a small disc of its own, in the text color,
+    /// so it reads on the tile whatever the tile's color.
+    var onTile = false
     let mute: () -> Void
 
     @Environment(\.sidebarColors) private var pal
@@ -1202,14 +1208,15 @@ private struct TabSpeaker: View {
     var body: some View {
         if tab.audible || tab.muted {
             let speaker = RowIcon(tab.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
+                .background { if onTile { Circle().fill(.regularMaterial).frame(width: 18, height: 18) } }
             if canMute {
                 Button(action: mute) { speaker }
                     .buttonStyle(PressStyle())
-                    .foregroundStyle(pal.textTertiary)
+                    .foregroundStyle(onTile ? pal.text : pal.textTertiary)
                     .help(tab.muted ? "Unmute tab" : "Mute tab")
                     .accessibilityLabel(tab.muted ? "Unmute \(name)" : "Mute \(name)")
             } else {
-                speaker.foregroundStyle(pal.textTertiary)
+                speaker.foregroundStyle(onTile ? pal.text : pal.textTertiary)
                     .accessibilityLabel(tab.muted ? "Muted" : "Playing sound")
             }
         }
