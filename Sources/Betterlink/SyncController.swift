@@ -63,6 +63,7 @@ final class SyncController: ObservableObject {
         guard now?.standardizedFileURL != folder?.standardizedFileURL else { return }
         folder = now
         note(now.map { "Sync folder is now \($0.path)." } ?? "Sync is off on this Mac.")
+        forgetHold()
         restart()
     }
 
@@ -77,6 +78,7 @@ final class SyncController: ObservableObject {
         folder = url
         SyncDefaults.setFolder(url, in: defaults)
         note("Sync folder is now \(url.path).")
+        forgetHold()
         restart()
     }
 
@@ -95,7 +97,14 @@ final class SyncController: ObservableObject {
         folder = nil
         SyncDefaults.setFolder(nil, in: defaults)
         note("Sync is off on this Mac. Its file stays in the sync folder, so other Macs keep everything it shared.")
+        forgetHold()
         restart()
+    }
+
+    /// Another folder, or none: a hold and its answer were about the old one.
+    private func forgetHold() {
+        guard let settings else { return }
+        try? SyncLocalStore(folder: settings).update { $0.held = nil; $0.decision = nil }
     }
 
     /// A settings file changed on this Mac (AppModel's reloads, which also
@@ -111,10 +120,8 @@ final class SyncController: ObservableObject {
     func resolveHold(_ choice: SyncDecision.Choice) {
         guard let settings else { return }
         do {
-            try SyncLocalStore(folder: settings).update { notes in
-                guard let held = notes.held else { return }
-                notes.decision = SyncDecision(choice: choice, ids: held.ids)
-            }
+            let saved = try SyncLocalStore(folder: settings).update { $0.answer(choice) }
+            guard saved.held != nil else { note("Nothing is paused."); return }
             note(choice == .delete ? "Deleting the held items on every Mac." : "Keeping the held items; this Mac takes them back from the others.")
         } catch {
             status = "Couldn't save the answer: \(error.localizedDescription)"

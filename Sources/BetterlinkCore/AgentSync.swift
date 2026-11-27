@@ -24,7 +24,7 @@ extension Agent {
             }
             let saved = try store.update { notes in
                 guard let held = notes.held else { return }
-                notes.decision = SyncDecision(choice: choice, ids: held.ids)
+                notes.answer(choice)
             }
             guard saved.held != nil else { throw fail("Sync isn't paused on this Mac (sync paused).") }
             var out = describeHold(saved)
@@ -55,7 +55,7 @@ extension Agent {
         guard let h = notes.held else { return ["paused": false] }
         var out: [String: Any] = ["paused": true, "reason": h.reason, "items": h.names,
                                   "since": ISO8601DateFormatter().string(from: h.since)]
-        if let d = notes.decision, d.ids == h.ids { out["chosen"] = d.choice.rawValue }
+        if let c = notes.decision?.choice(for: h.ids) { out["chosen"] = c.rawValue }
         return out
     }
 }

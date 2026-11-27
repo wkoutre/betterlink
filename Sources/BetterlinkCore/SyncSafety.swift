@@ -55,10 +55,32 @@ public struct SyncDecision: Codable, Equatable, Sendable {
         /// Keep them: take the shared ones back into this Mac's settings.
         case keep
     }
-    public var choice: Choice
-    /// The hold's ids it answers. A push that would delete anything else asks again.
-    public var ids: [String]
-    public init(choice: Choice, ids: [String]) { self.choice = choice; self.ids = ids }
+    /// Held items to keep: the next push leaves them, and the pull after it brings them back.
+    public var keep: [String] = []
+    /// Held items to delete everywhere, once. A push that would delete anything else asks again.
+    public var delete: [String] = []
+
+    public init(keep: [String] = [], delete: [String] = []) { self.keep = keep; self.delete = delete }
+    public init(choice: Choice, ids: [String]) { self.init(); add(choice, ids) }
+
+    /// Answers `ids` with `choice`, leaving earlier answers for other items as they are.
+    public mutating func add(_ choice: Choice, _ ids: [String]) {
+        let set = Set(ids)
+        keep.removeAll { set.contains($0) }; delete.removeAll { set.contains($0) }
+        switch choice {
+        case .keep: keep = (keep + ids).sorted()
+        case .delete: delete = (delete + ids).sorted()
+        }
+    }
+
+    public var isEmpty: Bool { keep.isEmpty && delete.isEmpty }
+
+    /// The answer given for all of `ids`, if one was.
+    public func choice(for ids: [String]) -> Choice? {
+        if !ids.isEmpty, Set(ids).isSubset(of: keep) { return .keep }
+        if !ids.isEmpty, Set(ids).isSubset(of: delete) { return .delete }
+        return nil
+    }
 }
 
 /// Something sync deleted on this Mac, or a value another Mac's edit replaced.
@@ -112,6 +134,14 @@ public struct SyncLocal: Codable, Equatable, Sendable {
     public static let historyLimit = 50
     public static let historyDays = 30
 
+    /// Answers the hold, if there is one, keeping any earlier answer for other items.
+    public mutating func answer(_ choice: SyncDecision.Choice) {
+        guard let held else { return }
+        var d = decision ?? SyncDecision()
+        d.add(choice, held.ids)
+        decision = d
+    }
+
     /// Adds entries, newest first, keeping the last 50 and nothing older than 30 days.
     public mutating func record(_ entries: [SyncHistoryEntry], now: Date) {
         let cutoff = now.addingTimeInterval(-Double(Self.historyDays) * 86_400)
@@ -138,7 +168,8 @@ public struct SyncLocalStore: Sendable {
             let old = load()
             var new = old
             try change(&new)
-            if new != old || !FileManager.default.fileExists(atPath: file.path) {
+            // A change that changes nothing writes nothing, so no file appears for it.
+            if new != old {
                 try SettingsFile.write(new, to: file, what: "sync-local.json")
             }
             return new
@@ -156,7 +187,7 @@ public enum SyncSafety {
         if id == SyncModel.globalID { return "global settings" }
         if id == SyncModel.configID { return "config.ts" }
         if id.hasPrefix("rule:") { return "Link Rule" + quoted(fields["pattern"]?.string) }
-        if id.hasPrefix("mod:") { return "held-key rule" }
+        if id.hasPrefix("mod:") { return "modifier rule" }
         if id.hasPrefix("sp:") { return "Sidebar Profile" + quoted(fields["name"]?.string) }
         if id.hasPrefix("node:") {
             let title = quoted(fields["title"]?.string ?? fields["url"]?.string)
@@ -257,6 +288,18 @@ public enum SyncSafety {
                 let inProfile = e.previous["profile"]?.string.map { entities.contains("sp:\($0)") } ?? false
                 let inFolder = e.previous["parent"]?.string.map { entities.contains("node:\($0)") } ?? false
                 if inProfile || inFolder { picked.append(e); entities.insert(e.entity); grew = true }
+            }
+        }
+        // And what it sat in, when the same sync deleted that too: a link
+        // can't come back into a Sidebar Profile or folder that is gone.
+        grew = true
+        while grew {
+            grew = false
+            let needed = Set(picked.filter { $0.kind == .deleted }.flatMap { e -> [String] in
+                [e.previous["profile"]?.string.map { "sp:\($0)" }, e.previous["parent"]?.string.map { "node:\($0)" }].compactMap { $0 }
+            })
+            for e in history where e.kind == .deleted && batches.contains(e.batch) && needed.contains(e.entity) && !entities.contains(e.entity) {
+                picked.append(e); entities.insert(e.entity); grew = true
             }
         }
         return picked

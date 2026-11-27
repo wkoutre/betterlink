@@ -366,7 +366,7 @@ struct SyncSafetyTests {
         #expect(paused["paused"] as? Bool == true && (paused["items"] as? [String])?.count == 6)
         #expect(!run("sync.resolve", ["choice": "maybe"]).ok)
         #expect(run("sync.resolve", ["choice": "keep"]).ok)
-        #expect(b.localNotes.load().decision?.choice == .keep)
+        #expect(b.localNotes.load().decision?.keep.isEmpty == false)
         try b.pull(now: t(4))
         #expect(try patterns(b).count == 6)
         #expect((run("sync.paused").data as? [String: Any])?["paused"] as? Bool == false)
@@ -384,5 +384,91 @@ struct SyncSafetyTests {
         #expect(Agent.run("sync.restore", input: ["id": String(id.prefix(8))], env: env).ok)
         try b.pull(now: t(5)); try a.pull(now: t(6))
         #expect(try patterns(a).count == 4)
+    }
+
+    // MARK: Review round 1
+
+    /// B1: a fresh settings folder (the shared device id, nothing in it)
+    /// sends no empty config.ts, fallback or Show log, with or without a hold.
+    @Test(arguments: [false, true])
+    func aFreshFolderNeverChangesConfigOrGlobalSettings(holdAndKeep: Bool) throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try "export default 'a'".write(to: a.settings.configFile, atomically: true, encoding: .utf8)
+        _ = try RuleStore(folder: a.settings).update {
+            $0.fallback = ProfileRef(browser: "b", directory: "P"); $0.showLog = true
+            if holdAndKeep { for p in ["one.com", "two.com"] { $0.rules.append(Rule(kind: .domain, pattern: p, browser: "b", profile: "P")) } }
+        }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        // Without the hold, only the global settings sync on the copy: nothing it lacks can be deleted.
+        let copy = SyncSession(settings: SettingsFolder(directory: tempDir()), folder: SyncFolder(sync), device: "A", name: "Mac A",
+                               selection: holdAndKeep ? a.selection : SyncSelection(global: true))
+        if holdAndKeep {
+            #expect(throws: SyncSession.Held.self) { try copy.pull(now: t(3)) }
+            try copy.localNotes.update { $0.answer(.keep) }
+        }
+        try copy.pull(now: t(4))
+        try b.pull(now: t(5)); try a.pull(now: t(6))
+        for s in [a, b, copy] {
+            let r = try RuleStore(folder: s.settings).load()
+            #expect(try String(contentsOf: s.settings.configFile, encoding: .utf8) == "export default 'a'")
+            #expect(r.fallback == ProfileRef(browser: "b", directory: "P"))
+            #expect(r.showLog == true)
+            #expect(r.rules.count == (holdAndKeep ? 2 : 0))
+        }
+        let baks = try FileManager.default.contentsOfDirectory(atPath: a.settings.directory.path).filter { $0.hasSuffix(".bak") }
+        #expect(baks.isEmpty)
+        #expect(copy.localNotes.load().history.isEmpty)   // a first sync isn't news
+    }
+
+    /// M1: a change that changes nothing writes no notes file, so an updated
+    /// Mac doesn't turn fresh; notes with no device count as none.
+    @Test func aNoOpNeverCreatesTheNotesFile() throws {
+        let (a, b, _) = try pair(rules: 3)
+        try FileManager.default.removeItem(at: b.localNotes.file)
+        try b.localNotes.update { $0.held = nil }
+        #expect(!FileManager.default.fileExists(atPath: b.localNotes.file.path))
+        #expect(!Agent.run("sync.resolve", input: ["choice": "keep"], env: AgentEnvironment(folder: b.settings, installed: [])).ok)
+        #expect(!FileManager.default.fileExists(atPath: b.localNotes.file.path))
+        try SettingsFile.write(SyncLocal(), to: b.localNotes.file, what: "sync-local.json")   // notes, but no device
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast() }
+        try b.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(b.held == nil)
+        #expect(try patterns(a).count == 2)
+    }
+
+    /// M4: answering a second hold keeps the answer to the first.
+    @Test func answersForDifferentItemsAddUp() {
+        var d = SyncDecision(choice: .keep, ids: ["rule:x"])
+        d.add(.delete, ["rule:y"])
+        #expect(d == SyncDecision(keep: ["rule:x"], delete: ["rule:y"]))
+        d.add(.delete, ["rule:x"])
+        #expect(d == SyncDecision(keep: [], delete: ["rule:x", "rule:y"]))
+        #expect(d.choice(for: ["rule:y"]) == .delete && d.choice(for: ["rule:z"]) == nil)
+    }
+
+    /// M8: a Mac joining keeps nothing of its own that differs, and that isn't history.
+    @Test func joiningRecordsNoHistory() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try addRules(["one.com"], a)
+        try a.pull(now: t(1))
+        _ = try SidebarStore(folder: b.settings).update { $0.update(shared) { $0.name = "Mine" } }
+        let r = try b.pull(now: t(2))
+        #expect(try SidebarStore(folder: b.settings).load().profiles.first?.name == "Shared")
+        #expect(r.recorded.isEmpty && b.localNotes.load().history.isEmpty)
+    }
+
+    /// M5: restoring a link also restores the Sidebar Profile the same sync deleted.
+    @Test func restoringAnItemBringsBackWhatItWasIn() {
+        let batch = UUID(), p = UUID().uuidString
+        let profile = SyncHistoryEntry(date: t(0), batch: batch, entity: "sp:\(p)", kind: .deleted, what: "Sidebar Profile", from: "B",
+                                       previous: ["name": .string("Work")])
+        let link = SyncHistoryEntry(date: t(0), batch: batch, entity: "node:l", kind: .deleted, what: "saved link", from: "B",
+                                    previous: ["profile": .string(p), "parent": .null])
+        let other = SyncHistoryEntry(date: t(0), batch: batch, entity: "node:m", kind: .deleted, what: "saved link", from: "B",
+                                     previous: ["profile": .string(p)])
+        let picked = SyncSafety.restoring([link.id], from: [profile, link, other])
+        #expect(Set(picked.map(\.entity)) == ["node:l", "sp:\(p)"])
     }
 }
