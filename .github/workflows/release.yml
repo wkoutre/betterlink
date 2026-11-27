@@ -109,13 +109,9 @@ jobs:
       - id: sha
         run: echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
 
-  # make test + make test-cli, split across machines that run at once (one
-  # after the other on one machine they took over 10 minutes): the app's
-  # tests, the CLI's, and the sidebar guard's random cases in two halves.
-  # The guard's cases run on the main thread, so in one process every other
-  # main-thread test waited behind them. Every case still runs: the halves
-  # are the even and the odd cases (BETTERLINK_GUARD_SHARD), and each part
-  # checks it ran its share.
+  # make test + make test-cli, split into parts that run on separate
+  # machines at once (.github/test-part.sh says what each runs and why).
+  # Every guard case still runs, and each guard part checks it ran its share.
   test:
     needs: pick
     strategy:
@@ -136,26 +132,10 @@ jobs:
           bun-version: 1.4.4
           no-cache: true
       - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
-      - name: make test / make test-cli, this part
-        shell: bash
+      - run: ./.github/test-part.sh "$PART"
         env:
           PART: ${{ matrix.part }}
-          GUARD: everyCaseKeepsTheFourRules
-          GUARD_PARTS: 2 # the guard-N parts in the matrix above
-        # SWIFT_TEST_FLAGS here replaces the Makefile's, which only a Mac with
-        # the Command Line Tools and no Xcode needs; the runner has Xcode.
-        run: |
-          case "$PART" in
-            app) make test SWIFT_TEST_FLAGS="--skip $GUARD" ;;
-            cli) make test-cli ;;
-            guard-*)
-              k=${PART#guard-}
-              BETTERLINK_GUARD_SHARD="$k/$GUARD_PARTS" make test SWIFT_TEST_FLAGS="--filter $GUARD" | tee "$RUNNER_TEMP/guard.log"
-              # A filter that matched nothing would pass with no cases run.
-              grep -q "SidebarGuard: part $k of $GUARD_PARTS, [1-9][0-9]* of " "$RUNNER_TEMP/guard.log" ||
-                { echo "::error::The sidebar guard didn't run its part $k of $GUARD_PARTS."; exit 1; } ;;
-            *) echo "::error::Unknown part $PART"; exit 1 ;;
-          esac
+          GUARD_PARTS: 2 # the guard-K parts in the matrix above
 
   version:
     needs: [pick, test]
