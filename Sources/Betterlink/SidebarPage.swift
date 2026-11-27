@@ -197,25 +197,37 @@ private struct SidebarBrowserRow: View {
 
     var body: some View {
         let state = tabs.state(browser)
-        HStack(spacing: DS.Space.space3) {
-            Text(browser.name)
-            switch state {
-            case .installed: StatusBadge(text: "Set up", kind: .success, symbol: "checkmark")
-            case .notInstalled: StatusBadge(text: "Not set up", kind: .neutral)
-            case .stale: StatusBadge(text: "Points elsewhere", kind: .warning)
+        let connections = tabs.connections(browser)
+        let line = connections.line(browser: browser.name, helperSetUp: state == .installed)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: DS.Space.space3) {
+                Text(browser.name)
+                switch state {
+                case .installed: StatusBadge(text: "Set up", kind: .success, symbol: "checkmark")
+                case .notInstalled: StatusBadge(text: "Not set up", kind: .neutral)
+                case .stale: StatusBadge(text: "Points elsewhere", kind: .warning)
+                }
+                Spacer(minLength: 0)
+                switch state {
+                case .installed: Button("Uninstall") { tabs.setRegistered(false, browser) }.buttonStyle(.dsGhost)
+                case .notInstalled: Button("Set Up") { tabs.setRegistered(true, browser) }
+                case .stale: Button("Set Up Again") { tabs.setRegistered(true, browser) }
+                }
+                Toggle("Attach to \(browser.name)", isOn: Binding(
+                    get: { sidebar.attachTo.contains(browser.bundleId) },
+                    set: { on in if on { sidebar.attachTo.insert(browser.bundleId) } else { sidebar.attachTo.remove(browser.bundleId) } }))
+                    .labelsHidden()
+                    .help("The sidebar attaches to \(browser.name)")
+                    .accessibilityLabel("Attach to \(browser.name)")
             }
-            Spacer(minLength: 0)
-            switch state {
-            case .installed: Button("Uninstall") { tabs.setRegistered(false, browser) }.buttonStyle(.dsGhost)
-            case .notInstalled: Button("Set Up") { tabs.setRegistered(true, browser) }
-            case .stale: Button("Set Up Again") { tabs.setRegistered(true, browser) }
+            // Which profiles have the extension connected: Set up only says
+            // the browser can start the helper (ExtensionConnections).
+            if let line {
+                Text(line)
+                    .font(DS.TextStyle.caption)
+                    .foregroundStyle(connections.state == .outdated ? DS.Palette.warning : DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            Toggle("Attach to \(browser.name)", isOn: Binding(
-                get: { sidebar.attachTo.contains(browser.bundleId) },
-                set: { on in if on { sidebar.attachTo.insert(browser.bundleId) } else { sidebar.attachTo.remove(browser.bundleId) } }))
-                .labelsHidden()
-                .help("The sidebar attaches to \(browser.name)")
-                .accessibilityLabel("Attach to \(browser.name)")
         }
     }
 }

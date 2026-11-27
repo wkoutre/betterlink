@@ -32,6 +32,9 @@ final class TabsModel: ObservableObject {
     /// Sessions already asked to reload their extension: each is asked once.
     private var askedToReload: Set<String> = []
     private var hub: SyncHub?
+    /// When each connection's list was last checked against its browser.
+    private var refreshPacer = RefreshPacer()
+    private var frontObserver: NSObjectProtocol?
 
     /// Starts listening the first time the Sidebar page opens or the sidebar
     /// turns on, so betterlink does no tab work for anyone who uses neither.
@@ -69,6 +72,32 @@ final class TabsModel: ObservableObject {
         })
         self.hub = hub
         hub.start()
+        // A browser coming to the front has its lists checked, at most once a
+        // minute each (`RefreshPacer`): a list that went wrong without a
+        // sequence gap is put right before anyone looks at it for long.
+        frontObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] note in
+            let pid = (note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication)?.processIdentifier
+            MainActor.assumeIsolated { if let pid { self?.browserInFront(pid) } }
+        }
+    }
+
+    private func browserInFront(_ pid: pid_t) {
+        let now = CACurrentMediaTime()
+        for s in sessions where s.browserPid == Int(pid) && refreshPacer.browserInFront(s.id, now: now) {
+            hub?.send(.refresh(), to: s.socketPath)
+        }
+    }
+
+    /// What the Sidebar page says under a browser's row: which of its
+    /// profiles have the Tabs extension connected, and on what version.
+    func connections(_ b: Browser) -> ExtensionConnections {
+        let running = !NSRunningApplication.runningApplications(withBundleIdentifier: b.bundleId).isEmpty
+        let mine = sessions.filter { NSRunningApplication(processIdentifier: pid_t($0.browserPid))?.bundleIdentifier == b.bundleId }
+        return ExtensionConnections(running: running,
+                                    sessions: mine.map { (name: $0.instance.flatMap { profiles[$0]?.name }, version: $0.extensionVersion) },
+                                    folderVersion: extensionVersion)
     }
 
     /// How often, at most, what tabs show goes on while it keeps changing
@@ -105,8 +134,11 @@ final class TabsModel: ObservableObject {
         guard let handed = latest else { return }
         latest = nil
         let s = hub?.collect() ?? handed
-        pacer.published(now: CACurrentMediaTime())
+        let now = CACurrentMediaTime()
+        pacer.published(now: now)
         sessions = s
+        for x in s { refreshPacer.connected(x.id, now: now) }
+        refreshPacer.keep(Set(s.map(\.id)))
         lookUpProfiles(s)
         reloadOutdatedExtensions(s)
     }

@@ -383,3 +383,47 @@ test("reloadSelf does nothing when the files on disk can't be read", async () =>
     assert.equal(out.at(-1).ok, false);
   }
 });
+
+test("an event that fires while a snapshot is being read goes out right behind it, numbered after it (#49)", async () => {
+  const { chrome, out, b } = setup();
+  let release;
+  const real = chrome.windows.getAll;
+  chrome.windows.getAll = () => new Promise((r) => { release = () => r(real()); });
+  const pending = b.snapshot();
+  // Chrome fires these while getAll is still reading the windows.
+  chrome.tabs.onCreated.fire({ id: 12, windowId: 1, index: 1, title: "", url: "https://c.test/" });
+  chrome.tabs.onActivated.fire({ tabId: 12, windowId: 1 });
+  assert.equal(out.length, 0, "nothing goes out before the snapshot");
+  release();
+  await pending;
+  assert.deepEqual(out.slice(0, 3).map((m) => m.type + ":" + (m.kind || "")), ["snapshot:", "event:tabCreated", "event:tabActivated"]);
+  assert.deepEqual(out.slice(0, 3).map((m) => m.seq), [1, 2, 3], "consecutive after the snapshot, so the app applies them");
+  // And once it is out, events go at once again.
+  chrome.tabs.onRemoved.fire(12, { windowId: 1, isWindowClosing: false });
+  assert.equal(out.at(-1).kind, "tabRemoved");
+  assert.equal(out.at(-1).seq, out.filter((m) => m.seq).length);
+});
+
+test("a snapshot that fails still lets the events it held go out", async () => {
+  const { chrome, out, b } = setup();
+  chrome.windows.getAll = async () => { throw new Error("busy"); };
+  const pending = b.snapshot();
+  chrome.tabs.onActivated.fire({ tabId: 10, windowId: 1 });
+  await assert.rejects(pending);
+  assert.deepEqual(out.map((m) => m.kind), ["tabActivated"]);
+});
+
+test("a check without icons sends the list and no icon events", async () => {
+  const chrome = fakeChrome();
+  const out = [];
+  const asked = [];
+  const b = createBridge(chrome, (m) => out.push(m), () => 1, async (page) => { asked.push(page); return "data:image/png;base64,AA=="; });
+  await b.handle({ type: "cmd", id: "r1", op: "snapshot", icons: false });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(out.map((m) => m.type), ["snapshot", "ack"]);
+  assert.deepEqual(asked, []);
+  // A plain snapshot (a connect, a gap) still brings every icon.
+  await b.handle({ type: "cmd", id: "s1", op: "snapshot" });
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(asked, ["https://a.test/"]);
+});

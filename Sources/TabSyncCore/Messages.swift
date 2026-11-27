@@ -152,6 +152,9 @@ public struct Command: Codable, Equatable, Sendable {
     public var index: Int?
     public var muted: Bool?
     public var focus: Bool?
+    /// snapshot: false leaves the icons out (`refresh()`). An extension
+    /// before 0.3.4 sends them anyway.
+    public var icons: Bool?
     public var t: Double
 
     /// Every command. The first four are the ones every extension runs; the
@@ -178,6 +181,14 @@ public struct Command: Codable, Equatable, Sendable {
     public static func close(_ tabId: Int) -> Command { Command(.close, tabId: tabId) }
     public static func activate(_ tabId: Int) -> Command { Command(.activate, tabId: tabId, focus: true) }
     public static func snapshot() -> Command { Command(.snapshot) }
+    /// A snapshot to check a list the app already has (`RefreshPacer`): the
+    /// tabs and windows only. The store keeps each tab's icon while its
+    /// address stays the same, so nothing is fetched again.
+    public static func refresh() -> Command {
+        var c = Command(.snapshot)
+        c.icons = false
+        return c
+    }
     /// Moves a tab to `index` in its window, or in `windowId` when given.
     public static func move(_ tabId: Int, to index: Int, windowId: Int? = nil) -> Command {
         Command(.move, tabId: tabId, windowId: windowId, index: index)

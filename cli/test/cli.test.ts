@@ -410,7 +410,12 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
   test('tab helpers: lists the browsers, and refuses one it does not know', () => {
     const d = home()
     const list = run(d, 'tabs', 'helpers').json.browsers
-    for (const b of list) expect(['setUp', 'notSetUp', 'pointsElsewhere']).toContain(b.helper)
+    for (const b of list) {
+      expect(['setUp', 'notSetUp', 'pointsElsewhere']).toContain(b.helper)
+      // Which profiles have the Tabs extension connected, as the Sidebar page shows under the row.
+      expect(['notRunning', 'none', 'connected', 'outdated']).toContain(b.extension)
+      expect(Array.isArray(b.profiles)).toBe(true)
+    }
     expect(run(d, 'tabs', 'setup', '--browser', 'No Such Browser').code).not.toBe(0)
     expect(run(d, 'tabs', 'setup', '--browser', 'Safari').code).not.toBe(0)
     // With a temporary settings folder it refuses a real browser too, before writing anything.

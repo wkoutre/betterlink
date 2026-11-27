@@ -71,11 +71,46 @@ extension AgentCommand {
         }
     }
 
-    /// Each installed browser the sidebar can attach to, and whether its tab
-    /// helper is set up for this betterlink.
+    /// Each installed browser the sidebar can attach to, whether its tab
+    /// helper is set up for this betterlink, and which of its profiles have
+    /// the Tabs extension connected (the Sidebar page's line under each row).
     static func tabHelpers() -> [[String: Any]] {
-        Browser.known.filter { $0.hostsSidebar && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
-            .map { ["browser": $0.name, "bundleId": $0.bundleId, "helper": helperState($0)] }
+        let browsers = Browser.known.filter { $0.hostsSidebar && NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
+        let running = browsers.contains { !NSRunningApplication.runningApplications(withBundleIdentifier: $0.bundleId).isEmpty }
+        // Only a browser that is open can have a connection to ask about.
+        var sessions: [BrowserSession] = []
+        if running {
+            let hub = SyncHub(onChange: { _ in })
+            hub.start()
+            sessions = waitForSessions(hub)
+        }
+        let folderVersion = ExtensionCopy.version(of: ExtensionCopy.folder)
+        return browsers.map { b in
+            let mine = sessions.filter { NSRunningApplication(processIdentifier: pid_t($0.browserPid))?.bundleIdentifier == b.bundleId }
+            let c = ExtensionConnections(
+                running: !NSRunningApplication.runningApplications(withBundleIdentifier: b.bundleId).isEmpty,
+                sessions: mine.map { (name: profileName($0, b), version: $0.extensionVersion) },
+                folderVersion: folderVersion)
+            let helper = helperState(b)
+            var row: [String: Any] = [
+                "browser": b.name, "bundleId": b.bundleId, "helper": helper,
+                "extension": c.state.rawValue,
+                "profiles": c.profiles.map { ["profile": $0.name ?? NSNull(), "version": $0.version ?? NSNull(), "outdated": $0.needsReload] as [String: Any] },
+            ]
+            if let line = c.line(browser: b.name, helperSetUp: helper == "setUp") { row["status"] = line }
+            return row
+        }
+    }
+
+    /// The name of the browser profile a connection runs in, as the app finds
+    /// it (TabsModel.lookUpProfiles), or nil.
+    private static func profileName(_ s: BrowserSession, _ b: Browser) -> String? {
+        guard let instance = s.instance, let folder = b.dataFolder else { return nil }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
+        guard let dir = ProfileLocator.directory(instance: instance, dataFolder: root) else { return nil }
+        let state = FileManager.default.contents(atPath: root.appendingPathComponent("Local State").path)
+        return state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: b.bundleId).profiles.first { $0.directory == dir }?.name } ?? dir
     }
 
     /// Writes (or removes) the one file that lets a browser start betterlink's

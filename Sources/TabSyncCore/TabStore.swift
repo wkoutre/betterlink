@@ -92,14 +92,23 @@ public struct TabStore: Equatable, Sendable {
 
     // MARK: - internals
 
+    /// A tab still at the address it had keeps the inline icon the store
+    /// has: the snapshot carries only the browser's icon address, and a check
+    /// (`Command.refresh`) sends no icons after it.
     private mutating func loadSnapshot(_ wins: [SnapshotWindow]) {
+        let before = tabs
         windows = [:]; windowOrder = []; tabs = [:]
         for w in wins {
             let sorted = w.tabs.sorted { $0.index < $1.index }
             windows[w.id] = BrowserWindow(id: w.id, focused: w.focused, incognito: w.incognito ?? false, tabIds: sorted.map(\.id),
                                           bounds: w.bounds, type: w.windowType)
             windowOrder.append(w.id)
-            for t in sorted { tabs[t.id] = t }
+            for var t in sorted {
+                if let old = before[t.id], old.url == t.url, old.favIconUrl.hasPrefix("data:"), !t.favIconUrl.hasPrefix("data:") {
+                    t.favIconUrl = old.favIconUrl
+                }
+                tabs[t.id] = t
+            }
         }
     }
 

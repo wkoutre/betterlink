@@ -1,16 +1,20 @@
 // MV3 service worker. Holds one native messaging port to the betterlink-tabhost.
 // An open native port keeps the service worker alive (Chrome 105+), so events
 // stream for as long as the browser runs. Nothing here polls: the only timer is
-// the reconnect backoff after the host goes away.
+// the reconnect backoff after the host goes away, and a browser event while
+// no host is connected tries again at once (reconnect.js).
 import { createBridge, OPS, PROTOCOL } from "./bridge.js";
+import { createReconnector } from "./reconnect.js";
 
 const HOST = "com.wkoutre.betterlink.tabs";
 let port = null;
-let retryMs = 1000;
+const reconnect = createReconnector(connect);
 
 function send(msg) {
-  if (!port) return; // no app yet; the snapshot on (re)connect heals the gap
-  try { port.postMessage(msg); } catch { port = null; }
+  // No host yet: the snapshot on (re)connect heals the gap, and this event
+  // is the moment to try for one.
+  if (!port) { reconnect.nudge(); return; }
+  try { port.postMessage(msg); } catch { port = null; reconnect.failed(); }
 }
 
 // The browser's own cached icon for a page, as a data: URL. Served by the
@@ -58,17 +62,18 @@ function connect() {
   try {
     p = chrome.runtime.connectNative(HOST);
   } catch (e) {
-    return scheduleRetry();
+    return reconnect.failed();
   }
   port = p;
   p.onMessage.addListener((msg) => {
-    retryMs = 1000; // the host is really there (it greets on start), so reset the backoff
+    reconnect.succeeded(); // the host is really there (it greets on start), so reset the backoff
     bridge.handle(msg);
   });
   p.onDisconnect.addListener(() => {
     if (chrome.runtime.lastError) console.warn("[betterlink-tabs] host:", chrome.runtime.lastError.message);
-    if (port === p) port = null;
-    scheduleRetry();
+    if (port !== p) return;
+    port = null;
+    reconnect.failed();
   });
   instance.then((id) => {
     if (port !== p) return;
@@ -83,11 +88,6 @@ function connect() {
     });
     bridge.snapshot();
   });
-}
-
-function scheduleRetry() {
-  setTimeout(connect, retryMs);
-  retryMs = Math.min(retryMs * 2, 60000);
 }
 
 chrome.runtime.onStartup.addListener(connect);
