@@ -237,6 +237,14 @@ final class SidebarInstance: ObservableObject {
     private var lastCapped = false
     /// The last steps were a show's set refused as unmoved (`WindowSteps.unmoved`): its size may still land.
     private var lastUnmoved = false
+    /// Refusals in a row of this window as unmoved (or clamped), at one
+    /// width: two keep that width as its browser's minimum (`stops`,
+    /// `knownStop`); one alone keeps nothing, since a browser may only have
+    /// been slow. Any other end of a show starts the count again.
+    private var unmovedRefusals: (width: CGFloat, count: Int)?
+    /// `stops` was kept from two refusals in a row: a show of a window that
+    /// wide is refused before anything is sent.
+    private var knownStop = false
     /// The last steps ended because the window stopped short (`WindowSteps.stoppedShort`).
     private var lastStoppedShort = false
     /// The last steps were one set that landed at once and whole (`WindowSteps.clean`): no final resend is owed.
@@ -443,8 +451,8 @@ final class SidebarInstance: ObservableObject {
     /// (the last steps weren't capped, nor a drag's, which lets calls go),
     /// so someone else's change meanwhile ends it as it ends any steps.
     /// `settling`: every size held still before it counts (`WindowSteps.settles`).
-    private func resend(_ frame: CGRect, watching: Bool, settling: Bool = false, then: @escaping () -> Void = {}) {
-        steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching, settles: settling)
+    private func resend(_ frame: CGRect, watching: Bool, settling: Bool = false, late: CGRect? = nil, then: @escaping () -> Void = {}) {
+        steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching, settles: settling, late: late)
         steps?.slack = systemSlack
         afterSteps = then
         stepWindow()
@@ -522,8 +530,9 @@ final class SidebarInstance: ObservableObject {
             DragTrace.log("enhanced UI: window \(window.number) not at \(s.target) yet: its flag stays held until it is, or \(WindowSteps.cap) s")
         }
         if let u = s.unmoved {
-            DragTrace.log(String(format: "open: window %d unmoved: set sent at %.3f, its size sent once more at %.3f, the window last changed %@, nothing since in %.0f ms: refused as stopped where it is, no minimum learned",
-                                 window.number, u.set, u.resent, u.lastChange.map { String(format: "at %.3f", $0) } ?? "never", WindowSteps.unmovedWait * 1000))
+            DragTrace.log(String(format: "open: window %d %@: set sent at %.3f, its size sent once more at %.3f, the window last changed %@, nothing since in %.0f ms: refused, its old frame sent back",
+                                 window.number, s.clamped ? "clamped (its position landed, its size didn't)" : "unmoved", u.set, u.resent,
+                                 u.lastChange.map { String(format: "at %.3f", $0) } ?? "never", (s.clamped ? WindowSteps.clampResendWait : WindowSteps.unmovedWait) * 1000))
         }
         lastSlowest = s.slowest
         lastUnmoved = s.unmoved != nil
@@ -765,6 +774,15 @@ final class SidebarInstance: ObservableObject {
     /// `slide`: the panel slides in over the browser first, and the browser's
     /// set goes once it covers (`stepPanel`).
     private func open(from frame: CGRect, slide: Bool) {
+        // Refused twice in a row at this width, its browser's size never moving: refused before anything is sent,
+        // the note at once, nothing of the panel over the browser.
+        if slide, knownStop, let s = stops, frame.width <= s + 0.5 {
+            DragTrace.log("open: window \(window.number) at \(Int(frame.width)) pt, its browser's minimum kept from two refusals: refused, nothing sent")
+            hidden = true
+            sidebar.refused(self)
+            Self.tell(.noSize, frame)
+            return
+        }
         width = chosenWidth
         // This window's browser was seen to stop at a width that leaves the sidebar less than chosen, but room: the
         // sidebar opens that wide, the browser asked for the width it stopped at, so the panel and its seam slide in at
@@ -902,10 +920,22 @@ final class SidebarInstance: ObservableObject {
         let side = sidebar.side
         let real = onScreenFrame
         // Past the cap: a browser slower than that, or one that never took the size.
-        if lastCapped { return refuse(o, real: real, .noSize) }
+        if lastCapped { unmovedRefusals = nil; return refuse(o, real: real, .noSize) }
         // Took part and stopped: as far as it goes. (Not moved at all and taken as stopped, `stops` already says so.)
         if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { stops = real.width }
         // Stopped short where it was seen to stop before: no room, though it didn't move.
+        if lastUnmoved {
+            let w = o.frame.width
+            let n = unmovedRefusals.map { abs($0.width - w) < 1 ? $0.count + 1 : 1 } ?? 1
+            unmovedRefusals = (w, n)
+            if n >= 2 {
+                stops = w
+                knownStop = true
+                DragTrace.log("open: window \(window.number) refused as unmoved twice in a row at \(Int(w)) pt: kept as its browser's minimum")
+            }
+        } else {
+            unmovedRefusals = nil
+        }
         if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastUnmoved ? .noSize : lastStoppedShort ? .noRoom : notice) }
         let room = o.frame.width - real.width
         // Its far edge where it was, at the width it really has.
@@ -952,7 +982,6 @@ final class SidebarInstance: ObservableObject {
         opening = nil
         hidden = true
         sidebar.refused(self)
-        Self.tell(notice, o.frame)
         restoring = o.frame
         if var run = slideRun {
             run.out = true
@@ -963,13 +992,16 @@ final class SidebarInstance: ObservableObject {
             unpair()
         }
         // Watching for someone else's change unless the open's calls, or the way back's, were capped. Refused as
-        // unmoved, the open's size may still land, late: the frame is sent whole after it, unwatched, as past the cap
-        // (seed 6221202, case 127: a size 843 ms late landed after the way back, the window left narrowed).
+        // unmoved (or clamped, its position landed), the open's size may still land, late: the frame is sent whole
+        // after it, its old position first (seed 6221202, case 127: a size 843 ms late landed after the way back, the
+        // window left narrowed), watched all the same, the open's own size or position landing late taken as
+        // betterlink's (`WindowSteps.late`): the person's move meanwhile stands (seed 20261126, case 473).
         let pending = lastCapped || lastUnmoved
+        let late = lastUnmoved && !lastCapped ? o.asked : nil
         let back: () -> Void = { [weak self] in
             guard let self else { return }
             if self.lastClean, !self.lastCapped, !pending { return self.restored(o.frame) }
-            self.resend(o.frame, watching: !self.lastCapped && !pending) { [weak self] in self?.restored(o.frame) }
+            self.resend(o.frame, watching: !self.lastCapped && (!pending || late != nil), late: late) { [weak self] in self?.restored(o.frame) }
         }
         if pending || SidebarGeometry.same(real, o.frame) {
             lastClean = false
@@ -977,6 +1009,8 @@ final class SidebarInstance: ObservableObject {
         } else {
             move(to: o.frame, keep: nil, retreats: false, deadline: cap, oneSet: slideRun != nil, then: back)
         }
+        // The note once the way back is sent: its old position first.
+        Self.tell(notice, o.frame)
         layout()
     }
 
@@ -1462,7 +1496,7 @@ final class SidebarInstance: ObservableObject {
         stepFlagWatch() // the window moved: maybe the late calls landed
         trackResize()
         // Narrower than its browser was seen to stop at: that was no minimum.
-        if let s = stops, onScreenFrame.width < s - 1 { stops = nil }
+        if let s = stops, onScreenFrame.width < s - 1 { stops = nil; knownStop = false; unmovedRefusals = nil }
         // A single step still open: its answer ends the step.
         if let r = resizing, r.waits, steps == nil, r.drag.answered(r.asked, by: onScreenFrame) { dragEnded() }
         // A slide places the panel itself, frame by frame. Mid-drag, beside

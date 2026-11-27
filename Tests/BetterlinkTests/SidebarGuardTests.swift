@@ -103,6 +103,14 @@ struct BrowserBehaviour: CustomStringConvertible {
     /// Sizes it is given end up taken (late, once dropped, or after a tiling app, included).
     var sizesStick: Bool { !positionOnly && revertReads == 0 }
 
+    /// A show on `side` is refused as clamped before its late size lands: on
+    /// the left a show's set lands a late browser's position at once, and a
+    /// size later than 4 + 6 frames after it is refused
+    /// (`WindowSteps.clampWait`, `clampResendWait`).
+    func clamped(on side: SidebarSide) -> Bool {
+        side == .left && timing == .late && lateBy > WindowSteps.clampWait + WindowSteps.clampResendWait - 0.02
+    }
+
     var description: String {
         var s = [timing == .atOnce ? timing.rawValue : "\(timing.rawValue) by \(Int(lateBy * 1000)) ms"]
         if minWidth > 0 { s.append("minimum \(Int(minWidth))\(widensBack ? " (widens back to it)" : "")") }
@@ -2004,12 +2012,26 @@ struct GuardCase: CustomStringConvertible {
     /// (late or busy past about 0.4 s, or macOS 27's animation starting
     /// later than about 0.25 s, the size sent once more starting it over) may
     /// be refused, and need not open; so may one that stops answering now
-    /// and then.
+    /// and then, and, on the left, a late one whose size lands more than
+    /// about 10 frames after its position.
     func canOpen(from frame: CGRect) -> Bool {
         // A dropped size is sent once more `still` after the set, and answered from then.
         let dropped = behaviour.dropsSizeCall != nil ? WindowSteps.still : 0
-        let answers = (behaviour.timing == .atOnce ? 0 : behaviour.lateBy) + dropped
-        let clamp = WindowSteps.still + WindowSteps.unmovedWait - 0.05
+        var answers = (behaviour.timing == .atOnce ? 0 : behaviour.lateBy) + dropped
+        var clamp = WindowSteps.still + WindowSteps.unmovedWait - 0.05
+        // On the left a late browser's set lands its position at once: its size, still unmoved four frames after
+        // that, is sent once more (a dropped one answered from then), and unmoved six frames after that, the show
+        // is refused as clamped (`WindowSteps.clampWait`, `clampResendWait`).
+        if side == .left, behaviour.timing == .late {
+            answers = behaviour.lateBy + (behaviour.dropsSizeCall != nil ? WindowSteps.clampWait : 0)
+            clamp = WindowSteps.clampWait + WindowSteps.clampResendWait - 0.02
+        }
+        // A busy one's set lands whole, late; a size it dropped, sent once more four frames after the position
+        // landed, lands as late again after that, and must land within the six frames that follow.
+        if side == .left, behaviour.timing == .busy, behaviour.dropsSizeCall != nil {
+            answers = behaviour.lateBy
+            clamp = WindowSteps.clampResendWait - 0.02
+        }
         return behaviour.sizesStick && max(behaviour.minWidth, 1) <= frame.width - SidebarGeometry.widths.lowerBound
             && answers <= clamp
             && behaviour.animationDelay <= WindowSteps.unmovedWait - 0.05 && behaviour.stall == 0
@@ -2295,9 +2317,13 @@ struct GuardCase: CustomStringConvertible {
     /// a guard bug); a window 1 pt wide nudged 1 pt past its far edge (3814,
     /// 4745, a guard bug); a show of a window whose browser was seen to stop
     /// 1 pt short of the width asked, which asked it for that width again and
-    /// showed the panel's seam only once it had stopped (4440).
+    /// showed the panel's seam only once it had stopped (4440); the person's
+    /// move during a busy browser's show taken as the set's position and put
+    /// back over by the refusal (473, 2997), or during the refusal's way back
+    /// (4992); a show whose position landed, its size never, refused and left
+    /// shifted (3383).
     @Test func seed20261126Cases() {
-        for i in [337, 567, 2818, 3264, 4984, 855, 3814, 4745, 4440] {
+        for i in [337, 567, 2818, 3264, 4984, 855, 3814, 4745, 4440, 473, 2997, 3383, 4992] {
             var r = GuardRandom(seed: 20261126 &+ UInt64(i) &* 0x9E37_79B9)
             let c = GuardCase.random(&r)
             let problems = c.run()
@@ -2668,7 +2694,8 @@ struct GuardCase: CustomStringConvertible {
                 #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(step): open \(rig.open), at \(rig.fake.frame)")
                 // An animation that starts as late as the size sent once more lets it (0.3 s, started over by that
                 // size) hasn't moved the window when the unmoved wait is out: refused as making no room.
-                let unmoved = b.animationDelay >= WindowSteps.unmovedWait - 0.05
+                // On the left, a size later than the clamp's 4 + 6 frames after the position: refused as clamped.
+                let unmoved = b.animationDelay >= WindowSteps.unmovedWait - 0.05 || b.clamped(on: side)
                 #expect(SidebarRig.notices.map(\.0) == [unmoved ? .noSize : .noRoom], "\(step): notes \(SidebarRig.notices.map(\.0))")
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
@@ -2747,9 +2774,11 @@ struct GuardCase: CustomStringConvertible {
         for b in [BrowserBehaviour(animation: 0.25), BrowserBehaviour(timing: .late, lateBy: 0.3)] {
             for side in SidebarSide.allCases {
                 for at in [0.0, 0.05, 0.2, 0.4] {
-                    let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b)
+                    // Opened by a browser that answers at once if this one's show is refused as clamped (late on the left).
+                    let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b.clamped(on: side) ? BrowserBehaviour() : b)
                     rig.toggle()
                     #expect(rig.open, "\(b) \(side): didn't open")
+                    rig.fake.behaviour = b
                     rig.carry(.width(360), during: [(at, .press)])
                     let step = "\(b) \(side), the width set to 360, the shortcut \(Int(at * 1000)) ms later"
                     #expect(!rig.open, "\(step): still open")
@@ -2770,7 +2799,9 @@ struct GuardCase: CustomStringConvertible {
     /// opens later by itself. Since a show's size not moved at all is refused
     /// as stopped where it is once sent once more and unchanged 300 ms after
     /// (`WindowSteps.unmovedWait`), a browser later than about 0.4 s is
-    /// refused that way, with the "didn't make room" note. A hide whose calls land late ends in the
+    /// refused that way, with the "didn't make room" note, and on the left a
+    /// browser whose size lands more than 4 + 6 frames after its position
+    /// (`WindowSteps.clampWait`) is refused as clamped. A hide whose calls land late ends in the
     /// pair's frame. No width is lost either way. (The fake's late browser
     /// is late with sizes only, its busy one with every call.)
     @Test func aBrowserThatAnswersLateLosesNoWidth() {
@@ -2786,12 +2817,13 @@ struct GuardCase: CustomStringConvertible {
                     var check = RuleCheck(rig, displays: [screen])
                     let step = "\(b) \(side): show"
                     check.timely(step)
-                    if late <= WindowSteps.still + WindowSteps.unmovedWait - 0.05 {
+                    if late <= WindowSteps.still + WindowSteps.unmovedWait - 0.05, !b.clamped(on: side) {
                         check.shown(from: start, mustOpen: true, step)
                         #expect(SidebarRig.notices.isEmpty, "\(step): notes \(SidebarRig.notices.map(\.0)), though it opened")
                     } else {
-                        // Its size not moved within `WindowSteps.still`, then `unmovedWait` after it was sent once more:
-                        // refused, its frame back exactly, closed, and one note: it didn't make room.
+                        // Its size not moved within `WindowSteps.still`, then `unmovedWait` after it was sent once more
+                        // (on the left, late, within 4 + 6 frames of its position: `clamped(on:)`): refused, its frame
+                        // back exactly, closed, and one note: it didn't make room.
                         check.shown(from: start, mustOpen: false, step)
                         #expect(!rig.open, "\(step): opened")
                         #expect(SidebarRig.notices.map(\.0) == [.noSize], "\(step): notes \(SidebarRig.notices.map(\.0))")
@@ -3097,9 +3129,11 @@ struct GuardCase: CustomStringConvertible {
         let full = CGRect(x: 0, y: 0, width: 2056, height: 1259)
         for side in SidebarSide.allCases {
             for b in [BrowserBehaviour(), BrowserBehaviour(animation: 0.25), BrowserBehaviour(timing: .late, lateBy: 0.3)] {
-                let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b)
+                // Opened by a browser that answers at once if this one's show is refused as clamped (late on the left).
+                let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b.clamped(on: side) ? BrowserBehaviour() : b)
                 rig.toggle()
                 #expect(rig.open, "\(side) \(b): didn't open")
+                rig.fake.behaviour = b
                 rig.toggle()
                 var check = RuleCheck(rig, displays: [screen])
                 check.nothingShowsOnceClosed("\(side) \(b): hide")
@@ -3407,8 +3441,10 @@ struct GuardCase: CustomStringConvertible {
                 b.timing = .late
                 b.lateBy = late
                 let step = "\(start), sizes late by \(Int(late * 1000)) ms"
-                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 241, behaviour: b)
+                // Opened by a browser that answers at once if this one's show is refused as clamped (later than 4 + 6 frames).
+                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 241, behaviour: b.clamped(on: .left) ? BrowserBehaviour() : b)
                 rig.toggle()
+                rig.fake.behaviour = b
                 rig.toggle()
                 let frames = rig.fake.history.dropFirst(rig.historyBefore).filter { !$0.byPerson }.map(\.frame)
                 if let f = frames.first(where: { $0.maxX < start.maxX - 0.5 }) { problems.append("\(step): the far edge in: \(f)") }
@@ -3440,8 +3476,10 @@ struct GuardCase: CustomStringConvertible {
                     for presses in [[0.05], [0.05, 0.18], [0.17]] {
                         for showFirst in [false, true] {
                             let step = "\(side) \(start)\(reduceMotion ? " Reduce Motion" : ""), \(showFirst ? "show" : "hide") pressed again at \(presses)"
-                            let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 241, behaviour: b, reduceMotion: reduceMotion)
-                            if !showFirst { rig.toggle() }
+                            // A hide's: opened by a browser that answers at once if this one's show is refused as clamped.
+                            let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 241,
+                                                 behaviour: !showFirst && b.clamped(on: side) ? BrowserBehaviour() : b, reduceMotion: reduceMotion)
+                            if !showFirst { rig.toggle(); rig.fake.behaviour = b }
                             let before = rig.open
                             // A show's set goes once its panel covers (about 0.16 s in): its presses are counted from there.
                             let from = showFirst && !reduceMotion ? 0.16 : 0
@@ -3494,6 +3532,124 @@ struct GuardCase: CustomStringConvertible {
                 rig.toggle()
                 if !rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0).contains(where: { $0.size != nil }) { problems.append("\(step): the next press didn't ask the browser") }
                 if rig.open { problems.append("\(step): the next press opened") }
+            }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A left show of a window already at its browser's minimum: the set's
+    /// position lands and its size doesn't (live at 23966a6, the whole window
+    /// sat 280 pt to the right at its old width until the refusal at about
+    /// 0.69 s). Chromium applies both through one path, so a position landed
+    /// with the size unchanged is taken as the size clamped: four frames
+    /// after the position landed the size is sent once more, and six frames
+    /// after that, still unchanged, the show is refused, its old position
+    /// sent back at once, "didn't make room". The window is off its frame for
+    /// no more than those 4 + 6 frames (and the tick each is seen on).
+    @Test func aClampedSizeIsRefusedAndPutBackWithinTenFrames() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for x in [CGFloat(2056 - 800), 600] {
+            let start = CGRect(x: x, y: 0, width: 800, height: 1259)
+            let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour(minWidth: 800))
+            rig.toggle()
+            let step = "\(start)"
+            if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
+            if SidebarRig.notices.map(\.0) != [.noSize] { problems.append("\(step): notes \(SidebarRig.notices.map(\.0))") }
+            let shifted = rig.samples.filter { !GuardFrames.same($0.browser, start) }.map(\.t)
+            let budget = WindowSteps.clampWait + WindowSteps.clampResendWait + 3.0 / 120
+            if let first = shifted.first, let last = shifted.last, last - first > budget {
+                problems.append(String(format: "%@: the window off its frame for %.0f ms, more than %.0f", step, (last - first) * 1000, budget * 1000))
+            }
+            if shifted.isEmpty { problems.append("\(step): the set's position never landed") }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A left show whose size lands a frame after its position is no clamp:
+    /// it opens.
+    @Test func aSizeAFrameAfterThePositionStillOpens() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for start in [screen.visibleFrame, CGRect(x: 600, y: 0, width: 1200, height: 1259)] {
+            var b = BrowserBehaviour()
+            b.timing = .late
+            b.lateBy = 1.0 / 60
+            let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: b)
+            rig.toggle()
+            let want = SidebarGeometry.opened(start, width: 280, side: .left)
+            if !rig.open || !GuardFrames.same(rig.fake.frame, want) { problems.append("\(start): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame), notes \(SidebarRig.notices.map(\.0))") }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A show whose set nothing of lands (busy 800 ms, either side) is
+    /// refused only once its size, sent once more 150 ms after the set, is
+    /// still unanswered 300 ms after that: not at the clamp's frames.
+    @Test func nothingLandedIsRefusedAfterTheUnmovedWait() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for side in SidebarSide.allCases {
+            var b = BrowserBehaviour()
+            b.timing = .busy
+            b.lateBy = 0.8
+            let start = CGRect(x: 600, y: 0, width: 1200, height: 1259)
+            let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b)
+            rig.toggle()
+            let set = rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0).first?.t ?? 0
+            let refused = SidebarRig.noticeTimes.first ?? 0
+            if rig.open || SidebarRig.notices.map(\.0) != [.noSize] { problems.append("\(side): open \(rig.open), notes \(SidebarRig.notices.map(\.0))") }
+            if refused - set < WindowSteps.still + WindowSteps.unmovedWait - 0.01 {
+                problems.append(String(format: "%@: refused %.0f ms after the set, before the unmoved wait", "\(side)", (refused - set) * 1000))
+            }
+            if !GuardFrames.same(rig.fake.frame, start) { problems.append("\(side): ended at \(rig.fake.frame)") }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// Two refusals in a row of a window at the same width, its browser's
+    /// size never moving: that width is kept as the browser's minimum, and
+    /// the third press refuses before sending anything, the note at once and
+    /// no panel over the browser. One refusal alone keeps nothing, and a show
+    /// that opens between two refusals starts the count again.
+    @Test func twoRefusalsInARowKeepTheMinimum() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for side in SidebarSide.allCases {
+            for between in [false, true] {
+                let step = "\(side)\(between ? ", opened between" : "")"
+                let start = CGRect(x: 600, y: 0, width: 800, height: 1259)
+                let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: BrowserBehaviour(minWidth: 800))
+                rig.toggle()
+                if between {
+                    rig.fake.behaviour = BrowserBehaviour()
+                    rig.toggle()
+                    if !rig.open { problems.append("\(step): didn't open between") }
+                    rig.toggle()
+                    rig.fake.behaviour = BrowserBehaviour(minWidth: 800)
+                    if !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): closed at \(rig.fake.frame)") }
+                }
+                rig.toggle()
+                if rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0).isEmpty { problems.append("\(step): the second refused press sent nothing") }
+                let notes = SidebarRig.notices.count
+                rig.toggle()
+                let press = rig.pressedAt.first
+                let sent = rig.fake.sent.dropFirst(press?.calls ?? 0)
+                let said = SidebarRig.notices.dropFirst(notes).map(\.0)
+                if between {
+                    // Only one refusal since the open: asked again.
+                    if sent.isEmpty { problems.append("\(step): the press after one refusal since the open sent nothing") }
+                } else {
+                    if !sent.isEmpty { problems.append("\(step): the third press sent \(sent.count) calls") }
+                    if let t = SidebarRig.noticeTimes.dropFirst(notes).first, let p = press?.t, t - p > 1e-6 { problems.append("\(step): the note \(Int((t - p) * 1000)) ms after the press") }
+                    if rig.panelShows.contains(where: { $0.ordered && $0.revealed > 0.5 }) { problems.append("\(step): the third press showed the panel") }
+                }
+                if rig.open || said != [.noSize] { problems.append("\(step): last press: open \(rig.open), notes \(said)") }
+                if !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended at \(rig.fake.frame)") }
             }
         }
         #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
@@ -4169,6 +4325,12 @@ struct GuardCase: CustomStringConvertible {
             run(GuardCase(displays: [screen], window: half, side: .left, width: 280, behaviour: b, reduceMotion: false, actions: [[], []]))
             let rig = SidebarRig(displays: [screen], frame: half, side: .left, width: 280, behaviour: b)
             rig.toggle()
+            if b.clamped(on: .left) {
+                // Its size later than 4 + 6 frames after its position: refused as clamped, the half back as it was.
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, half) && SidebarRig.notices.map(\.0) == [.noSize],
+                        "\(b): open \(rig.open) at \(rig.fake.frame), notes \(SidebarRig.notices.map(\.0))")
+                continue
+            }
             #expect(GuardFrames.same(rig.fake.frame, CGRect(x: 1113, y: 70, width: 615, height: 1009)), "\(b): \(rig.fake.frame)")
             #expect(abs(rig.sidebarWidth - 249) < 2, "\(b): sidebar \(rig.sidebarWidth)")
         }

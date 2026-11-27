@@ -354,6 +354,109 @@ import Testing
         #expect(s.done && s.interrupted)
     }
 
+    // MARK: A show's position landed, its size not
+
+    /// A left show's set (its position, then its size) from `full` to
+    /// `narrowed`, refused if unmoved, against a window the test plays:
+    /// `frame(t, calls)` is where it is at `t` given the calls sent since the
+    /// set. Returns the steps, the calls sent and when they ended.
+    private func clampRun(_ frame: (Double, [(Double, WindowSteps.Call)]) -> CGRect) -> (WindowSteps, [(Double, WindowSteps.Call)], Double) {
+        var s = WindowSteps(target: narrowed, keep: .left, widest: full.width - 200, deadline: 3, sending: .frame(narrowed), from: full, at: 0,
+                            refusesUnmoved: true)
+        var t = 1.0 / 120, calls: [(Double, WindowSteps.Call)] = []
+        while !s.done, t < 4 {
+            if let c = s.step(seen: frame(t, calls), now: t) { calls.append((t, c)) }
+            t += 1.0 / 120
+        }
+        return (s, calls, t)
+    }
+
+    private static let frame = 1.0 / 60
+
+    /// At its browser's minimum: the position lands a frame in and the size
+    /// never moves. Four frames after the position landed the size is sent
+    /// once more, and six frames after that, still unmoved, the show is
+    /// refused as clamped: within 4 + 6 frames of the position, not the
+    /// 150 + 300 ms of a window nothing of which moved.
+    @Test func aClampedSizeIsRefusedFourAndSixFramesAfterThePosition() {
+        let placed = CGRect(x: narrowed.minX, y: 0, width: full.width, height: full.height)
+        let landed = 1.0 / 120
+        let (s, calls, t) = clampRun { _, _ in placed }
+        #expect(s.done && s.stoppedShort && s.clamped && s.unmoved != nil && !s.interrupted && !s.capped, "\(calls)")
+        #expect(calls.count == 1 && calls[0].1 == .size(narrowed), "\(calls)")
+        if let resent = calls.first?.0 {
+            #expect(resent - landed >= 4 * Self.frame - 1e-9 && resent - landed <= 4 * Self.frame + 1.0 / 120 + 1e-9, "size sent once more at \(resent)")
+            #expect(t - resent >= 6 * Self.frame - 1e-9 && t - resent <= 6 * Self.frame + 2.0 / 120 + 1e-9, "refused at \(t), the size sent once more at \(resent)")
+        }
+    }
+
+    /// The size lands a frame after the position: no clamp, the set lands.
+    @Test func aSizeAFrameAfterThePositionIsNoClamp() {
+        let placed = CGRect(x: narrowed.minX, y: 0, width: full.width, height: full.height)
+        let (s, calls, _) = clampRun { t, _ in t < 1.0 / 120 + Self.frame - 1e-9 ? placed : narrowed }
+        #expect(s.done && !s.stoppedShort && !s.clamped && s.unmoved == nil && !s.interrupted, "\(calls)")
+    }
+
+    /// The size lands only once sent once more (the first dropped): no clamp.
+    @Test func aSizeLandingOnItsResendIsNoClamp() {
+        let placed = CGRect(x: narrowed.minX, y: 0, width: full.width, height: full.height)
+        let (s, calls, _) = clampRun { t, calls in calls.contains { $0.0 < t - 3 * Self.frame } ? narrowed : placed }
+        #expect(s.done && !s.stoppedShort && !s.clamped && s.unmoved == nil, "\(calls)")
+    }
+
+    /// Nothing of the set lands: not the clamp's frames, but the size sent
+    /// once more `still` after the set and refused `unmovedWait` after that.
+    @Test func nothingLandedIsRefusedAfterTheUnmovedWait() {
+        let (s, calls, t) = clampRun { _, _ in full }
+        #expect(s.done && s.stoppedShort && !s.clamped && s.unmoved != nil, "\(calls)")
+        #expect(calls.first.map { abs($0.0 - WindowSteps.still) <= 1.0 / 120 + 1e-9 } == true, "\(calls)")
+        #expect(t >= WindowSteps.still + WindowSteps.unmovedWait - 1e-9, "refused at \(t)")
+    }
+
+    /// A size that starts to move after the position landed, however little
+    /// (VoiceOver keeps Chromium's enhanced UI on, and its resize animates),
+    /// is progress: no clamp, the normal wait up to the cap.
+    @Test func aSizeOnItsWayIsNoClamp() {
+        let placed = CGRect(x: narrowed.minX, y: 0, width: full.width, height: full.height)
+        // 3 frames in it begins, 10 pt a frame, to the width asked.
+        let (s, calls, t) = clampRun { t, _ in
+            let w = max(narrowed.width, full.width - max(0, (t - 3 * Self.frame) / Self.frame * 10).rounded(.down))
+            return CGRect(x: narrowed.minX, y: 0, width: w, height: full.height)
+        }
+        #expect(s.done && !s.stoppedShort && !s.clamped && s.unmoved == nil && !s.interrupted && !s.capped, "\(calls)")
+        #expect(t > 10 * Self.frame, "done at \(t)")
+        _ = placed
+    }
+
+    /// A pure move short of the set's position (the person's move, the
+    /// browser busy) is someone else's once it holds there: the steps end,
+    /// interrupted, and nothing more is sent; the size is never sent once
+    /// more over it.
+    @Test func aPersonsMoveDuringTheSetIsTheirs() {
+        let theirs = CGRect(x: 100, y: 0, width: full.width, height: full.height)
+        let (s, calls, t) = clampRun { t, _ in t < 0.05 ? full : theirs }
+        #expect(s.done && s.interrupted && !s.stoppedShort && calls.isEmpty, "\(calls), done at \(t)")
+    }
+
+    /// A move landing within 1 pt of the set's position is the set's: the
+    /// clamp, not someone else's.
+    @Test func aMoveWithinAPointOfThePositionIsTheSets() {
+        let near = CGRect(x: narrowed.minX + 0.8, y: 0, width: full.width, height: full.height)
+        let (s, calls, _) = clampRun { _, _ in near }
+        #expect(s.done && !s.interrupted && s.clamped, "\(calls)")
+    }
+
+    /// An animation of the set's position held partway (macOS 27), then on
+    /// to where it was sent: the set's, never someone else's; nothing is
+    /// sent over it while it holds.
+    @Test func aPositionHeldPartwayThenOnIsTheSets() {
+        let (s, calls, _) = clampRun { t, _ in
+            let x: CGFloat = t < 0.05 ? 0 : t < 0.3 ? 200 : narrowed.minX
+            return CGRect(x: x, y: 0, width: t < 0.35 ? full.width : narrowed.width, height: full.height)
+        }
+        #expect(s.done && !s.interrupted && !s.stoppedShort && calls.isEmpty, "\(calls)")
+    }
+
     @Test func nothingToDoSendsNothing() {
         var s = WindowSteps(target: full, keep: nil)
         #expect(s.step(seen: full, now: 0) == nil && s.done)

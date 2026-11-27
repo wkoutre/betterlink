@@ -55,7 +55,10 @@ import CoreGraphics
 ///   call before it has landed (steps that take over from others wait for
 ///   their call in flight first), so it is the only one of
 ///   betterlink's that can be moving the window. Nothing is remembered past
-///   the steps.
+///   the steps. A move of a position's short of it by more than a point is
+///   betterlink's only while it goes on: held there `heldMoveWait`, nothing
+///   sent meanwhile, it is someone else's. A frame of a show refused as
+///   unmoved may still land late (`late`): that is betterlink's too.
 /// - `resends`: the steps' end, the final target sent whole once more, its
 ///   size and its position, whatever the window looks like. Accessibility
 ///   sets are done in order, so a call of betterlink's still on its way
@@ -107,6 +110,11 @@ public struct WindowSteps: Sendable {
     /// a narrower one (the end of a drag, whose last size the window may
     /// look done with before its browser has widened itself back).
     public let settles: Bool
+    /// A frame betterlink asked earlier whose calls may still land, late
+    /// (a show refused as unmoved, its set unanswered): watching, its size
+    /// landing (the top left kept) or its position landing (within a point,
+    /// the size kept) is betterlink's, not someone else's change.
+    public let late: CGRect?
     public private(set) var done = false
     /// Done because something else changed the window (see above).
     public private(set) var interrupted = false
@@ -154,14 +162,21 @@ public struct WindowSteps: Sendable {
     /// after that, it has stopped where it is (`stoppedShort`), however little
     /// is known of the browser's minimum (a first show of a browser already
     /// at it covered the page for the whole cap). Any change after the size
-    /// sent once more is the normal wait up to the cap.
+    /// sent once more is the normal wait up to the cap. Its position landed
+    /// (within a point) and its size unmoved, sooner: the size sent once more
+    /// `clampWait` after the position landed, and unchanged `clampResendWait`
+    /// after that, refused as clamped (`clamped`).
     private var refusesUnmoved = false
     private var setAt = 0.0
     /// Refused that way: when the set was sent, when its size was sent once
     /// more, and when the window last changed before that (nil: never), for
     /// `trace.log`.
     public private(set) var unmoved: (set: Double, resent: Double, lastChange: Double?)?
+    /// Refused that way with its position landed and its size clamped (`clampWait`, `clampResendWait`).
+    public private(set) var clamped = false
     private var lastChangeBeforeResend: Double?
+    /// When a clamped size was sent once more (`clampWait`).
+    private var clampResent: Double?
     /// That position is the call in flight.
     private var placing = false
     /// The steps these took over: their set was seen cut short (`partway`),
@@ -228,6 +243,18 @@ public struct WindowSteps: Sendable {
     /// may stay unchanged after that before the show is refused as stopped
     /// where it is (`init(sending:refusesUnmoved:)`).
     public static let unmovedWait = 0.3
+    /// A show's set whose position has landed and whose size hasn't moved at
+    /// all: how long after the position landed the size is sent once more
+    /// (four 60 Hz display frames), and how long after that it may stay
+    /// unchanged before the show is refused as clamped (six more): about
+    /// 167 ms from the position, the window then put back where it was.
+    public static let clampWait = 4.0 / 60
+    public static let clampResendWait = 6.0 / 60
+    /// How long a whole frame's position may hold short of where it was sent,
+    /// its size untouched, before the move is taken as someone else's: longer
+    /// than macOS 27 holds an animation partway (250 ms measured, 100 to 300
+    /// in the guard).
+    public static let heldMoveWait = still + unmovedWait
 
     /// The longest a show or a hide may take, every call of it included.
     public static let cap = 3.0
@@ -235,8 +262,10 @@ public struct WindowSteps: Sendable {
     /// `after`: the steps these replace, mid-way: their call in flight is
     /// waited for first.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, late: CGRect? = nil,
+                after earlier: WindowSteps? = nil) {
         self.target = target
+        self.late = late
         self.keep = keep
         self.widest = widest
         self.retreats = retreats
@@ -313,6 +342,21 @@ public struct WindowSteps: Sendable {
         }
     }
 
+    /// Whether `late`'s size (or as much of it as the browser takes) or its
+    /// position landing takes a window at `p` to `seen`, the call in flight
+    /// (`c`) landing with it or not.
+    private func lands(_ late: CGRect?, _ c: Call, from p: CGRect, to seen: CGRect) -> Bool {
+        guard let late else { return false }
+        // Its size, or what the browser could take of it (no narrower than asked, at its minimum).
+        let sized = Self.between(seen.width, late.width, p.width) && Self.near(seen.height, late.height)
+        let placed = abs(seen.minX - late.minX) <= 1 && abs(seen.maxY - late.maxY) <= 1
+        let topLeft = Self.near(seen.minX, p.minX) && Self.near(seen.maxY, p.maxY)
+        let size = Self.near(seen.width, p.width) && Self.near(seen.height, p.height)
+        // The late size and the call in flight's position in the same look.
+        let resized = CGRect(x: seen.minX, y: seen.maxY - p.height, width: p.width, height: p.height)
+        return (sized && (topLeft || placed || Self.can(c, from: p, to: resized, slack: slack))) || (placed && size)
+    }
+
     /// A whole frame (`.frame`) whose size asks a change the window hasn't
     /// begun to make, its place landed (a browser that takes a position at
     /// once and a size late). Not its place unstarted, its size landed: under
@@ -358,7 +402,7 @@ public struct WindowSteps: Sendable {
         let capped = deadline != nil
         if var s = sent {
             if seen != s.last {
-                guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) else {
+                guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) || lands(late, s.call, from: s.last, to: seen) else {
                     interrupted = true
                     done = true
                     return nil
@@ -379,6 +423,44 @@ public struct WindowSteps: Sendable {
                 s.changed = now
                 s.moved = true
                 sent = s
+            }
+            // A position (or a whole frame's) on its way, the size where it was: a pure move, short of where the
+            // position was sent by more than a point (not `WindowSet`'s nudge). An animation of betterlink's (macOS 27's,
+            // which can hold partway) goes on to the position; held there `heldMoveWait`, it is someone else's (the
+            // person's: seed 20261126, case 2997, with a busy browser's set not begun; case 4992, a refusal's way back),
+            // and nothing of these steps' is sent over it meanwhile (a call sent once more would cut an animation short
+            // where it holds, or put the window back over the person's move).
+            let aimed: CGRect? = { switch s.call { case .frame(let f), .position(let f): f; case .size: nil } }()
+            if checks, !foreign, s.moved, let f = aimed, Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height),
+               abs(seen.minX - f.minX) > 1 || abs(seen.maxY - f.maxY) > 1,
+               abs(seen.minX - s.from.minX) > WindowSet.nudgeBy + 0.5 || !Self.near(seen.maxY, s.from.maxY) {
+                guard now - s.changed >= Self.heldMoveWait - 1e-9 else { return nil }
+                interrupted = true
+                done = true
+                return nil
+            }
+            // A show's set whose position has landed (within a point) and whose narrower size hasn't moved at all
+            // (`refusesUnmoved`): Chromium applies both through one path, so the size is clamped (a browser at its
+            // minimum; live at 23966a6 the window sat a sidebar's width to the right at its old width for 0.69 s).
+            // `clampWait` after the position landed the size is sent once more, and unchanged `clampResendWait` after
+            // that, the show is refused. Any change of the size is progress: the normal wait up to the cap.
+            if refusesUnmoved, !foreign, case .frame(let f) = s.call, Self.narrows(s.call, s.from),
+               !(Self.near(f.minX, s.from.minX) && Self.near(f.maxY, s.from.maxY)),
+               Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height),
+               abs(seen.minX - f.minX) <= 1, abs(seen.maxY - f.maxY) <= 1 {
+                if let c = clampResent {
+                    guard now - max(c, s.changed) >= Self.clampResendWait - 1e-9 else { return nil }
+                    unmoved = (setAt, c, lastChangeBeforeResend)
+                    clamped = true
+                    stoppedShort = true
+                    done = true
+                    return nil
+                }
+                guard now - s.changed >= Self.clampWait - 1e-9 else { return nil }
+                lastChangeBeforeResend = s.changed
+                clampResent = now
+                more += 1
+                return .size(f)
             }
             // A show's narrower size not moved at all (`refusesUnmoved`).
             if refusesUnmoved, !foreign, Self.narrows(s.call, s.from), Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height) {
