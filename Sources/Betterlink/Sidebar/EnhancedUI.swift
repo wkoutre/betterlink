@@ -92,8 +92,8 @@ final class EnhancedUI {
     var journal: URL
 
     /// The assistive app that is on, if any, read at each motion (`hold`):
-    /// with VoiceOver or Switch Control on, the flag is left alone (Nick, F3
-    /// of 1df43a3's review). Tests set their own.
+    /// with VoiceOver or Switch Control on, the flag is left alone. Tests set
+    /// their own.
     var assistive: () -> String? = EnhancedUI.systemAssistive
 
     /// VoiceOver or Switch Control, as NSWorkspace reports them now.
