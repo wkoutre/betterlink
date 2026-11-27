@@ -3144,12 +3144,13 @@ struct GuardCase: CustomStringConvertible {
     /// off the screen, and the pair was fitted again, 180 pt narrower than
     /// the person left the browser. A drag of one horizontal edge, or of a
     /// corner, is the person's and stands, wherever it leaves the sidebar
-    /// (rule 3). Only a placement (both horizontal edges moved, or the whole
-    /// visible frame) fits the pair again.
-    private func personDrags(side: SidebarSide, _ what: String, from want: CGRect, to put: (CGRect) -> CGRect) {
+    /// (rule 3). Only a placement (both horizontal edges moved, or across a
+    /// whole visible width with the top or bottom on its edge) fits the pair
+    /// again. `pair`: the pair's frame, the whole visible frame unless given.
+    private func personDrags(side: SidebarSide, _ what: String, pair: CGRect? = nil, from want: CGRect, to put: (CGRect) -> CGRect) {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
-        let rig = SidebarRig(displays: [screen], frame: screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
+        let rig = SidebarRig(displays: [screen], frame: pair ?? screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
         rig.toggle()
         let b = rig.fake.frame
         #expect(rig.open && GuardFrames.same(b, want), "\(side): opened \(rig.open) at \(b), wanted \(want)")
@@ -3190,6 +3191,53 @@ struct GuardCase: CustomStringConvertible {
         }
         personDrags(side: .left, "the left edge dragged to 3 pt short of the screen's width", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
             CGRect(x: 3, y: $0.minY, width: $0.maxX - 3, height: $0.height)
+        }
+    }
+
+    /// The review of 33444c7, F2: a pair short of the screen's top and
+    /// bottom, its sidebar-side edge, or a corner, dragged to the screen's
+    /// whole visible width, the window still short of both: a drag of one
+    /// edge or a corner, which stands, either side. Only a tile's top or
+    /// bottom edge on the visible frame's makes the whole width a placement.
+    @Test func aDragToTheFullWidthShortOfTheTopAndBottomStands() {
+        let pair = CGRect(x: 0, y: 100, width: 2056, height: 1000)
+        personDrags(side: .right, "the right edge dragged to the screen's width, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 0, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: $0.minX, y: $0.minY, width: 2056 - $0.minX, height: $0.height)
+        }
+        personDrags(side: .left, "the left edge dragged to the screen's width, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 280, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: 0, y: $0.minY, width: $0.maxX, height: $0.height)
+        }
+        personDrags(side: .right, "a right corner dragged to the screen's width and 50 further down, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 0, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: $0.minX, y: $0.minY, width: 2056 - $0.minX, height: $0.height + 50)
+        }
+        personDrags(side: .left, "a left corner dragged to the screen's width and 50 further up, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 280, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: 0, y: $0.minY - 50, width: $0.maxX, height: $0.height + 50)
+        }
+    }
+
+    /// The review of 33444c7, F2: the sidebar-side edge dragged so the
+    /// browser is on exactly the whole visible frame is Fill's frame: the
+    /// pair fits again in it, either side.
+    @Test func anEdgeDraggedToTheWholeVisibleFrameFitsThePairAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for (side, pair) in [(SidebarSide.right, CGRect(x: 0, y: 0, width: 1900, height: 1259)),
+                             (SidebarSide.left, CGRect(x: 156, y: 0, width: 1900, height: 1259))] {
+            let rig = SidebarRig(displays: [screen], frame: pair, side: side, width: 280, behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open, "\(side): didn't open")
+            let before = rig.fake.frame
+            let step = "\(side), from \(before), its edge dragged to the whole visible frame"
+            rig.personSets(screen.visibleFrame)
+            var check = RuleCheck(rig, displays: [screen])
+            check.shown(from: screen.visibleFrame, mustOpen: true, step)
+            check.sidebarStaysOnScreen(before: before, width: 280, put: screen.visibleFrame, step)
+            #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(step): open \(rig.open), sidebar \(rig.sidebarWidth)")
+            #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
         }
     }
 
