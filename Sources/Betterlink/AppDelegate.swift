@@ -44,7 +44,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         model.startConfig(resourceDirectory: Bundle.main.resourceURL ?? Bundle.main.bundleURL)
         model.listenForCLIChanges()
         setupMainMenu()
-        _ = Updater.shared  // starts Sparkle's daily check when it is on
+        _ = Updater.shared  // starts Sparkle's hourly check when it is on
         SidebarController.shared.restore()  // the Tabs sidebar, if it was on
         // Adds the menu bar icon now (unless it is turned off) and whenever
         // the setting changes, from the window or the CLI.
@@ -254,7 +254,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // The way back into the tour for people who live in the menu bar.
         menu.addItem(withTitle: TourModel.shared.news.isEmpty ? "Show the Tour…" : "What's New…",
                      action: #selector(showTour), keyEquivalent: "").target = self
-        if Updater.shared.isAvailable {
+        let updater = Updater.shared
+        if let ready = updater.readyVersion {
+            let item = menu.addItem(withTitle: "Restart to Update to \(ready)", action: #selector(restartToUpdate), keyEquivalent: "")
+            item.target = self
+            item.toolTip = "Downloaded and checked. It also installs by itself the next time the Mac is left alone for two minutes, or when betterlink quits."
+        } else if let found = updater.foundVersion {
+            menu.addItem(withTitle: "Update to betterlink \(found)…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
+        } else if updater.isAvailable {
             menu.addItem(withTitle: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "").target = self
         }
         let sidebar = SidebarController.shared
@@ -289,6 +296,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     }
     @objc private func toggleSidebar() { SidebarController.shared.toggle() }
     @objc private func checkForUpdates() { Updater.shared.checkNow() }
+    @objc private func restartToUpdate() { Updater.shared.restartToUpdate() }
     @objc private func copyLink(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String else { return }
         NSPasteboard.general.clearContents()

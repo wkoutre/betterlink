@@ -1,17 +1,23 @@
 import AppKit
 import BetterlinkCore
+import CoreGraphics
 import Sparkle
 
 /// Sparkle, set up once. It checks the release feed (SUFeedURL in Info.plist)
-/// once a day when automatic checks are on, verifies every update against the
-/// EdDSA key in Info.plist and Apple's notarization, then offers Install or
-/// Skip. Off entirely in builds without an update key and under
-/// BETTERLINK_HOME.
+/// once an hour when automatic checks are on and verifies every update against
+/// the EdDSA key in Info.plist and Apple's notarization. With automatic
+/// installs on (the default) it downloads the update in the background and
+/// betterlink restarts into it the next time nobody has touched the Mac for
+/// two minutes, or when it quits. With them off, it asks first. Off entirely
+/// in builds without an update key and under BETTERLINK_HOME.
 @MainActor
 final class Updater: ObservableObject {
     static let shared = Updater()
 
     private let controller: SPUStandardUpdaterController?
+    /// Sparkle holds its delegates weakly.
+    private let delegate: UpdaterDelegate
+
     /// Mirrors Sparkle's setting so SwiftUI can bind to it.
     @Published var automaticallyChecks: Bool {
         didSet {
@@ -21,15 +27,37 @@ final class Updater: ObservableObject {
         }
     }
 
+    /// Mirrors Sparkle's automatic download and install setting.
+    @Published var installsAutomatically: Bool {
+        didSet {
+            guard installsAutomatically != oldValue else { return }
+            if let updater = controller?.updater { updater.automaticallyDownloadsUpdates = installsAutomatically }
+            else { UpdateChecks.setInstallsAutomatically(installsAutomatically, in: UpdateChecks.defaults()) }
+        }
+    }
+
+    /// A downloaded update waiting to install ("0.3.30"), shown in the menu
+    /// and on the General page with a way to restart into it now.
+    @Published private(set) var readyVersion: String?
+    /// An update Sparkle found and is asking about (automatic installs off, or
+    /// one that can't install by itself), so the menu can bring it back.
+    @Published private(set) var foundVersion: String?
+    private var installNow: (() -> Void)?
+    private var idleTimer: Timer?
+
     var isAvailable: Bool { controller != nil }
 
     private init() {
+        let delegate = UpdaterDelegate()
+        self.delegate = delegate
         if UpdateChecks.updaterCanRun(info: Bundle.main.infoDictionary ?? [:]) {
-            controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)
+            UpdateChecks.applyInstallDefault(in: UpdateChecks.defaults())
+            controller = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: delegate, userDriverDelegate: delegate)
         } else {
             controller = nil
         }
         automaticallyChecks = UpdateChecks.isAutomatic(in: UpdateChecks.defaults())
+        installsAutomatically = UpdateChecks.installsAutomatically(in: UpdateChecks.defaults())
     }
 
     func checkNow() {
@@ -37,9 +65,107 @@ final class Updater: ObservableObject {
         controller?.checkForUpdates(nil)
     }
 
-    /// `betterlink updates set` changed the setting from another process.
+    /// Installs the waiting update and restarts betterlink.
+    func restartToUpdate() {
+        guard let install = installNow else { return }
+        installNow = nil
+        stopIdleTimer()
+        readyVersion = nil
+        install()
+    }
+
+    /// `betterlink updates set` changed a setting from another process.
     func reloadSetting() {
-        let on = UpdateChecks.isAutomatic(in: UpdateChecks.defaults())
+        let d = UpdateChecks.defaults()
+        let on = UpdateChecks.isAutomatic(in: d)
         if on != automaticallyChecks { automaticallyChecks = on }
+        let install = UpdateChecks.installsAutomatically(in: d)
+        if install != installsAutomatically { installsAutomatically = install }
+    }
+
+    // MARK: From Sparkle (UpdaterDelegate)
+
+    /// The update is downloaded and Sparkle would install it at quit. A menu
+    /// bar app rarely quits, so install it once the Mac has been left alone.
+    fileprivate func updateReady(version: String, install: @escaping () -> Void) {
+        readyVersion = version
+        installNow = install
+        startIdleTimer()
+    }
+
+    fileprivate func updateFound(version: String) {
+        if readyVersion == nil { foundVersion = version }
+    }
+
+    fileprivate func sessionEnded() {
+        foundVersion = nil
+        // Sparkle's prompt has its own "install automatically" box.
+        if let updater = controller?.updater, updater.automaticallyDownloadsUpdates != installsAutomatically {
+            installsAutomatically = updater.automaticallyDownloadsUpdates
+        }
+    }
+
+    private func startIdleTimer() {
+        stopIdleTimer()
+        // Runs only while an update waits, so an up to date betterlink keeps no timer.
+        let timer = Timer(timeInterval: 30, repeats: true) { _ in
+            MainActor.assumeIsolated { Updater.shared.installIfIdle() }
+        }
+        timer.tolerance = 10
+        RunLoop.main.add(timer, forMode: .common)
+        idleTimer = timer
+    }
+
+    private func stopIdleTimer() {
+        idleTimer?.invalidate()
+        idleTimer = nil
+    }
+
+    private func installIfIdle() {
+        guard installsAutomatically, installNow != nil else { return }
+        if UpdateChecks.shouldInstallNow(idleSeconds: Self.secondsSinceInput()) { restartToUpdate() }
+    }
+
+    /// Seconds since the last key press, click, scroll or mouse move. Reading
+    /// it needs no permission.
+    private static func secondsSinceInput() -> TimeInterval {
+        if let any = CGEventType(rawValue: ~0) {
+            return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
+        }
+        let kinds: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged]
+        return kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+    }
+}
+
+/// Sparkle's two delegates. Sparkle calls them on the main thread.
+private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUserDriverDelegate {
+    func updater(_ updater: SPUUpdater, willInstallUpdateOnQuit item: SUAppcastItem,
+                 immediateInstallationBlock immediateInstallHandler: @escaping () -> Void) -> Bool {
+        let version = item.displayVersionString
+        MainActor.assumeIsolated { Updater.shared.updateReady(version: version, install: immediateInstallHandler) }
+        return true  // betterlink offers it (menu, General page) and installs it when the Mac is idle
+    }
+
+    // betterlink has no Dock icon, so Sparkle's own window is how an update
+    // that needs a yes reaches the person. It handles that window; when it
+    // shows one for a check nobody asked for, bring it in front instead of
+    // leaving it behind the app being used, where it went unseen.
+    var supportsGentleScheduledUpdateReminders: Bool { true }
+
+    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
+        true
+    }
+
+    func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
+        let version = update.displayVersionString
+        let scheduled = !state.userInitiated
+        MainActor.assumeIsolated {
+            Updater.shared.updateFound(version: version)
+            if handleShowingUpdate && scheduled { NSApp.activate(ignoringOtherApps: true) }
+        }
+    }
+
+    func standardUserDriverWillFinishUpdateSession() {
+        MainActor.assumeIsolated { Updater.shared.sessionEnded() }
     }
 }

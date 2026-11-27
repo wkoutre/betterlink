@@ -43,7 +43,7 @@ You need the **Account Holder** role on the Apple Developer team. A Developer ID
 
 ## 3. Update signing key (Sparkle)
 
-betterlink updates itself with [Sparkle](https://sparkle-project.org). Installed copies check `releases/latest/download/appcast.xml` once a day and install an update only if its EdDSA signature matches the public key built into the app (`SUPublicEDKey` in `Info.plist`). The private half signs each release in CI as the secret `SPARKLE_UPDATE_KEY`.
+betterlink updates itself with [Sparkle](https://sparkle-project.org). Installed copies check `releases/latest/download/appcast.xml` once an hour (`SUScheduledCheckInterval`, Sparkle's minimum), download a new version in the background and install it when the Mac has been idle for two minutes or betterlink quits (`SUAutomaticallyUpdate`; `Updater.swift`). They install an update only if its EdDSA signature matches the public key built into the app (`SUPublicEDKey` in `Info.plist`). The private half signs each release in CI as the secret `SPARKLE_UPDATE_KEY`.
 
 1. Make the key once, from a betterlink checkout. `scripts/set-release-secrets.sh` (part 4) does this for you, or by hand:
 
