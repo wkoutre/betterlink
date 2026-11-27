@@ -248,6 +248,11 @@ final class SidebarInstance: ObservableObject {
     var clock: () -> CFTimeInterval = CACurrentMediaTime
     /// Waiting on the main thread, for quitting, which has no later.
     var pause: (Double) -> Void = AXWindow.sleep
+    /// An open without a slide is under way (a new width, a window followed
+    /// or back from full screen): for the guard, which checks the panel is
+    /// never shown over the browser then.
+    var opensWithoutSlide: Bool { opening != nil && slideRun == nil }
+
     /// The panel sliding, or the browser being moved.
     var sliding: Bool { slideRun != nil || steps != nil }
 
@@ -339,9 +344,13 @@ final class SidebarInstance: ObservableObject {
     /// panel property, seed 20261126 case 408: a new width's open lay 281 pt
     /// over a late browser for over 0.9 s). Its whole shape, the seam's
     /// notches included, once the browser's edge is at its inner edge.
-    private func revealOpening() {
+    /// `ordering`: the panel is about to be ordered in: masked first, so it
+    /// is never drawn whole over the browser for a moment (a browser that
+    /// reads back the size asked before it takes it has the panel placed
+    /// beside that frame, over itself).
+    private func revealOpening(ordering: Bool = false) {
         guard slideRun == nil, let panel else { return }
-        guard opening != nil, panel.isVisible, let real = AXWindow.shownFrame(of: window.handle) else {
+        guard opening != nil, panel.isVisible || ordering, let real = AXWindow.shownFrame(of: window.handle) else {
             if panel.reveal != nil { panel.reveal = nil }
             return
         }
@@ -522,17 +531,11 @@ final class SidebarInstance: ObservableObject {
         let now = clock()
         let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: run.slide.progress(at: now))
         var seam = inner
-        if let real = AXWindow.shownFrame(of: window.handle) {
+        if run.hiddenWindow != run.shownWindow, let real = AXWindow.shownFrame(of: window.handle) {
             let edge = run.side == .left ? real.minX : real.maxX
-            if run.hiddenWindow != run.shownWindow {
-                run.worstGap = max(run.worstGap, abs(edge - inner))
-                seam = SidebarSlide.seam(windowEdge: edge, innerEdge: inner,
-                                         hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
-            } else {
-                // The browser isn't moved by this slide (a hide pressed while an open's browser hasn't moved
-                // yet): the panel slides alone, never over the browser.
-                seam = run.side == .left ? min(inner, edge) : max(inner, edge)
-            }
+            run.worstGap = max(run.worstGap, abs(edge - inner))
+            seam = SidebarSlide.seam(windowEdge: edge, innerEdge: inner,
+                                     hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
         }
         panel.reveal = seam
         run.frames += 1
@@ -687,7 +690,11 @@ final class SidebarInstance: ObservableObject {
         steps = nil
         afterSteps = nil
         stopTicker()
+        // The sidebar goes: ordered out before its mask is lifted, so it is never drawn whole over the
+        // browser, mid-slide too, while the browser is given its space back (`closePanelNow`).
+        panel?.hideNow()
         panel?.reveal = nil
+        isShown = false
         // Mid-slide, the slide's closed frame; an open, a new width or a hide
         // under way, the frame it began in (review F1).
         let back = goingBack ?? mid?.hiddenWindow ?? underWay ?? (paired ? closedFrame(from: onScreenFrame, side: placedSide) : nil)
@@ -1034,6 +1041,7 @@ final class SidebarInstance: ObservableObject {
         case .shown(let rehome, let reorder):
             isShown = true
             let panel = placePanel(p)
+            if !panel.isVisible { revealOpening(ordering: true) }
             if rehome { panel.reenter(at: place(panel)) } else if reorder, panel.isVisible { panel.order(at: place(panel)) }
             panel.fadeIn(at: place(panel))
         }

@@ -557,7 +557,8 @@ final class SidebarRig {
         }
         SidebarPanel.watch = { [weak self] p in
             guard let self, self.instance.panel == nil || p === self.instance.panel else { return }
-            self.panelShows.append((self.time, self.gone ? 0 : self.shown(of: p), self.gone ? 0 : self.over(of: p), !self.gone && p.isVisible))
+            self.panelShows.append((self.time, self.gone ? 0 : self.shown(of: p), self.gone ? 0 : self.over(of: p), !self.gone && p.isVisible,
+                                    self.instance.opensWithoutSlide))
         }
     }
 
@@ -566,7 +567,9 @@ final class SidebarRig {
     /// showed then. The window server draws whatever the panel last had, so
     /// a moment of a full panel between two ticks is seen here though no
     /// tick's sample has it.
-    private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool)] = []
+    private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool, opening: Bool)] = []
+    /// Where quitting or turning the sidebar off came in `panelShows`.
+    private(set) var goneShows: Int?
     /// The app calls (`FakeApps`) before the last press.
     private(set) var appCallsBefore = 0
     /// Where the last press came in `panelShows`.
@@ -797,6 +800,7 @@ final class SidebarRig {
         personPut = nil
         tilerPut = nil
         quitTook = nil
+        goneShows = nil
         samples = []
         panelShows = []
         appCallsBefore = FakeApps.shared.calls.count
@@ -828,6 +832,7 @@ final class SidebarRig {
                     if case .quitHung = next.what { fake.behaviour.hangs = true }
                     let began = time
                     goneAt = (time, fake.sent.count)
+                    goneShows = panelShows.count
                     if case .turnOff = next.what { instance.close(closed: false) } else { instance.giveSpaceBack() }
                     if case .quitHung = next.what { quitTook = time - began }
                     // Hung, its flag's read misses first, and its windows are sent nothing.
@@ -1266,6 +1271,19 @@ struct RuleCheck {
     /// closes the panel may show only up to the browser's real edge, as a
     /// slow browser leaves it (`SidebarSlide.seam`).
     mutating func nothingShowsOnceClosed(_ step: String) {
+        // An open without a slide: the panel is shown only up to where the browser really is (`revealOpening`).
+        if let x = rig.panelShows.first(where: { $0.opening && $0.ordered && $0.over > 1 }) {
+            problems.append(String(format: "%@: %.0f pt of the sidebar drawn over the browser during an open without a slide", step, Double(x.over)))
+            return
+        }
+        // Quitting or turning the sidebar off: from then on, nothing of it over the browser, and once out it stays out.
+        if let k = rig.goneShows {
+            var out = false
+            for x in rig.panelShows[k...] {
+                if x.over > 1 { problems.append(String(format: "%@: %.0f pt of the sidebar drawn over the browser as it was let go", step, Double(x.over))); return }
+                if !x.ordered { out = true } else if out, x.shown > 0.5 { problems.append("\(step): the sidebar showed again after it was let go"); return }
+            }
+        }
         guard !rig.gone, !rig.open else { return }
         let shows = rig.panelShows
         let pressed = rig.pressedAt.last?.t ?? 0
@@ -2596,6 +2614,66 @@ struct GuardCase: CustomStringConvertible {
         off.toggle()
         #expect(FakeApps.shared.calls.allSatisfy { $0.set == nil }, "a flag that was off was set: \(FakeApps.shared.calls.map(\.set))")
         #expect(FakeApps.shared.calls.count == 2, "one read per motion: \(FakeApps.shared.calls.count)")
+    }
+
+    /// An open without a slide (the window followed with its sidebar on, or
+    /// a new width) over a browser that hasn't moved yet: the panel is
+    /// masked to where the browser really is before it is placed or ordered
+    /// in, so it is never drawn over the browser, not even for a moment
+    /// (review of cfe553f, F1: the new width's placement, and the first
+    /// order-in of a followed window whose browser reads back the size asked
+    /// before taking it, showed it whole first).
+    @Test func anOpenWithoutASlideIsNeverShownOverTheBrowser() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let half = CGRect(x: 0, y: 0, width: 1028, height: 1259)
+        for side in SidebarSide.allCases {
+            for b in [BrowserBehaviour(timing: .late, lateBy: 0.3), BrowserBehaviour(timing: .busy, lateBy: 0.3), BrowserBehaviour(revertReads: 3)] {
+                let followed = SidebarRig(displays: [screen], frame: half, side: side, width: 280, behaviour: b, hidden: false)
+                followed.follow()
+                var check = RuleCheck(followed, displays: [screen])
+                check.nothingShowsOnceClosed("\(side) \(b), followed")
+                if b.sizesStick { #expect(followed.open, "\(side) \(b): followed, didn't open") }
+                let rig = SidebarRig(displays: [screen], frame: half, side: side, width: 280, behaviour: BrowserBehaviour())
+                rig.toggle()
+                rig.fake.behaviour = b
+                rig.carry(.width(360), during: [])
+                check = RuleCheck(rig, displays: [screen])
+                check.nothingShowsOnceClosed("\(side) \(b), a new width")
+                if b.sizesStick { #expect(rig.open && abs(rig.sidebarWidth - 360) < 2, "\(side) \(b): new width, open \(rig.open), \(rig.sidebarWidth)") }
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
+        }
+        // Seed 6221202 case 155: a right half, the sidebar on the right, a browser that reads back the size asked 4 times.
+        let wide = Display(frame: CGRect(x: 0, y: 0, width: 2690, height: 1533), visibleFrame: CGRect(x: 0, y: 86, width: 2690, height: 1414), scale: 2)
+        let rig = SidebarRig(displays: [wide], frame: CGRect(x: 1345, y: 86, width: 1345, height: 1414), side: .right, width: 285,
+                             behaviour: BrowserBehaviour(revertReads: 4), hidden: false)
+        rig.follow()
+        var check = RuleCheck(rig, displays: [wide])
+        check.nothingShowsOnceClosed("case 155, followed")
+        #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+    }
+
+    /// Quitting or turning the sidebar off mid-slide: the panel is ordered
+    /// out before its mask is lifted and before the browser is given its
+    /// space back, so nothing of it is drawn over the browser (review of
+    /// cfe553f, F2: `spaceBack` lifted the mask on a panel still shown).
+    @Test func lettingGoMidSlideShowsNothingOverTheBrowser() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        for side in SidebarSide.allCases {
+            for what in [SidebarRig.During.quit, .turnOff] {
+                for showing in [true, false] {
+                    let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: BrowserBehaviour(animation: 0.25))
+                    if !showing { rig.toggle() }
+                    rig.toggle(during: [(0.1, what)])
+                    var check = RuleCheck(rig, displays: [screen])
+                    check.nothingShowsOnceClosed("\(side), \(what) mid-\(showing ? "show" : "hide")")
+                    #expect(rig.gone && check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+                }
+            }
+        }
     }
 
     /// PR 72's placements: a window filling the screen or snapped to a half,
