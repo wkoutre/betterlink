@@ -595,7 +595,10 @@ final class FakeBrowser: WindowHandle {
     }
 
     /// The top left stays; the size is limited to what fits on the display
-    /// the window is on now, and to the browser's minimum.
+    /// the window is on now, while it is wholly on it (Chrome for Testing on
+    /// macOS 26.5.2: at x 280, 1640 wide on a 1920 screen, asked for 1920 it
+    /// stayed 1640; at x 300, 1640 wide, already 20 pt off, it took 1920, its
+    /// right edge at 2220), and to the browser's minimum.
     private func apply(_ s: CGSize) {
         let frame = real
         // The displays side by side at its height count as one screen.
@@ -605,7 +608,8 @@ final class FakeBrowser: WindowHandle {
         let least = behaviour.widensBack ? 1 : max(1, behaviour.minWidth)
         // A window can always go back where it has been, past the display's edge too.
         let reach = history.map(\.frame.maxX).max() ?? frame.maxX
-        let w = max(least, min(s.width, max(max(d.maxX, frame.maxX, reach) - frame.minX, least)))
+        let off = frame.maxX > d.maxX + 0.5 || frame.minX < d.minX - 0.5
+        let w = off ? max(least, s.width) : max(least, min(s.width, max(max(d.maxX, frame.maxX, reach) - frame.minX, least)))
         let h = min(s.height, max(frame.maxY - d.minY, frame.height, 1))
         set(CGRect(x: frame.minX, y: frame.maxY - h, width: w, height: h))
         if behaviour.widensBack, w < behaviour.minWidth - 0.5 { widenAt = now() + 0.05 }
@@ -703,7 +707,7 @@ final class SidebarRig {
         SidebarPanel.watch = { [weak self] p in
             guard let self, self.instance.panel == nil || p === self.instance.panel else { return }
             self.panelShows.append((self.time, self.gone ? 0 : self.shown(of: p), self.gone ? 0 : self.over(of: p), !self.gone && p.isVisible,
-                                    self.instance.opensWithoutSlide, !self.gone && self.instance.slidesOver))
+                                    self.instance.opensWithoutSlide, !self.gone && self.instance.slidesOver, self.gone ? 0 : self.revealed(of: p)))
         }
     }
 
@@ -714,7 +718,9 @@ final class SidebarRig {
     /// tick's sample has it.
     /// `sliding`: a show or hide was under way then, the panel over the
     /// browser's near edge by design (`SidebarInstance.slidesOver`).
-    private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool, opening: Bool, sliding: Bool)] = []
+    /// `revealed`: how much of the panel shows, its seam (its reach over the
+    /// window's corners) included: `shown` stops at the sidebar's width.
+    private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool, opening: Bool, sliding: Bool, revealed: CGFloat)] = []
     /// Where quitting or turning the sidebar off came in `panelShows`.
     private(set) var goneShows: Int?
     /// The app calls (`FakeApps`) before the last press.
@@ -808,6 +814,8 @@ final class SidebarRig {
     private(set) var lastBusy: Double = 0
     /// The browser's calls before the first press.
     private(set) var callsBefore = 0
+    /// The browser's frames (`FakeBrowser.history`) before the last press.
+    private(set) var historyBefore = 0
     /// The presses in this one (the first and those during it).
     private(set) var presses = 0
     /// When each began, on the rig's clock, how many calls the browser had been sent by then, and whether it was
@@ -833,6 +841,29 @@ final class SidebarRig {
         let outer = side == .left ? p.frame.minX : p.frame.maxX
         let seam = p.reveal ?? (side == .left ? outer + sidebarWidth : outer - sidebarWidth)
         return max(0, side == .left ? seam - outer : outer - seam)
+    }
+
+    /// How much of the panel shows from its outer edge, its seam included
+    /// (its whole frame when nothing masks it).
+    private func revealed(of p: SidebarPanel) -> CGFloat {
+        guard p.isVisible else { return 0 }
+        let left = p.attachedSide == .left
+        let outer = left ? p.frame.minX : p.frame.maxX
+        let seam = p.reveal ?? (left ? p.frame.maxX : p.frame.minX)
+        return max(0, left ? seam - outer : outer - seam)
+    }
+
+    /// The longest the panel's reveal held still in the last show, from the
+    /// press until it showed its whole shape, seam included (MINI-16 at
+    /// f11622b: 224 ms at the strip, waiting for the browser's set).
+    var showHold: Double {
+        let shows = panelShows.filter(\.ordered)
+        guard let first = shows.first, let p = instance.panel else { return 0 }
+        let whole = (side == .left ? p.frame.width : p.frame.width) - 0.5
+        let end = shows.firstIndex { $0.revealed >= whole } ?? shows.count - 1
+        var last = first.t, hold = 0.0
+        for x in shows[...end].dropFirst() { hold = max(hold, x.t - last); last = x.t }
+        return hold
     }
 
     /// How far the panel's body, as shown, lies over the browser's content:
@@ -883,6 +914,7 @@ final class SidebarRig {
     func toggle(within: Double? = nil) {
         fake.sliding = true
         callsBefore = fake.setCalls
+        historyBefore = fake.history.count
         widthAtPress = fake.frame.width
         edgeWaits = 0
         presses = 0
@@ -949,6 +981,7 @@ final class SidebarRig {
     func carry(_ start: Start, during: [(at: Double, what: During)]) {
         fake.sliding = true
         callsBefore = fake.setCalls
+        historyBefore = fake.history.count
         widthAtPress = fake.frame.width
         edgeWaits = 0
         presses = 0
@@ -1619,9 +1652,24 @@ struct RuleCheck {
                                    Double(far(x.browser)), Double(abs(far(x.browser) - want)), (x.t - first.t) * 1000, "\(x.browser)"))
             return
         }
+        // Every frame the browser had, not only each tick's: both calls of a set land within one tick here, and the
+        // frame between them is what the window server may show for a moment (a left hide against the far screen edge
+        // is nudged past it first, so its size grows it past the edge: `WindowSet`). No exception.
+        let frames = rig.fake.history.dropFirst(rig.historyBefore).filter { !$0.byPerson }.map(\.frame)
+        if let f = frames.first(where: { left ? far($0) < want - Self.farEdgeTolerance : far($0) > want + Self.farEdgeTolerance }) {
+            problems.append(String(format: "%@: a frame of the browser's with its far edge at %.0f, %.0f pt inside where it ends (%@)", step,
+                                   Double(far(f)), Double(abs(far(f) - want)), "\(f)"))
+            return
+        }
         let sent = Array(rig.fake.sent.dropFirst(press.calls))
         let sizes = sent.filter { $0.size != nil }.count, positions = sent.filter { $0.position != nil }.count
-        if oneSet, sizes > 1 || positions > 1 { problems.append("\(step): sent \(sizes) sizes and \(positions) positions, more than one set") }
+        // One set: the calls `WindowSet` gives from where the browser was to where it ends.
+        let before = rig.fake.history[rig.historyBefore - 1].frame
+        let set = WindowSet.calls(from: before, to: rig.fake.frame, keep: rig.side, right: screenSpan(at: before)?.upperBound)
+        let setSizes = set.filter { if case .size = $0 { true } else { false } }.count, setPositions = set.count - setSizes
+        if oneSet, sizes > setSizes || positions > setPositions {
+            problems.append("\(step): sent \(sizes) sizes and \(positions) positions, more than one set's \(setSizes) and \(setPositions)")
+        }
         let covered = s.first { $0.shown >= width - 0.5 }
         if showing {
             if let c = covered, let t = sent.first?.t, t < c.t - 1e-9 {
@@ -1630,8 +1678,13 @@ struct RuleCheck {
             if let x = s.first(where: { $0.shown < width - 0.5 && !GuardFrames.same($0.browser, pair) }) {
                 problems.append(String(format: "%@: the browser at %@ %.0f ms in, before the panel covered it", step, "\(x.browser)", (x.t - first.t) * 1000))
             }
-        } else if let uncover = s.firstIndex(where: { $0.shown < width - 0.5 }), let t = sent.last?.t, t > s[uncover].t + 1e-9 {
-            problems.append(String(format: "%@: a set sent %.0f ms after the panel began to uncover", step, (t - s[uncover].t) * 1000))
+            // The whole slide, the seam included, in one motion: the panel never holds still for longer than a frame.
+            if rig.showHold > 1.0 / 120 + 1e-6 { problems.append(String(format: "%@: the panel's reveal held still %.0f ms", step, rig.showHold * 1000)) }
+        } else {
+            problems += Self.uncoversOnceLanded(rig, step)
+            if let uncover = s.firstIndex(where: { $0.shown < width - 0.5 }), let t = sent.last?.t, t > s[uncover].t + 1e-9 {
+                problems.append(String(format: "%@: a set sent %.0f ms after the panel began to uncover", step, (t - s[uncover].t) * 1000))
+            }
         }
         let slide = showing ? Array(s.prefix { $0.shown < width - 0.5 }) : Array(s.drop { $0.shown >= width - 0.5 }.prefix { $0.shown > 0.5 })
         for (a, b) in zip(slide, slide.dropFirst()) where showing ? b.shown <= a.shown : b.shown >= a.shown {
@@ -1641,11 +1694,30 @@ struct RuleCheck {
         if slide.count < Self.smoothFrames { problems.append("\(step): the panel slid in \(slide.count) frames, fewer than \(Self.smoothFrames)") }
     }
 
-    /// In the fake both calls of a set land within the tick they were sent
-    /// in, so the far edge holds exactly at every tick; live, one set's
+    /// A hide's panel begins to uncover the browser only once the browser has
+    /// been at its final frame for a display frame (`SidebarSlide.landedMargin`;
+    /// MINI-16 at f11622b: it dropped below the sidebar's width from 26 ms
+    /// before to 17 ms after the browser's last frame).
+    static func uncoversOnceLanded(_ rig: SidebarRig, _ step: String) -> [String] {
+        let s = rig.samples
+        // The first change of what shows of the panel that takes anything off its whole shape, seam included.
+        let whole = (rig.instance.panel?.frame.width ?? rig.sidebarWidth) - 0.5
+        guard let u = rig.panelShows.first(where: { $0.ordered && $0.revealed < whole }) ?? rig.panelShows.first(where: { !$0.ordered }) else { return [] }
+        let at = s.lastIndex(where: { !GuardFrames.same($0.browser, rig.fake.frame) }).map { $0 + 1 } ?? 0
+        guard at < s.count, s[at].t <= u.t + 1e-9 else {
+            return [String(format: "%@: the panel began to uncover the browser before it was at its frame %@", step, "\(rig.fake.frame)")]
+        }
+        let margin = u.t - s[at].t
+        return margin < SidebarSlide.landedMargin - 1e-9
+            ? [String(format: "%@: the panel began to uncover %.1f ms after the browser was at its frame, less than a display frame", step, margin * 1000)] : []
+    }
+
+    /// In the fake every call of a set lands within the tick it was sent in,
+    /// so the far edge holds exactly at every tick, and every frame between
+    /// the calls is checked as well (`FakeBrowser.history`); live, one set's
     /// calls land within a display refresh or two, and where a window must
-    /// widen against its screen's right edge the position goes first, its
-    /// far edge in for as long as the window server shows the position alone.
+    /// widen against its screen's right edge it is nudged past that edge
+    /// first, so its far edge never comes in (`WindowSet`).
     static let farEdgeTolerance: CGFloat = 2
     /// The slide is 0.22 s, ticked 120 times a second: at least this many frames.
     static let smoothFrames = 12
@@ -2294,12 +2366,13 @@ struct GuardCase: CustomStringConvertible {
                              visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
         let brave = CGRect(x: 0, y: 0, width: 2056, height: 1290)
         // Each call animated over 0.2 s, the show's size held still from 0.1 s to 0.4 s into it: the show would
-        // check it 0.25 s in. The show's set goes once the panel covers, 0.225 s after the press: on the left
+        // check it 0.25 s in. The show's set goes once the panel covers the sidebar's width, about 0.16 s after the
+        // press (the slide goes on over the seam, 31 pt more, to its end at 0.22 s): on the left
         // its position, cut short at once by its size (the second animation, held); on the right its size alone
         // (the first, held).
         for side in SidebarSide.allCases {
             let b = BrowserBehaviour(animation: 0.2, animationHold: 0.3, holdAt: 0.5, holdsFirst: side == .left ? 2 : 1)
-            for at in [0.12, 0.15, 0.2].map({ $0 + 0.24 }) {
+            for at in [0.12, 0.15, 0.2].map({ $0 + 0.17 }) {
                 let rig = SidebarRig(displays: [screen], frame: brave, side: side, width: 280, behaviour: b)
                 rig.toggle(during: [(at, .press)])
                 let step = "\(side), pressed again \(Int(at * 1000)) ms into the show"
@@ -3124,11 +3197,11 @@ struct GuardCase: CustomStringConvertible {
                                 }
                             }
                             rig.toggle()
-                            // Shown late on screen, the frame before a call stays there 70 ms: a left hide's frame between its
-                            // position and its size, the far edge in, is what it shows then (`WindowSet`). That motion (or the
-                            // next, on the right, one call a motion) is the window server's; every other is checked.
-                            if late == .onScreen, k == motion || k == motion + 1 { continue }
-                            check.oneSmoothMotion(pair: full, "\(side) \(b), \(late) late set \(call) of motion \(motion + 1): motion \(k + 1)")
+                            // Shown late on screen, the frame before a call stays there 70 ms, and the motion with it (or the
+                            // next, on the right, one call a motion) is ended by its frame sent once more (`WindowSteps.clean`):
+                            // more calls than one set's. Every property but that count holds, its far edge never in included.
+                            let resent = late == .onScreen && (k == motion || k == motion + 1)
+                            check.oneSmoothMotion(pair: full, oneSet: !resent, "\(side) \(b), \(late) late set \(call) of motion \(motion + 1): motion \(k + 1)")
                         }
                         check.flagRestored("\(side) \(b), \(late) late, motion \(motion + 1)")
                         #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
@@ -3232,6 +3305,68 @@ struct GuardCase: CustomStringConvertible {
         }
     }
 
+    /// A hide's panel begins to uncover the browser only once the window
+    /// server shows it at its frame, and a display frame after that
+    /// (`SidebarSlide.landedMargin`), however late that is (MINI-16 at
+    /// f11622b: the panel dropped below the sidebar's width from 26 ms before
+    /// to 17 ms after the browser's last frame): a browser late by 100 ms with
+    /// its size, and one whose set the window server shows 70 ms late. Either
+    /// side, a window free on screen and one filling it.
+    @Test func aHideUncoversOnlyOnceTheBrowserIsThere() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for side in SidebarSide.allCases {
+            for start in [CGRect(x: 300, y: 0, width: 1200, height: 1259), screen.visibleFrame] {
+                for lag in [false, true] {
+                    var b = BrowserBehaviour()
+                    if !lag { b.timing = .late; b.lateBy = 0.1 }
+                    let step = "\(side) \(start) \(lag ? "shown 70 ms late" : "late by 100 ms")"
+                    let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b)
+                    rig.toggle()
+                    if lag { rig.fake.showsLate(call: 1, by: 0.07) }
+                    rig.toggle()
+                    problems += RuleCheck.uncoversOnceLanded(rig, step)
+                    if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
+                }
+            }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A left sidebar's hide with the browser against its screen's right edge
+    /// (Chrome for Testing on macOS 26.5.2: a size can't grow a window wholly
+    /// on screen past the edge, but it can one already partly off; the plain
+    /// position then size showed the far edge in, 5 of 5 runs): the window is
+    /// nudged 1 pt right, its far edge 1 pt off the screen; then its size,
+    /// which grows it past the edge; then its position. Those three calls,
+    /// and no frame of the browser's, at any moment, has its far edge in. A
+    /// window filling the screen and one against its right edge only, the
+    /// flag off and on.
+    @Test func aHideAgainstTheFarScreenEdgeIsNudgedAndItsFarEdgeNeverComesIn() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1050), scale: 2)
+        for start in [screen.visibleFrame, CGRect(x: 280, y: 0, width: 1640, height: 1050)] {
+            for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+                let step = "\(start) \(b)"
+                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: b)
+                rig.toggle()
+                let open = rig.fake.frame
+                #expect(rig.open && GuardFrames.same(open, SidebarGeometry.opened(start, width: 280, side: .left)), "\(step): opened at \(open)")
+                rig.toggle()
+                let h = Displays.primaryHeight!, top = h - start.maxY
+                let sent = rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0).map { c in
+                    c.size.map { "size \(Int($0.width))x\(Int($0.height))" } ?? c.position.map { "position \(Int($0.x)),\(Int($0.y))" } ?? ""
+                }
+                let want = ["position \(Int(open.minX) + 1),\(Int(top))", "size \(Int(start.width))x\(Int(start.height))", "position \(Int(start.minX)),\(Int(top))"]
+                #expect(sent == want, "\(step): sent \(sent)")
+                let frames = rig.fake.history.dropFirst(rig.historyBefore).filter { !$0.byPerson }.map(\.frame)
+                #expect(!frames.contains { $0.maxX < start.maxX - 0.5 }, "\(step): its far edge came in: \(frames)")
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)")
+            }
+        }
+    }
+
     /// The panel's reveal moves at every display tick of a slide, even while
     /// the browser's Accessibility calls each hold the caller 30 ms (Nick's
     /// recording: the panel's reveal moved in about 4 steps per slide, up to
@@ -3253,7 +3388,9 @@ struct GuardCase: CustomStringConvertible {
                 // From the press until the reveal reaches its end (the whole width shown, or none).
                 let shows = rig.panelShows.filter(\.ordered)
                 guard let first = shows.first else { problems.append("\(step): the panel never showed"); continue }
-                let end = shows.firstIndex { showing ? $0.shown >= rig.sidebarWidth - 0.5 : $0.shown <= 0.5 } ?? shows.count - 1
+                // A show's end is the panel's whole shape, its seam included.
+                let whole = (rig.instance.panel?.frame.width ?? rig.sidebarWidth) - 0.5
+                let end = shows.firstIndex { showing ? $0.revealed >= whole : $0.shown <= 0.5 } ?? shows.count - 1
                 var last = first.t
                 for x in shows[...end].dropFirst() {
                     if x.t - last > 1.0 / 120 + 1e-6 {
@@ -3276,8 +3413,13 @@ struct GuardCase: CustomStringConvertible {
         guard let press = rig.pressedAt.first else { return ["\(step): no press"] }
         let sent = Array(rig.fake.sent.dropFirst(press.calls))
         let sizes = sent.filter { $0.size != nil }.count, positions = sent.filter { $0.position != nil }.count
-        if sizes != 1 || positions != (side == .left ? 1 : 0) {
-            problems.append("\(step): sent \(sizes) sizes and \(positions) positions, wanted 1 and \(side == .left ? 1 : 0)")
+        // One set: on the left one size and one position, or, a hide against the screen's right edge, the nudge
+        // first (two positions); on the right a size alone.
+        let from = showing ? start : opened, to = showing ? opened : start
+        let set = WindowSet.calls(from: from, to: to, keep: side, right: screenSpan(at: from)?.upperBound)
+        let setSizes = set.filter { if case .size = $0 { true } else { false } }.count
+        if sizes != setSizes || positions != set.count - setSizes {
+            problems.append("\(step): sent \(sizes) sizes and \(positions) positions, wanted \(setSizes) and \(set.count - setSizes)")
         }
         let s = rig.samples
         let covered = s.first { $0.shown >= width - 0.5 }
@@ -3290,8 +3432,17 @@ struct GuardCase: CustomStringConvertible {
             if let x = s.first(where: { $0.shown < width - 0.5 && !GuardFrames.same($0.browser, start) }) {
                 problems.append(String(format: "%@: the browser at %@ %.0f ms in, before the panel covered it", step, "\(x.browser)", (x.t - press.t) * 1000))
             }
-        } else if let uncover = s.firstIndex(where: { $0.shown < width - 0.5 }), let t = sent.last?.t, t > s[uncover].t + 1e-9 {
-            problems.append(String(format: "%@: a set sent %.0f ms after the panel began to uncover", step, (t - s[uncover].t) * 1000))
+            if rig.showHold > 1.0 / 120 + 1e-6 { problems.append(String(format: "%@: the panel's reveal held still %.0f ms", step, rig.showHold * 1000)) }
+        } else {
+            problems += RuleCheck.uncoversOnceLanded(rig, step)
+            if let uncover = s.firstIndex(where: { $0.shown < width - 0.5 }), let t = sent.last?.t, t > s[uncover].t + 1e-9 {
+                problems.append(String(format: "%@: a set sent %.0f ms after the panel began to uncover", step, (t - s[uncover].t) * 1000))
+            }
+        }
+        // Every frame the browser had: its far edge never inside where it ends.
+        let frames = rig.fake.history.dropFirst(rig.historyBefore).filter { !$0.byPerson }.map(\.frame)
+        if let f = frames.first(where: { side == .left ? $0.maxX < start.maxX - 0.5 : $0.minX > start.minX + 0.5 }) {
+            problems.append("\(step): a frame of the browser's with its far edge in: \(f)")
         }
         // The far edge (away from the sidebar) is the pair's, at both ends: never inside it.
         let far = { (r: CGRect) in side == .left ? r.maxX : r.minX }

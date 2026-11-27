@@ -8,13 +8,13 @@ import Testing
     private let left = CGRect(x: 280, y: 0, width: 1776, height: 1290)
     private let right = CGRect(x: 0, y: 0, width: 1776, height: 1290)
 
-    /// The far edge (away from `side`) of the frame between the calls: never
-    /// inside where it ends, except where a window must widen against the
-    /// right edge of its screen.
+    /// The far edge (away from `side`) of every frame between the calls:
+    /// never inside where it ends (Chrome for Testing on macOS 26.5.2, 10 of
+    /// 10 runs with the nudge: the far edge never came in).
     private func farIn(from seen: CGRect, to target: CGRect, side: SidebarSide, right edge: CGFloat) -> CGFloat {
         let calls = WindowSet.calls(from: seen, to: target, keep: side, right: edge)
-        guard let b = WindowSet.between(from: seen, calls: calls) else { return 0 }
-        return side == .left ? target.maxX - b.maxX : b.minX - target.minX
+        let frames = WindowSet.betweens(from: seen, calls: calls)
+        return frames.map { side == .left ? target.maxX - $0.maxX : $0.minX - target.minX }.max() ?? 0
     }
 
     /// A left show: the position, then the size; the frame between pushed out past the screen's edge.
@@ -33,18 +33,46 @@ import Testing
         #expect(farIn(from: open, to: closed, side: .left, right: 2056) < 0)
     }
 
-    /// Against the screen's right edge a size can't grow the window past it:
-    /// the position first, then the size, and for the frame between the far
-    /// edge is in by the sidebar's width (the one place it can come in).
-    @Test func aLeftHideAgainstTheEdgeIsThePositionThenTheSize() {
+    /// Against the screen's right edge a size can't grow a window that is
+    /// wholly on screen past it, but it can one already partly off (Chrome
+    /// for Testing on macOS 26.5.2: at x 300, 1640 wide, right edge 1940 on a
+    /// 1920 screen, a size of 1920 gave right edge 2220). So the window is
+    /// nudged 1 pt right first, its far edge 1 pt off the screen; then the
+    /// size, which grows it past the edge; then the position. The far edge
+    /// never comes in (live, the frames between were 281 1640 wide, 281 1920
+    /// wide, then 0 1920 wide); the near edge moves 1 pt, under the panel.
+    @Test func aLeftHideAgainstTheEdgeNudgesItOffThenSizesThenPlaces() {
         let calls = WindowSet.calls(from: left, to: full, keep: .left, right: 2056)
-        #expect(calls == [.position(full), .size(full)])
-        #expect(farIn(from: left, to: full, side: .left, right: 2056) == 280)
-        #expect(WindowSet.farEdgeIn(from: left, to: full, keep: .left, right: 2056) == 280)
-        // Where it can grow in place, and for a show, nothing comes in.
-        #expect(WindowSet.farEdgeIn(from: CGRect(x: 580, y: 0, width: 920, height: 1290), to: CGRect(x: 300, y: 0, width: 1200, height: 1290),
-                                    keep: .left, right: 2056) == nil)
+        #expect(calls == [.position(CGRect(x: 281, y: 0, width: 1776, height: 1290)), .size(full), .position(full)])
+        #expect(WindowSet.betweens(from: left, calls: calls) == [CGRect(x: 281, y: 0, width: 1776, height: 1290), CGRect(x: 281, y: 0, width: 2056, height: 1290)])
+        #expect(farIn(from: left, to: full, side: .left, right: 2056) < 0)
+        #expect(WindowSet.farEdgeIn(from: left, to: full, keep: .left, right: 2056) == nil)
+        #expect(WindowSet.nudge(from: left, to: full, keep: .left, right: 2056) == 1)
+        // Where it can grow in place, and for a show, there is no nudge and nothing comes in.
+        let open = CGRect(x: 580, y: 0, width: 920, height: 1290), closed = CGRect(x: 300, y: 0, width: 1200, height: 1290)
+        #expect(WindowSet.farEdgeIn(from: open, to: closed, keep: .left, right: 2056) == nil)
+        #expect(WindowSet.nudge(from: open, to: closed, keep: .left, right: 2056) == nil)
         #expect(WindowSet.farEdgeIn(from: full, to: left, keep: .left, right: 2056) == nil)
+    }
+
+    /// Short of the screen's right edge, but too near it to grow in place:
+    /// first the size that takes it to the edge (its far edge out), then the
+    /// nudge, the size and the position as against the edge.
+    @Test func aLeftHideNearTheEdgeGrowsToItFirst() {
+        let open = CGRect(x: 1200, y: 0, width: 800, height: 1290), closed = CGRect(x: 920, y: 0, width: 1080, height: 1290)
+        let calls = WindowSet.calls(from: open, to: closed, keep: .left, right: 2056)
+        #expect(calls == [.size(CGRect(x: 1200, y: 0, width: 856, height: 1290)), .position(CGRect(x: 1201, y: 0, width: 856, height: 1290)),
+                          .size(closed), .position(closed)])
+        #expect(farIn(from: open, to: closed, side: .left, right: 2056) < 0)
+        #expect(WindowSet.farEdgeIn(from: open, to: closed, keep: .left, right: 2056) == nil)
+    }
+
+    /// A window already partly off the screen's right edge grows past it:
+    /// the size, then the position, no nudge.
+    @Test func aLeftHideAlreadyPartlyOffIsTheSizeThenThePosition() {
+        let open = CGRect(x: 1500, y: 0, width: 800, height: 1290), closed = CGRect(x: 1220, y: 0, width: 1080, height: 1290)
+        #expect(WindowSet.calls(from: open, to: closed, keep: .left, right: 2056) == [.size(closed), .position(closed)])
+        #expect(WindowSet.nudge(from: open, to: closed, keep: .left, right: 2056) == nil)
     }
 
     /// On the right the window keeps its left edge: a size alone, either way.

@@ -258,8 +258,10 @@ public struct WindowSteps: Sendable {
         case .frame(let t):
             // A position and a size, back to back, either first: there, or the position on its way (the size kept, the
             // left and top edges going toward where they were sent), or the size on its way (the top left kept, where
-            // it was or where the position put it), at any width (a browser takes what it can).
-            let topLeft = (near(p.minX, seen.minX) && near(p.maxY, seen.maxY)) || (near(t.minX, seen.minX) && near(t.maxY, seen.maxY))
+            // it was or where the position put it), at any width (a browser takes what it can). Where it was takes in
+            // `WindowSet`'s nudge, 1 pt right, before a size that grows the window past its screen's edge.
+            let nudged = { (a: CGFloat, b: CGFloat) in near(a, b) || abs(a - b) <= WindowSet.nudgeBy + 0.5 }
+            let topLeft = (nudged(p.minX, seen.minX) && near(p.maxY, seen.maxY)) || (near(t.minX, seen.minX) && near(t.maxY, seen.maxY))
             let moving = near(p.width, seen.width) && near(p.height, seen.height)
                 && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
             return topLeft || moving
@@ -310,7 +312,7 @@ public struct WindowSteps: Sendable {
                     // position goes first, a size that landed before it (the position cut short where it began). A
                     // browser that stops at its minimum, its position landed, is neither.
                     let from = s.from
-                    let across = !Self.near(seen.minX, from.minX) && !Self.near(seen.minX, target.minX)
+                    let across = abs(seen.minX - from.minX) > WindowSet.nudgeBy + 0.5 && !Self.near(seen.minX, target.minX)
                     let positionFirst = between.map { Self.near($0.minX, target.minX) && !Self.near(from.minX, target.minX) } ?? false
                     let cut = positionFirst && Self.near(seen.minX, from.minX) && !Self.near(seen.width, from.width)
                     if across || cut { partway = true }

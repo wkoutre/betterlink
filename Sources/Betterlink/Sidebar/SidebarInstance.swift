@@ -209,6 +209,13 @@ final class SidebarInstance: ObservableObject {
         var out: Bool
         /// A show's set, sent once the panel covers.
         var pending: (() -> Void)?
+        /// Going closed: when the browser's calls were over (`slideOutNow`), and
+        /// when the window server first showed the window at its frame since.
+        /// The panel begins to uncover only once that frame has been on screen
+        /// a display frame (`SidebarSlide.landedMargin`), or the wait is capped
+        /// (`SidebarSlide.landedWait`).
+        var ready: Double?
+        var landed: Double?
         var frames = 0, started = CACurrentMediaTime()
     }
     private var slideRun: SlideRun? {
@@ -269,7 +276,9 @@ final class SidebarInstance: ObservableObject {
     /// Released once nothing of this window is moving: no steps, no set
     /// still on the window's queue, no drag of the edge.
     private func releaseFlagIfIdle() {
-        if steps == nil, resizing == nil, flagWatch == nil, !window.handle.sending { releaseFlag() }
+        // Never while the panel slides: the flag's calls are made on the main thread, and wait for the browser.
+        let still = slideRun.map { $0.pending == nil && ($0.slide.phase == .shown || $0.slide.phase == .hidden) } ?? true
+        if steps == nil, resizing == nil, flagWatch == nil, !window.handle.sending, still { releaseFlag() }
     }
 
     /// Calls of betterlink's may still be on their way to the window: its
@@ -612,16 +621,14 @@ final class SidebarInstance: ObservableObject {
 
     /// A hide's one set, under the panel (or a show's, turned back once its
     /// set was out): the browser to the pair's frame `back`, its far edge
-    /// kept (`WindowSet`). The one case where that edge can come in, a left
-    /// sidebar's window against the far screen edge (its position, then its
-    /// size), is found here (`WindowSet.farEdgeIn`): the seam where a second
-    /// panel could cover the far strip for the length of the set, if live
-    /// measurement shows the frame between at all (not built). `trace.log`
-    /// says each time.
+    /// kept (`WindowSet`). A left sidebar's window too near its screen's
+    /// right edge to grow in place is nudged 1 pt past that edge first, so
+    /// its size grows it past the edge and its far edge never comes in
+    /// (`WindowSet.nudge`); `trace.log` says each time.
     private func hideSet(to back: CGRect, keep: SidebarSide, deadline: Double, then: @escaping () -> Void) {
         let seen = onScreenFrame
-        if let strip = WindowSet.farEdgeIn(from: seen, to: back, keep: keep, right: rightEdge(of: seen)) {
-            DragTrace.log(String(format: "hide: window %d against the far screen edge: its far edge in %.0f pt between the set's position and size", window.number, Double(strip)))
+        if let d = WindowSet.nudge(from: seen, to: back, keep: keep, right: rightEdge(of: seen)) {
+            DragTrace.log(String(format: "hide: window %d against the far screen edge: nudged %.0f pt past it, then sized and placed, its far edge never in", window.number, Double(d)))
         }
         move(to: back, keep: keep, retreats: false, deadline: deadline, oneSet: true, then: then)
     }
@@ -634,9 +641,32 @@ final class SidebarInstance: ObservableObject {
         run.slide.settle(at: clock())
         guard run.slide.phase == .shown else { return }
         releaseFlagIfIdle()
-        run.slide.hide(at: clock(), reduceMotion: reducesMotion())
+        if run.ready == nil { run.ready = clock() }
         slideRun = run
         stepPanel()
+    }
+
+    /// A hide whose calls are over begins to uncover once the window server
+    /// has shown the browser at its frame for a display frame: the page
+    /// reflowing under the panel is the first thing that changes, and the
+    /// panel never uncovers the browser before it is there (MINI-16 at
+    /// f11622b: the panel dropped below the sidebar's width from 26 ms before
+    /// to 17 ms after the browser's last frame). Not there within
+    /// `SidebarSlide.landedWait`: it slides out all the same, and `trace.log` says so.
+    private func beginSlideOut(_ run: inout SlideRun, now: Double) {
+        guard run.out, run.slide.phase == .shown, let ready = run.ready else { return }
+        if SidebarGeometry.same(onScreenFrame, run.hiddenWindow) {
+            if run.landed == nil { run.landed = now }
+        } else {
+            run.landed = nil
+        }
+        let landed = run.landed.map { now - $0 >= SidebarSlide.landedMargin - 1e-9 } ?? false
+        guard landed || now - ready >= SidebarSlide.landedWait - 1e-9 else { return }
+        if !landed {
+            DragTrace.log(String(format: "hide: window %d not shown at %@ within %.0f ms (at %@): the panel slides out all the same", window.number,
+                                 "\(run.hiddenWindow)", SidebarSlide.landedWait * 1000, "\(onScreenFrame)"))
+        }
+        run.slide.hide(at: now, reduceMotion: reducesMotion())
     }
 
     /// A hide's calls are over (landed, or capped): its frame sent once more
@@ -679,6 +709,7 @@ final class SidebarInstance: ObservableObject {
                 slideRun = run
                 return set()
             }
+            holdFlag() // at the press, not mid-slide once the panel covers (`releaseFlagIfIdle`)
             run.slide.show(at: clock(), reduceMotion: reducesMotion())
             run.pending = set
             slideRun = run
@@ -724,6 +755,9 @@ final class SidebarInstance: ObservableObject {
             set()
             return stepPanel()
         }
+        // The flag is held off now, before the panel moves: its calls wait for the browser on the main thread, and
+        // the show's set goes mid-slide, once the panel covers the strip (`stepPanel`).
+        if oneSet { holdFlag() }
         let outer = side == .left ? panel.frame.minX : panel.frame.maxX
         if panel.reveal != outer { panel.reveal = outer }
         panel.showNow(at: place(panel))
@@ -749,16 +783,27 @@ final class SidebarInstance: ObservableObject {
         run.slide.settle(at: now) // a slide that is over is shown, or hidden
         // Moved or resized by someone else while the panel slides in, before the browser was sent anything: theirs stands.
         if run.pending != nil, !SidebarGeometry.same(onScreenFrame, run.hiddenWindow) { return takenByOther() }
-        // A hide's slide begins only once the browser is under the panel at its full frame.
+        // A hide's slide begins only once the browser is under the panel at its full frame, and shown there.
+        beginSlideOut(&run, now: now)
         let begun = !run.out || run.slide.phase != .shown
         let done = run.slide.done(at: now)
+        // Covering the sidebar's whole width, the panel slides on over the seam (its reach over the window's
+        // corners) in the same motion, and shows its whole shape at the end, whatever the browser is doing: the seam
+        // drawn over the browser's frame as it is, its set landing beneath it (MINI-16 at f11622b: the reveal held
+        // at the strip about 224 ms, until the browser's set had landed, before the seam's 32 columns showed).
+        let whole = run.cover >= CGFloat(width) - 0.5
+        let extent = run.cover + (whole ? panel.reach : 0)
+        var covers = done
         if begun {
-            let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: run.cover, side: run.side, progress: run.slide.progress(at: now))
-            if panel.reveal != inner { panel.reveal = inner }
+            let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: extent, side: run.side, progress: run.slide.progress(at: now))
+            let reveal: CGFloat? = done && whole && run.slide.phase == .shown ? nil : inner
+            if panel.reveal != reveal { panel.reveal = reveal }
             if !done { run.frames += 1 }
+            covers = covers || abs(inner - run.outer) >= run.cover - 0.5
         }
         quiet(begun && !done)
-        if done, !run.out, let set = run.pending {
+        // A show's set goes as soon as the panel covers what the browser gives up; the slide goes on meanwhile.
+        if covers, !run.out, let set = run.pending {
             run.pending = nil
             slideRun = run
             set()

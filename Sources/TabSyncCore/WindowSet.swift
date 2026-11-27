@@ -19,11 +19,16 @@ import CoreGraphics
 ///   plus the new width within the right edge of the displays side by side
 ///   at its height, `right`): the size, then the position. The frame in
 ///   between is pushed out too.
-/// - Widening against that edge: a size can't grow a window past its
-///   screen's edge (measured on macOS 26 with Chrome for Testing: at x 280,
-///   1640 wide on a 1920 screen, asked for 1920 it stayed 1640), so the
-///   position goes first, then the size. The frame in between has its right
-///   edge in, for as long as the window server shows the position alone.
+/// - Widening against that edge: a size can't grow a window that is wholly
+///   on screen past its screen's edge (measured on macOS 26 with Chrome for
+///   Testing: at x 280, 1640 wide on a 1920 screen, asked for 1920 it stayed
+///   1640), but it can one already partly off (at x 300, 1640 wide, right
+///   edge 1940, a size of 1920 gave right edge 2220). So the window is nudged
+///   1 pt right (`nudgeBy`), its far edge 1 pt off the screen, then sized,
+///   growing past the edge, then placed: the far edge never comes in (10 of
+///   10 runs; the plain position then size showed it in, 5 of 5). Short of
+///   the edge, a size first takes it there. The near edge moves 1 pt and
+///   back, under the panel.
 ///
 /// A sidebar on the right keeps the window's left edge: there it is a size
 /// alone. A frame whose far edge isn't kept (a pair moved back on screen as
@@ -46,9 +51,24 @@ public enum WindowSet {
         let kept = keep.map { abs($0 == .left ? seen.maxX - target.maxX : seen.minX - target.minX) < 1 } ?? false
         guard kept else { return target.width < seen.width ? [.size(target), .position(target)] : [.position(target), .size(target)] }
         if target.width < seen.width - 0.5 { return [.position(target), .size(target)] }
-        let grows = right.map { seen.minX + target.width <= $0 + 0.5 } ?? false
-        return grows ? [.size(target), .position(target)] : [.position(target), .size(target)]
+        guard let right else { return [.position(target), .size(target)] }
+        // Grows in place, or already partly off the screen's right edge, where a size grows it past the edge.
+        if seen.minX + target.width <= right + 0.5 || seen.maxX > right + 0.5 { return [.size(target), .position(target)] }
+        // Wholly on screen and too near its right edge to grow in place: to that edge first (unless there),
+        // nudged 1 pt past it, then grown past it, then placed.
+        var calls: [Call] = []
+        var at = seen
+        if seen.maxX < right - 0.5 {
+            at = CGRect(x: seen.minX, y: seen.maxY - target.height, width: right - seen.minX, height: target.height)
+            calls.append(.size(at))
+        }
+        calls.append(.position(at.offsetBy(dx: right + nudgeBy - at.maxX, dy: 0)))
+        return calls + [.size(target), .position(target)]
     }
+
+    /// How far past the screen's right edge the window's far edge is nudged
+    /// before it is grown past it (`calls`).
+    public static let nudgeBy: CGFloat = 1
 
     /// The calls of `call` from `seen`: a size or a position alone as it is,
     /// a whole frame as `calls(from:to:keep:right:)` orders it.
@@ -61,20 +81,39 @@ public enum WindowSet {
     /// calls is inside where it ends, when it is: only a window widened
     /// against its screen's far edge (the position first). Nil otherwise.
     public static func farEdgeIn(from seen: CGRect, to target: CGRect, keep: SidebarSide, right: CGFloat?) -> CGFloat? {
-        guard let b = between(from: seen, calls: calls(from: seen, to: target, keep: keep, right: right)) else { return nil }
-        let inside = keep == .left ? target.maxX - b.maxX : b.minX - target.minX
+        let frames = betweens(from: seen, calls: calls(from: seen, to: target, keep: keep, right: right))
+        guard let inside = frames.map({ keep == .left ? target.maxX - $0.maxX : $0.minX - target.minX }).max() else { return nil }
         return inside >= 0.5 ? inside : nil
     }
 
     /// The frame the window has between the calls, when there are two: what
     /// the window server may show for as long as the first has landed and the
-    /// second hasn't.
-    public static func between(from seen: CGRect, calls: [Call]) -> CGRect? {
-        guard calls.count == 2 else { return nil }
-        switch calls[0] {
-        case .position(let f): return CGRect(x: f.minX, y: f.maxY - seen.height, width: seen.width, height: seen.height)
-        case .size(let f): return CGRect(x: seen.minX, y: seen.maxY - f.height, width: f.width, height: f.height)
-        case .frame: return nil
+    /// second hasn't. With more, the first of them (`betweens`).
+    public static func between(from seen: CGRect, calls: [Call]) -> CGRect? { betweens(from: seen, calls: calls).first }
+
+    /// Every frame the window has between the calls, in order: each call's,
+    /// but the last's.
+    public static func betweens(from seen: CGRect, calls: [Call]) -> [CGRect] {
+        var f = seen
+        var out: [CGRect] = []
+        for c in calls {
+            switch c {
+            case .position(let p): f = CGRect(x: p.minX, y: p.maxY - f.height, width: f.width, height: f.height)
+            case .size(let z): f = CGRect(x: f.minX, y: f.maxY - z.height, width: z.width, height: z.height)
+            case .frame(let t): f = t
+            }
+            out.append(f)
         }
+        return Array(out.dropLast())
+    }
+
+    /// How far the window is nudged right first, when it is (`calls`).
+    /// How far the window's near edge is nudged right before it grows past
+    /// its screen's right edge (`calls`), when it is: nil otherwise.
+    public static func nudge(from seen: CGRect, to target: CGRect, keep: SidebarSide, right: CGFloat?) -> CGFloat? {
+        let calls = calls(from: seen, to: target, keep: keep, right: right)
+        guard calls.count > 2, let i = calls.firstIndex(where: { if case .position = $0 { true } else { false } }), i < calls.count - 1 else { return nil }
+        let frames = [seen] + betweens(from: seen, calls: calls)
+        return frames[i + 1].minX - frames[i].minX
     }
 }
