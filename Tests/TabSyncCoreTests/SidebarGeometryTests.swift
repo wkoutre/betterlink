@@ -171,4 +171,44 @@ struct SidebarGeometryTests {
         #expect(c2.maxY == 875)
         #expect(SidebarGeometry.ax(fromCocoa: c2, mainScreenHeight: 900) == ax2)
     }
+
+    /// A person's resize of the open pair at rest refits it only when the
+    /// sidebar beside the new frame would be further outside the screens'
+    /// visible frames than it was (bug 3: Window › Fill, a zoom, tiling to
+    /// the whole screen). Any other resize is the person's and stands (rule
+    /// 3, review F1 of 1df43a3: a left edge dragged from 400 to 300 beside a
+    /// 280 pt left sidebar was put back to 580).
+    @Test func aResizeRefitsOnlyWhenTheSidebarWouldLeaveTheScreen() {
+        let visible = [CGRect(x: 0, y: 0, width: 2056, height: 1259)]
+        let pairLeft = CGRect(x: 400, y: 0, width: 1200, height: 1259) // sidebar 120...400
+        // The left edge dragged over where the sidebar was: theirs.
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: CGRect(x: 300, y: 0, width: 1300, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // Narrowed, widened to the right, taller: theirs.
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: CGRect(x: 450, y: 0, width: 1100, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: CGRect(x: 400, y: 0, width: 1500, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // Filled: the sidebar would be at -280...0.
+        #expect(SidebarGeometry.refitsAfterResize(from: pairLeft, to: visible[0], width: 280, side: .left, visible: visible))
+        // From a pair filling the screen too.
+        #expect(SidebarGeometry.refitsAfterResize(from: CGRect(x: 280, y: 0, width: 1776, height: 1259), to: visible[0], width: 280, side: .left,
+                                                  visible: visible))
+        // The right side: its right edge dragged past where the sidebar was, still on screen: theirs; filled: refit.
+        let pairRight = CGRect(x: 400, y: 0, width: 1200, height: 1259) // sidebar 1600...1880
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairRight, to: CGRect(x: 400, y: 0, width: 1300, height: 1259), width: 280, side: .right,
+                                                   visible: visible))
+        #expect(SidebarGeometry.refitsAfterResize(from: pairRight, to: visible[0], width: 280, side: .right, visible: visible))
+        // A pair already partly off the screen, resized without pushing the sidebar further off: theirs.
+        let off = CGRect(x: 100, y: 0, width: 1200, height: 1259) // sidebar -180...100
+        #expect(!SidebarGeometry.refitsAfterResize(from: off, to: CGRect(x: 150, y: 0, width: 1100, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // A move alone (the same size) stands, wherever it puts the sidebar.
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: pairLeft.offsetBy(dx: -400, dy: 0), width: 280, side: .left,
+                                                   visible: visible))
+        // Onto a second display beside: the sidebar on that display is on screen.
+        let two = [CGRect(x: -1440, y: 0, width: 1440, height: 900), visible[0]]
+        #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: CGRect(x: 0, y: 0, width: 1600, height: 800), width: 280, side: .left,
+                                                   visible: two))
+    }
 }

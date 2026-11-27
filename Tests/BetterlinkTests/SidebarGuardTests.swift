@@ -1798,7 +1798,7 @@ struct GuardCase: CustomStringConvertible {
                 check.oneSmoothMotion(pair: start, show)
             }
             if let put = rig.personPut, rig.personAtRest,
-               SidebarGeometry.refitsAfterResize(from: rig.personFrom, to: put, width: rig.personWidth, side: side, displays: displays.map(\.frame)) {
+               SidebarGeometry.refitsAfterResize(from: rig.personFrom, to: put, width: rig.personWidth, side: side, visible: displays.map(\.visibleFrame)) {
                 check.shown(from: put, mustOpen: canOpen(from: put), offFrom: put, "\(show), resized by the person once it was open")
             } else if let put = rig.personPut {
                 check.personDid(put, "\(show), moved or resized by the person while it was carried out")
@@ -1869,7 +1869,7 @@ struct GuardCase: CustomStringConvertible {
                         rig.personSets(f)
                         // Over where the sidebar was, or pushing it off the screen: the pair fits again in the
                         // person's frame (rules 2 and 3); else their frame stands.
-                        if SidebarGeometry.refitsAfterResize(from: before, to: f, width: w, side: side, displays: displays.map(\.frame)) {
+                        if SidebarGeometry.refitsAfterResize(from: before, to: f, width: w, side: side, visible: displays.map(\.visibleFrame)) {
                             check.shown(from: f, mustOpen: canOpen(from: f), offFrom: f, step)
                         } else {
                             check.personDid(f, step)
@@ -2601,15 +2601,8 @@ struct GuardCase: CustomStringConvertible {
                     let open = rig.open, notes = SidebarRig.notices.count
                     let at = rig.fake.frame
                     let resized = CGRect(x: at.minX, y: at.minY - dh, width: at.width + dw, height: at.height + dh)
-                    let w = rig.sidebarWidth
                     rig.personSets(resized)
-                    // Open, widened over where its sidebar was (the right side, 30 wider): the pair fits again in
-                    // the person's frame (`refitsAfterResize`). Else their frame stands.
-                    if open, SidebarGuardTests.refits(from: at, to: resized, width: w, side: side, screen) {
-                        check.shown(from: resized, mustOpen: true, step)
-                    } else {
-                        check.personDid(resized, step)
-                    }
+                    check.personDid(resized, step)
                     #expect(rig.open == open, "\(step): open \(open) before the resize, \(rig.open) after")
                     #expect(SidebarRig.notices.count == notes, "\(step): notes \(SidebarRig.notices.map(\.0)), \(notes) before the resize")
                     #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
@@ -3003,6 +2996,30 @@ struct GuardCase: CustomStringConvertible {
     /// screen at -280, from a pair at 400...1656 and from one filling the
     /// screen. The browser now yields the sidebar's width on its side, the
     /// sidebar slides back on, and the pair is the frame the person chose.
+    /// The person drags the open browser's edge over where its sidebar was,
+    /// the sidebar still on the screen: their frame stands, the sidebar where
+    /// it was (rule 3; review F1 of 1df43a3: a left edge dragged from 400 to
+    /// 300 beside a 280 pt left sidebar was put back at 580...1600).
+    @Test func aResizeOverTheSidebarStands() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for side in SidebarSide.allCases {
+            let start = CGRect(x: 120, y: 0, width: 1480, height: 1259)
+            let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open, "\(side): didn't open")
+            let b = rig.fake.frame
+            // 100 pt over where the sidebar is.
+            let f = side == .left ? CGRect(x: b.minX - 100, y: b.minY, width: b.width + 100, height: b.height)
+                                  : CGRect(x: b.minX, y: b.minY, width: b.width + 100, height: b.height)
+            rig.personSets(f)
+            var check = RuleCheck(rig, displays: [screen])
+            check.personDid(f, "\(side): the edge dragged 100 over the sidebar")
+            #expect(rig.open, "\(side): closed after the resize")
+            #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+        }
+    }
+
     @Test func fillWhileOpenFitsThePairAgain() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
@@ -3068,10 +3085,6 @@ struct GuardCase: CustomStringConvertible {
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
         }
-    }
-
-    static func refits(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, _ screen: Display) -> Bool {
-        SidebarGeometry.refitsAfterResize(from: was, to: now, width: width, side: side, displays: [screen.frame])
     }
 
     /// PR 72's placements: a window filling the screen or snapped to a half,

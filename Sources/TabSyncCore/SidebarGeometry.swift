@@ -122,17 +122,17 @@ public enum SidebarGeometry {
     /// The person resized the browser from `was` to `now` while its sidebar
     /// was open, and the pair must fit again (bug 3, live on 3d5c1e4: Window
     /// › Fill or a tiling app put the browser on the whole visible frame, and
-    /// the sidebar was left off the screen): the browser now covers where the
-    /// sidebar was, or the sidebar beside it would be further off the
-    /// displays than it was. Then the browser's new frame is the pair's, and
-    /// the sidebar opens in it again (rule 2). A move alone (the same size)
-    /// is the person's and stands (rule 3).
-    public static func refitsAfterResize(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, displays: [CGRect]) -> Bool {
+    /// the sidebar was left off the screen): the sidebar beside the new frame
+    /// would be further outside the visible frames of the displays at its
+    /// height (`visible`) than it was beside the old one. Then the browser's
+    /// new frame is the pair's, and the sidebar opens in it again (rule 2).
+    /// Any other resize, over where the sidebar was too, is the person's and
+    /// stands (rule 3; review F1 of 1df43a3), and so does a move alone (the
+    /// same size).
+    public static func refitsAfterResize(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, visible displays: [CGRect]) -> Bool {
         guard abs(was.width - now.width) >= 2 || abs(was.height - now.height) >= 2 else { return false }
-        let old = strip(beside: was, width: width, side: side)
-        let over = now.intersection(old)
-        if !over.isNull, over.width > 1, over.height > 1 { return true }
-        return offScreen(strip(beside: now, width: width, side: side), displays: displays) > offScreen(old, displays: displays) + 1
+        let before = offScreen(strip(beside: was, width: width, side: side), displays: displays)
+        return offScreen(strip(beside: now, width: width, side: side), displays: displays) > before + 1
     }
 
     /// The narrowest and widest the sidebar gets.
