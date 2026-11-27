@@ -3263,6 +3263,34 @@ struct GuardCase: CustomStringConvertible {
         }
     }
 
+    /// The review of 33444c7, F1: a refit's slack for the system's settle
+    /// (2 pt) is the refit's alone. Someone else moving the window 40 pt
+    /// while the refit is carried out lets the refit go; the next show then
+    /// runs with no slack: a 2 pt change during it that none of its calls
+    /// makes is the person's, and their frame stands (the show given up, as
+    /// for any change of theirs), not taken for the system settling a tile.
+    @Test func anInterruptedRefitLeavesNoSlackForTheNextShow() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let tile = CGRect(x: 1027, y: 0, width: 1028, height: 1259)
+        for after in [0.08, 0.12, 0.2] {
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 400, y: 0, width: 1256, height: 1259), side: .right, width: 280,
+                                 behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open && GuardFrames.same(rig.fake.frame, CGRect(x: 400, y: 0, width: 976, height: 1259)), "opened \(rig.open) at \(rig.fake.frame)")
+            // Moved 40 pt left by someone else `after` the tile came to rest (`SidebarRig.rest`: 1 s after the change).
+            rig.fake.systemSettles(by: -40, at: rig.now + 1 + after)
+            rig.personSets(tile)
+            let step = "moved 40 pt \(Int(after * 1000)) ms after the tile came to rest"
+            #expect(!rig.open, "\(step): the refit wasn't let go (browser \(rig.fake.frame))")
+            // The next show: 2 pt over, 60 ms in, by no call of betterlink's.
+            let from = rig.fake.frame
+            rig.fake.systemSettles(by: 2, at: rig.now + 0.06)
+            rig.toggle()
+            #expect(!rig.open, "\(step): the show from \(from) took a 2 pt change for the system's: open, browser \(rig.fake.frame)")
+        }
+    }
+
     /// macOS tiling (Window › Move & Resize, or dragging to the screen's edge)
     /// to the left half or the top left quarter with the sidebar on the left:
     /// both horizontal edges move and the sidebar would be off the screen, so
