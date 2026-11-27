@@ -298,20 +298,20 @@ final class SidebarController: ObservableObject {
         var hung: Set<pid_t> = []
         var held: [pid_t] = []
         for pid in pids.sorted() {
-            // Each read and set may wait `placeCall`; none is begun that could end past the bound.
-            guard clock() - began + 2 * AXWindow.placeCall <= AXWindow.placeBound else { break }
+            // Its read, set and read back may each wait `placeCall`; none is begun that could end past the bound.
+            guard clock() - began + 3 * AXWindow.placeCall <= AXWindow.placeBound else { break }
             let h = EnhancedUI.shared.hold(pid, by: self, wait: AXWindow.placeCall)
             held.append(pid)
             if h.missed { hung.insert(pid) }
         }
-        // Time kept for setting each flag back.
-        let reserve = Double(held.filter { !hung.contains($0) }.count) * AXWindow.placeCall
+        // Time kept for setting each flag back and reading it back.
+        let reserve = Double(held.filter { !hung.contains($0) }.count) * 2 * AXWindow.placeCall
         let missed = AXWindow.placeNow(moves, hung: hung, began: began, reserve: reserve, clock: clock, pause: pause)
         for i in all {
             i.releaseFlag(wait: AXWindow.placeCall)
             if missed.contains(ObjectIdentifier(i.window.handle)) { i.letAlone() } else { i.unpair() }
         }
-        for pid in held { EnhancedUI.shared.release(pid, by: self, wait: AXWindow.placeCall) }
+        for pid in held { EnhancedUI.shared.release(pid, by: self, wait: AXWindow.placeCall, retries: 0) }
         return missed
     }
 

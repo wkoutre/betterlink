@@ -10,13 +10,18 @@ protocol EnhancedUIApp: AnyObject {
     /// The app's flag now: one Accessibility call. Nil when it has none, or
     /// didn't answer within `wait` seconds (`missed`).
     func read(_ pid: pid_t, wait: Double) -> Bool?
-    /// Sets it: one Accessibility call. False when the app didn't take it.
+    /// Sets it: one Accessibility call. True when the call succeeded, which
+    /// says nothing of whether it took: Chromium on macOS 27 answers every set
+    /// with kAXErrorNotImplemented (-25208) and takes it, so whether it took
+    /// is always read back.
     func set(_ pid: pid_t, _ on: Bool, wait: Double) -> Bool
     /// The last call got no answer in time: the app is hung or busy.
     var missed: Bool { get }
     /// When the process with this pid started, to tell it from a later
     /// process given the same pid. Nil when none runs.
     func launched(_ pid: pid_t) -> Date?
+    /// The last set's answer, for the trace.
+    var lastAnswer: Int32 { get }
 }
 
 /// Switches a browser's enhanced user interface off while betterlink moves
@@ -32,17 +37,24 @@ protocol EnhancedUIApp: AnyObject {
 /// - Right before the first set of a show, hide, new width, edge drag or
 ///   quit, the browser's flag is read (one call, never cached: something
 ///   may turn it on again between motions). Only when it is on is it set
-///   off (one call), and only once the flip is written down (below).
+///   off (one call), written down first (below), and read back (one call):
+///   the set's answer says nothing (Chromium on macOS 27 answers every set
+///   with -25208, kAXErrorNotImplemented, and takes it; a browser could
+///   answer success and not take it). What the read says decides.
 /// - Right after the motion's final target has landed (or the motion is
 ///   capped, taken over by someone else, given up, or the window closes),
-///   it is set back to what it was (one call). Never per frame, never for
-///   a motion that moves nothing, never when it was off already.
+///   it is set back to what it was and read back (one call each), once
+///   more if it didn't take. Never per frame, never for a motion that moves
+///   nothing, never when it was off already. Whenever a flag read on was
+///   read off after betterlink's set, it is set back.
 /// - Several of the browser's windows moving at once share one hold: the
 ///   flag goes back once the last of them is done.
 /// - Only the browser whose window is being moved is touched.
 ///
 /// Crash safety: before a flag is set off, the browser's pid, the time its
-/// process started and the value it had are written to `enhanced-ui.json`
+/// process started (the kernel's, `sysctl` KERN_PROC_PID: a browser started
+/// by a script or launchd has no LaunchServices launch date) and the value
+/// it had are written to `enhanced-ui.json`
 /// in betterlink's settings folder (this Mac's, never the sync folder), and
 /// removed once it is set back. If betterlink stops in between (a crash, a
 /// force quit), the next launch (`recover`) sets the flag back for each
@@ -50,7 +62,10 @@ protocol EnhancedUIApp: AnyObject {
 /// the same time. A pid since reused by another process started later, so
 /// it is never touched. A browser that doesn't answer when its flag is set
 /// back (hung) keeps its entry: the next hold of it sets it back after its
-/// motion, and the next launch does if none comes.
+/// motion, and the next launch does if none comes. A flip that can't be
+/// written down (no start time, the folder not writable) is made all the
+/// same, and the trace says so: the flag is still set back when the motion
+/// ends, only a crash in between would leave it off.
 @MainActor
 final class EnhancedUI {
     static let shared = EnhancedUI(app: AXEnhancedUIApp(),
@@ -96,25 +111,30 @@ final class EnhancedUI {
             holds[pid] = h
             return Held(off: h.off, missed: false)
         }
-        let began = CACurrentMediaTime()
-        let was = app.read(pid, wait: wait)
+        let was = timedRead(pid, wait: wait, why: "read")
         let missed = app.missed
-        DragTrace.log(String(format: "enhanced UI: pid %d read %@ in %.2f ms", pid, missed ? "no answer" : was.map { "\($0)" } ?? "none",
-                             (CACurrentMediaTime() - began) * 1000))
         // Set off by an earlier hold and not set back (the app didn't answer then): on, as far as is known.
         let owes = owed.contains(pid)
         var h = Hold(was: owes ? true : was, turnedOff: false, owners: [ObjectIdentifier(owner)], off: !missed && was != true)
-        if owes, !missed, was == false {
+        if missed {
+            DragTrace.log("enhanced UI: pid \(pid) not held: no answer to the read (hung or busy); its windows are moved with it as it is")
+        } else if was == true {
+            if !write(adding: pid) {
+                DragTrace.log("enhanced UI: pid \(pid) set off without a record for a crash (no start time, or \(journal.path) not writable)")
+            }
+            timedSet(pid, false, wait: wait)
+            let now = timedRead(pid, wait: wait, why: "read back")
+            // What the read says decides, not the set's answer. No answer: it may still land, so it is set back all the same.
+            h.turnedOff = now == false || app.missed
+            h.off = now == false
+            if !h.turnedOff {
+                DragTrace.log("enhanced UI: pid \(pid) still on after the set: its windows' sets stay animated")
+                if !owes { write(removing: pid) }
+            }
+        } else if owes, was == false {
             h.turnedOff = true
-        } else if was == true, !missed, write(adding: pid) {
-            let at = CACurrentMediaTime()
-            let took = app.set(pid, false, wait: wait)
-            DragTrace.log(String(format: "enhanced UI: pid %d set off %@ in %.2f ms", pid, took ? "taken" : app.missed ? "no answer" : "refused",
-                                 (CACurrentMediaTime() - at) * 1000))
-            // A set that got no answer may still land: set back all the same.
-            h.turnedOff = took || app.missed
-            h.off = took
-            if !h.turnedOff, !owes { write(removing: pid) }
+        } else {
+            DragTrace.log("enhanced UI: pid \(pid) \(was == false ? "already off" : "has none"): nothing set")
         }
         if h.turnedOff { owed.remove(pid) }
         holds[pid] = h
@@ -122,21 +142,45 @@ final class EnhancedUI {
     }
 
     /// `owner`'s motion is over. The last of the app's holds sets the flag
-    /// back to what it was, when the hold set it off.
-    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit) {
+    /// back to what it was, when the hold set it off: read back, and set once
+    /// more if it didn't take (`retries`).
+    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit, retries: Int = 1) {
         guard var h = holds[pid], h.owners.remove(ObjectIdentifier(owner)) != nil else { return }
         guard h.owners.isEmpty else { holds[pid] = h; return }
         holds[pid] = nil
         guard h.turnedOff else { return }
+        let want = h.was ?? true
+        for attempt in 0...retries {
+            timedSet(pid, want, wait: wait)
+            let now = timedRead(pid, wait: wait, why: "read back")
+            if now == want {
+                write(removing: pid)
+                return
+            }
+            DragTrace.log("enhanced UI: pid \(pid) is \(now.map { "\($0)" } ?? "unread") after setting it back to \(want)\(attempt < retries ? ": once more" : "")")
+            if app.missed { break }
+        }
+        owed.insert(pid)
+    }
+
+    @discardableResult
+    private func timedRead(_ pid: pid_t, wait: Double, why: String) -> Bool? {
         let began = CACurrentMediaTime()
-        let took = app.set(pid, h.was ?? true, wait: wait)
-        DragTrace.log(String(format: "enhanced UI: pid %d set back to %@ %@ in %.2f ms", pid, "\(h.was ?? true)",
-                             took ? "taken" : app.missed ? "no answer" : "refused", (CACurrentMediaTime() - began) * 1000))
-        if took { write(removing: pid) } else { owed.insert(pid) }
+        let v = app.read(pid, wait: wait)
+        DragTrace.log(String(format: "enhanced UI: pid %d %@ %@ in %.2f ms", pid, why, app.missed ? "no answer" : v.map { "\($0)" } ?? "none",
+                             (CACurrentMediaTime() - began) * 1000))
+        return v
+    }
+
+    private func timedSet(_ pid: pid_t, _ on: Bool, wait: Double) {
+        let began = CACurrentMediaTime()
+        let ok = app.set(pid, on, wait: wait)
+        DragTrace.log(String(format: "enhanced UI: pid %d set %@, answer %d%@, in %.2f ms", pid, on ? "on" : "off", app.lastAnswer,
+                             ok ? "" : app.missed ? " (no answer)" : " (read back to see whether it took)", (CACurrentMediaTime() - began) * 1000))
     }
 
     /// At launch: sets back every flag a betterlink that stopped mid-motion
-    /// left off, for each browser that is still the same process.
+    /// left off, for each browser that is still the same process. Read back.
     func recover() {
         let entries = read()
         guard !entries.isEmpty else { return }
@@ -146,9 +190,9 @@ final class EnhancedUI {
                 DragTrace.log("enhanced UI: pid \(e.pid) recorded off, no longer that process: left alone")
                 continue
             }
-            let took = app.set(e.pid, e.was, wait: AXWindow.callLimit)
-            DragTrace.log("enhanced UI: pid \(e.pid) recorded off, set back to \(e.was) at launch: \(took ? "taken" : "no answer")")
-            if !took { kept.append(e) }
+            timedSet(e.pid, e.was, wait: AXWindow.callLimit)
+            let now = timedRead(e.pid, wait: AXWindow.callLimit, why: "read back at launch")
+            if now != e.was { kept.append(e) }
         }
         save(kept)
     }
@@ -208,6 +252,7 @@ final class EnhancedUI {
 final class AXEnhancedUIApp: EnhancedUIApp {
     private static let attribute = "AXEnhancedUserInterface" as CFString
     private(set) var missed = false
+    private(set) var lastAnswer: Int32 = 0
 
     private func element(_ pid: pid_t, _ wait: Double) -> AXUIElement {
         let app = AXUIElementCreateApplication(pid)
@@ -226,8 +271,18 @@ final class AXEnhancedUIApp: EnhancedUIApp {
     func set(_ pid: pid_t, _ on: Bool, wait: Double) -> Bool {
         let answer = AXUIElementSetAttributeValue(element(pid, wait), Self.attribute, (on ? kCFBooleanTrue : kCFBooleanFalse) as CFTypeRef)
         missed = answer == .cannotComplete
+        lastAnswer = answer.rawValue
         return answer == .success
     }
 
-    func launched(_ pid: pid_t) -> Date? { NSRunningApplication(processIdentifier: pid)?.launchDate }
+    /// When the process started, from the kernel (`kp_proc.p_starttime`):
+    /// every process has one, whoever started it.
+    func launched(_ pid: pid_t) -> Date? {
+        var info = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.stride
+        var mib: [Int32] = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        guard sysctl(&mib, u_int(mib.count), &info, &size, nil, 0) == 0, size > 0, info.kp_proc.p_pid == pid else { return nil }
+        let t = info.kp_proc.p_starttime
+        return Date(timeIntervalSince1970: Double(t.tv_sec) + Double(t.tv_usec) / 1_000_000)
+    }
 }

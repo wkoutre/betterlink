@@ -141,13 +141,20 @@ struct BrowserBehaviour: CustomStringConvertible {
 /// The browsers' apps as betterlink's `EnhancedUI` sees them: each app's
 /// AXEnhancedUserInterface by pid, every read and set of it, and the
 /// process's start time. A hung browser's calls wait out their time and get
-/// no answer, as its windows' do.
+/// no answer, as its windows' do. A set answers -25208
+/// (kAXErrorNotImplemented) and takes, as Chromium on macOS 27 does;
+/// `stuck`: it answers that and doesn't take; `ignores`: it answers success
+/// and doesn't take.
 @MainActor
 final class FakeApps: EnhancedUIApp {
     static let shared = FakeApps()
     var flags: [pid_t: Bool] = [:]
     var stuck: Set<pid_t> = []
+    var ignores: Set<pid_t> = []
     var launches: [pid_t: Date] = [:]
+    /// Processes with no start time to be had.
+    var unstarted: Set<pid_t> = []
+    private(set) var lastAnswer: Int32 = 0
     /// Every call, in order: a read (nil) or the value set.
     private(set) var calls: [(pid: pid_t, set: Bool?)] = []
     private(set) var missed = false
@@ -161,7 +168,7 @@ final class FakeApps: EnhancedUIApp {
     /// Forgets the apps of the cases before (their fake browsers are gone with their rigs).
     /// Several rigs that are windows of one browser: the first resets, the others pass `freshApps: false`.
     func reset() {
-        flags = [:]; stuck = []; calls = []; launches = [:]
+        flags = [:]; stuck = []; ignores = []; calls = []; launches = [:]; unstarted = []
         browsers = [:]
     }
 
@@ -179,13 +186,15 @@ final class FakeApps: EnhancedUIApp {
 
     func set(_ pid: pid_t, _ on: Bool, wait: Double) -> Bool {
         calls.append((pid, on))
-        if hung(pid, wait) { return false }
+        if hung(pid, wait) { lastAnswer = -25204; return false }
+        if ignores.contains(pid) { lastAnswer = 0; return true }
+        lastAnswer = -25208
         if !on, stuck.contains(pid) { return false }
         flags[pid] = on
-        return true
+        return false
     }
 
-    func launched(_ pid: pid_t) -> Date? { launches[pid] ?? Date(timeIntervalSince1970: 1_000_000) }
+    func launched(_ pid: pid_t) -> Date? { unstarted.contains(pid) ? nil : launches[pid] ?? Date(timeIntervalSince1970: 1_000_000) }
 }
 
 /// A browser window as macOS and a browser treat the sidebar's requests:
@@ -1289,13 +1298,12 @@ struct RuleCheck {
         let calls = apps.calls[min(rig.appCallsBefore, apps.calls.count)...]
         if let other = calls.first(where: { $0.pid != pid }) { problems.append("\(step): the enhanced UI of pid \(other.pid) touched, not this browser's") }
         if !rig.flagBefore, calls.contains(where: { $0.set != nil }) { problems.append("\(step): the enhanced UI was off, and was set: \(calls.map(\.set))") }
-        // Off, back, off, back: never off twice without back between, never back without off.
+        // Off, back, off, back: never set off again before it was set back (a set back may be sent twice).
         var off = false
         for c in calls {
             guard let v = c.set else { continue }
-            if v == off { off = !v } else if !v || apps.stuck.contains(pid) { continue } else {
-                problems.append("\(step): the enhanced UI set \(v) twice in a row: \(calls.compactMap(\.set))"); break
-            }
+            if !v, off, !apps.stuck.contains(pid) { problems.append("\(step): the enhanced UI set off twice in a row: \(calls.compactMap(\.set))"); break }
+            off = !v
         }
         let offs = calls.filter { $0.set == false }.count
         if offs > 4 * max(1, rig.presses) { problems.append("\(step): the enhanced UI set off \(offs) times for \(rig.presses) press(es)") }
