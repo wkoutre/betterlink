@@ -323,9 +323,10 @@ extension AgentCommand {
             let wanted = to.lowercased()
             var hits = labels.filter { $0.1.lowercased() == wanted }
             if hits.isEmpty {
-                hits = labels.filter { s, label in
-                    TabsModel.profileName(of: s)?.lowercased() == wanted || s.browser.lowercased() == wanted
-                        || Browser.known.first(where: { $0.name == s.browser })?.bundleId.lowercased() == wanted
+                hits = labels.filter { hit in
+                    let other = hit.0
+                    return TabsModel.profileName(of: other)?.lowercased() == wanted || other.browser.lowercased() == wanted
+                        || Browser.known.first(where: { $0.name == other.browser })?.bundleId.lowercased() == wanted
                 }
             }
             let names = labels.map(\.1).joined(separator: ", ")
@@ -333,9 +334,10 @@ extension AgentCommand {
                 throw TabError(message: others.isEmpty ? "No other browser profile is open with the Tabs extension."
                                                        : "No open browser profile \"\(to)\". Open now: \(names).")
             }
-            guard hits.count == 1, let (target, label) = hits.first else {
+            guard hits.count == 1, let hit = hits.first else {
                 throw TabError(message: "\"\(to)\" names more than one open profile: \(hits.map(\.1).joined(separator: ", ")). Give the whole name.")
             }
+            let (target, label) = hit
             let open = Command.open(page.url)
             hub.send(open, to: target.socketPath)
             guard let answer = acks.wait(open.id, seconds: 5) else {
