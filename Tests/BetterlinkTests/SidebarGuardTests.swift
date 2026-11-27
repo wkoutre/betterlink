@@ -3610,11 +3610,15 @@ struct GuardCase: CustomStringConvertible {
         #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
     }
 
-    /// Two refusals in a row of a window at the same width, its browser's
-    /// size never moving: that width is kept as the browser's minimum, and
-    /// the third press refuses before sending anything, the note at once and
-    /// no panel over the browser. One refusal alone keeps nothing, and a show
-    /// that opens between two refusals starts the count again.
+    /// Two refusals in a row of a window at the same width as clamped (a
+    /// left show: its position landed, its size never moved): that width is
+    /// kept as the browser's minimum, and the third press asks its size
+    /// alone, no position moved, refused at the clamp's frames with no panel
+    /// over the browser. On the right a set is its size alone, and one that
+    /// doesn't move is refused as unmoved, nothing landed, which teaches
+    /// nothing: the third press asks the browser as the first did. One
+    /// refusal alone keeps nothing, and a show that opens between two
+    /// refusals starts the count again.
     @Test func twoRefusalsInARowKeepTheMinimum() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
@@ -3640,18 +3644,151 @@ struct GuardCase: CustomStringConvertible {
                 let press = rig.pressedAt.first
                 let sent = rig.fake.sent.dropFirst(press?.calls ?? 0)
                 let said = SidebarRig.notices.dropFirst(notes).map(\.0)
-                if between {
-                    // Only one refusal since the open: asked again.
-                    if sent.isEmpty { problems.append("\(step): the press after one refusal since the open sent nothing") }
+                if between || side == .right {
+                    // Only one refusal since the open, or none learned from (nothing landed): asked again, all of it.
+                    if !sent.contains(where: { $0.size != nil }) { problems.append("\(step): the next press didn't ask the size") }
                 } else {
-                    if !sent.isEmpty { problems.append("\(step): the third press sent \(sent.count) calls") }
-                    if let t = SidebarRig.noticeTimes.dropFirst(notes).first, let p = press?.t, t - p > 1e-6 { problems.append("\(step): the note \(Int((t - p) * 1000)) ms after the press") }
+                    // The minimum kept: the size asked alone, refused at the clamp's frames, the window never moved.
+                    let noted = SidebarRig.noticeTimes.dropFirst(notes).first ?? .infinity
+                    let asked = sent.filter { $0.t < noted - 1e-9 }
+                    if !asked.contains(where: { $0.size != nil }) || asked.contains(where: { $0.position != nil }) {
+                        problems.append("\(step): the third press asked \(asked.map { "\($0)" }), not its size alone")
+                    }
+                    if let p = press?.t, noted - p > WindowSteps.clampWait + WindowSteps.clampResendWait + 3.0 / 120 {
+                        problems.append("\(step): the note \(Int((noted - p) * 1000)) ms after the press")
+                    }
                     if rig.panelShows.contains(where: { $0.ordered && $0.revealed > 0.5 }) { problems.append("\(step): the third press showed the panel") }
+                    if rig.samples.contains(where: { !GuardFrames.same($0.browser, start) }) { problems.append("\(step): the third press moved the window") }
                 }
                 if rig.open || said != [.noSize] { problems.append("\(step): last press: open \(rig.open), notes \(said)") }
                 if !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended at \(rig.fake.frame)") }
             }
         }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A browser that is only slow (busy 800 ms: nothing of the show's set
+    /// lands) is refused as unmoved, twice in a row at one width; then it
+    /// answers at once. Nothing landed teaches nothing: the third press asks
+    /// it, all of it, and opens (review finding F4: the whole width kept as
+    /// its minimum, every later show refused before anything was sent).
+    @Test func aSlowBrowserRefusedTwiceThenAnsweringAtOnceOpens() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        for side in SidebarSide.allCases {
+            var b = BrowserBehaviour()
+            b.timing = .busy
+            b.lateBy = 0.8
+            let start = CGRect(x: 600, y: 0, width: 1200, height: 1259)
+            let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b)
+            rig.toggle()
+            if rig.open { problems.append("\(side): the first slow press opened") }
+            rig.toggle()
+            if rig.open { problems.append("\(side): the second slow press opened") }
+            if !GuardFrames.same(rig.fake.frame, start) { problems.append("\(side): after two refusals at \(rig.fake.frame)") }
+            rig.fake.behaviour = BrowserBehaviour()
+            rig.toggle()
+            let sent = rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0)
+            let want = SidebarGeometry.opened(start, width: 280, side: side)
+            if sent.isEmpty { problems.append("\(side): the third press sent nothing") }
+            if !rig.open || !GuardFrames.same(rig.fake.frame, want) {
+                problems.append("\(side): the third press ended \(rig.open ? "open" : "closed") at \(rig.fake.frame), notes \(SidebarRig.notices.map(\.0))")
+            }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A left show of a window at its browser's minimum, refused as clamped
+    /// twice in a row (its position landed, its size never moved): that
+    /// width is kept as the browser's minimum. Pressed a third time, the
+    /// browser is still asked, its size alone (no position moved first): not
+    /// moving, its size is sent once more four frames on and the show is
+    /// refused six frames after that, the window's frame never changing and
+    /// nothing of the panel over it.
+    @Test func aLearnedMinimumAsksTheSizeAloneAndRefusesWithNoShift() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        let start = CGRect(x: 600, y: 0, width: 800, height: 1259)
+        let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour(minWidth: 800))
+        rig.toggle()
+        rig.toggle()
+        let notes = SidebarRig.notices.count
+        rig.toggle()
+        let press = rig.pressedAt.first
+        let pressed = press?.t ?? 0
+        let said = SidebarRig.notices.dropFirst(notes).map(\.0)
+        let noted = SidebarRig.noticeTimes.dropFirst(notes).first ?? .infinity
+        let asked = rig.fake.sent.dropFirst(press?.calls ?? 0).filter { $0.t < noted - 1e-9 }
+        if !asked.contains(where: { $0.size != nil }) { problems.append("third press: the size not asked") }
+        if asked.contains(where: { $0.position != nil }) { problems.append("third press: a position sent before the refusal: \(asked.map { "\($0)" })") }
+        if rig.open || said != [.noSize] { problems.append("third press: open \(rig.open), notes \(said)") }
+        let budget = WindowSteps.clampWait + WindowSteps.clampResendWait + 3.0 / 120
+        if noted - pressed > budget { problems.append(String(format: "third press refused %.0f ms after the press, more than %.0f", (noted - pressed) * 1000, budget * 1000)) }
+        if let moved = rig.samples.first(where: { !GuardFrames.same($0.browser, start) }) { problems.append("third press: the window at \(moved.browser) at \(moved.t - pressed) s") }
+        if rig.panelShows.contains(where: { $0.ordered && $0.over > 0.5 }) || rig.samples.contains(where: { $0.over > 0.5 }) { problems.append("third press: the panel over the browser") }
+        if !GuardFrames.same(rig.fake.frame, start) { problems.append("third press: ended at \(rig.fake.frame)") }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A minimum learned from two clamped refusals, then the browser does
+    /// take the size after all: the third press opens, and the minimum is
+    /// forgotten, so the fourth (after a hide) goes the normal way, its set
+    /// sent whole under the panel, position first.
+    @Test func aLearnedMinimumIsForgottenWhenTheBrowserShrinksAfterAll() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        let start = CGRect(x: 600, y: 0, width: 800, height: 1259)
+        let want = SidebarGeometry.opened(start, width: 280, side: .left)
+        let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour(minWidth: 800))
+        rig.toggle()
+        rig.toggle()
+        rig.fake.behaviour = BrowserBehaviour()
+        rig.toggle()
+        if !rig.open || !GuardFrames.same(rig.fake.frame, want) { problems.append("third press: ended \(rig.open ? "open" : "closed") at \(rig.fake.frame), notes \(SidebarRig.notices.map(\.0))") }
+        rig.toggle()
+        if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("hide: ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
+        rig.toggle()
+        let sent = rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0)
+        if sent.first?.position == nil { problems.append("fourth press: not the normal set, its first call \(sent.first.map { "\($0)" } ?? "none")") }
+        if !rig.panelShows.contains(where: { $0.ordered && $0.revealed > 0.5 && $0.t < (sent.first?.t ?? .infinity) - 1e-9 }) {
+            problems.append("fourth press: no panel slid over before the set")
+        }
+        if !rig.open || !GuardFrames.same(rig.fake.frame, want) { problems.append("fourth press: ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// A left show at a learned minimum asks the size alone, which brings
+    /// the browser's far edge in until its position follows: the position
+    /// goes the moment the window is seen at the size, in the same tick,
+    /// with no wait for it to hold still.
+    @Test func aLeftShowAtALearnedMinimumSendsThePositionTheMomentTheSizeLands() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        var problems: [String] = []
+        let start = CGRect(x: 600, y: 0, width: 800, height: 1259)
+        let want = SidebarGeometry.opened(start, width: 280, side: .left)
+        let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour(minWidth: 800))
+        rig.toggle()
+        rig.toggle()
+        var b = BrowserBehaviour()
+        b.timing = .late
+        b.lateBy = 0.05
+        rig.fake.behaviour = b
+        rig.toggle()
+        let sent = Array(rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0))
+        if sent.first?.size == nil || sent.first?.position != nil { problems.append("the first call not the size alone: \(sent.first.map { "\($0)" } ?? "none")") }
+        let landed = rig.samples.first { abs($0.browser.width - want.width) < 1 }
+        let placed = sent.first { $0.position != nil }
+        if let l = landed, let p = placed {
+            if abs(p.t - l.t) > 1e-6 { problems.append(String(format: "the position sent %.0f ms after the size was seen landed", (p.t - l.t) * 1000)) }
+            if abs(l.browser.minX - want.minX) > 1 { problems.append("at the tick the size landed the window at \(l.browser)") }
+        } else {
+            problems.append("landed \(landed.map { "\($0.t)" } ?? "never"), position \(placed.map { "\($0.t)" } ?? "never sent")")
+        }
+        if !rig.open || !GuardFrames.same(rig.fake.frame, want) { problems.append("ended \(rig.open ? "open" : "closed") at \(rig.fake.frame), notes \(SidebarRig.notices.map(\.0))") }
         #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
     }
 

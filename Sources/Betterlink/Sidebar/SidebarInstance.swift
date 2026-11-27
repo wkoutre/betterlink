@@ -237,13 +237,18 @@ final class SidebarInstance: ObservableObject {
     private var lastCapped = false
     /// The last steps were a show's set refused as unmoved (`WindowSteps.unmoved`): its size may still land.
     private var lastUnmoved = false
-    /// Refusals in a row of this window as unmoved (or clamped), at one
-    /// width: two keep that width as its browser's minimum (`stops`,
-    /// `knownStop`); one alone keeps nothing, since a browser may only have
-    /// been slow. Any other end of a show starts the count again.
+    /// And refused as clamped: its position landed, its size never moved (`WindowSteps.clamped`).
+    private var lastClamped = false
+    /// Refusals in a row of this window as clamped, at one width: two keep
+    /// that width as its browser's minimum (`stops`, `knownStop`); one alone
+    /// keeps nothing, since a browser may only have been slow. A refusal
+    /// where nothing landed (a busy browser's) teaches nothing and leaves the
+    /// count as it was; any other end of a show starts it again.
     private var unmovedRefusals: (width: CGFloat, count: Int)?
-    /// `stops` was kept from two refusals in a row: a show of a window that
-    /// wide is refused before anything is sent.
+    /// `stops` was kept from two clamped refusals in a row: a show of a
+    /// window that wide still asks the browser, its size alone first, no
+    /// position moved (`WindowSteps.sizeAlone`), and not moving it is refused
+    /// with nothing to put back. Any open forgets it.
     private var knownStop = false
     /// The last steps ended because the window stopped short (`WindowSteps.stoppedShort`).
     private var lastStoppedShort = false
@@ -396,12 +401,29 @@ final class SidebarInstance: ObservableObject {
     /// back to back (`WindowSet`), and `WindowSteps` watch it land and finish
     /// from there; else the steps move it one call at a time.
     private func move(to frame: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, patience: Double = WindowSteps.timeout,
-                      deadline: Double? = nil, oneSet: Bool = false, then: @escaping () -> Void = {}) {
+                      deadline: Double? = nil, oneSet: Bool = false, sizeAlone: Bool = false, then: @escaping () -> Void = {}) {
         // Opening (only an open has `widest`): what this window's browser was seen to stop at.
         let stops = widest == nil ? nil : self.stops
         let earlier = steps
         afterSteps = then
         flagWatch = nil // this motion's own landing decides now
+        // A show at a minimum kept from two clamped refusals: its size alone, and its position (if it moves) the moment
+        // the size is seen to land (`WindowSteps.sizeAlone`). Something of betterlink's still on its way: the steps
+        // below, which ask a narrower size first all the same.
+        if sizeAlone, earlier == nil {
+            holdFlag()
+            let seen = onScreenFrame
+            let calls = WindowSet.calls(from: seen, to: frame, keep: keep, right: rightEdge(of: seen))
+            let follows = calls.contains { if case .position = $0 { true } else { false } }
+            var s = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops,
+                                sending: .size(frame), from: seen, at: clock(), placeFollows: follows, sizeAlone: true)
+            s.patience = patience
+            s.slack = systemSlack
+            steps = s
+            window.handle.send(AXWindow.sets(.size(frame), of: window.handle))
+            DragTrace.log("set: window \(window.number) from \(seen) to \(frame), its size alone\(follows ? ", the position the moment the size lands" : "")")
+            return runTicker()
+        }
         if oneSet, earlier == nil {
             holdFlag()
             let seen = onScreenFrame
@@ -531,11 +553,13 @@ final class SidebarInstance: ObservableObject {
         }
         if let u = s.unmoved {
             DragTrace.log(String(format: "open: window %d %@: set sent at %.3f, its size sent once more at %.3f, the window last changed %@, nothing since in %.0f ms: refused, its old frame sent back",
-                                 window.number, s.clamped ? "clamped (its position landed, its size didn't)" : "unmoved", u.set, u.resent,
-                                 u.lastChange.map { String(format: "at %.3f", $0) } ?? "never", (s.clamped ? WindowSteps.clampResendWait : WindowSteps.unmovedWait) * 1000))
+                                 window.number, s.clamped ? "clamped (its position landed, its size didn't)" : s.sizeAlone ? "unmoved (its size asked alone at its kept minimum)" : "unmoved",
+                                 u.set, u.resent, u.lastChange.map { String(format: "at %.3f", $0) } ?? "never",
+                                 (s.clamped || s.sizeAlone ? WindowSteps.clampResendWait : WindowSteps.unmovedWait) * 1000))
         }
         lastSlowest = s.slowest
         lastUnmoved = s.unmoved != nil
+        lastClamped = s.clamped
         lastCapped = s.capped
         lastStoppedShort = s.stoppedShort
         lastClean = s.clean
@@ -774,15 +798,10 @@ final class SidebarInstance: ObservableObject {
     /// `slide`: the panel slides in over the browser first, and the browser's
     /// set goes once it covers (`stepPanel`).
     private func open(from frame: CGRect, slide: Bool) {
-        // Refused twice in a row at this width, its browser's size never moving: refused before anything is sent,
-        // the note at once, nothing of the panel over the browser.
-        if slide, knownStop, let s = stops, frame.width <= s + 0.5 {
-            DragTrace.log("open: window \(window.number) at \(Int(frame.width)) pt, its browser's minimum kept from two refusals: refused, nothing sent")
-            hidden = true
-            sidebar.refused(self)
-            Self.tell(.noSize, frame)
-            return
-        }
+        // Refused as clamped twice in a row at this width: the browser is still asked, its size alone, no position
+        // moved first, nothing of the panel over it (`cover(of:)` is none), so not moving there is nothing to put back.
+        let sizeAlone = slide && knownStop && stops.map { frame.width <= $0 + 0.5 } ?? false
+        if sizeAlone { DragTrace.log("open: window \(window.number) at \(Int(frame.width)) pt, its browser's minimum kept from two clamped refusals: its size asked alone") }
         width = chosenWidth
         // This window's browser was seen to stop at a width that leaves the sidebar less than chosen, but room: the
         // sidebar opens that wide, the browser asked for the width it stopped at, so the panel and its seam slide in at
@@ -807,7 +826,7 @@ final class SidebarInstance: ObservableObject {
         // asked first (`WindowSteps`), and not moving, it is refused at once; one set's position would move it for nothing.
         let oneSet = slide && cover(of: frame) >= 0.5
         let set: () -> Void = { [weak self] in
-            self?.move(to: browser, keep: side, widest: widest, deadline: o.ends, oneSet: oneSet) { self?.answer() }
+            self?.move(to: browser, keep: side, widest: widest, deadline: o.ends, oneSet: oneSet, sizeAlone: sizeAlone) { self?.answer() }
         }
         guard slide else {
             set()
@@ -923,20 +942,29 @@ final class SidebarInstance: ObservableObject {
         if lastCapped { unmovedRefusals = nil; return refuse(o, real: real, .noSize) }
         // Took part and stopped: as far as it goes. (Not moved at all and taken as stopped, `stops` already says so.)
         if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { stops = real.width }
-        // Stopped short where it was seen to stop before: no room, though it didn't move.
+        // Refused as clamped (its position landed, its size never moved): counted toward its browser's minimum. One
+        // where nothing landed (a busy browser's, or a size asked alone at a minimum already kept) teaches nothing.
         if lastUnmoved {
-            let w = o.frame.width
-            let n = unmovedRefusals.map { abs($0.width - w) < 1 ? $0.count + 1 : 1 } ?? 1
-            unmovedRefusals = (w, n)
-            if n >= 2 {
-                stops = w
-                knownStop = true
-                DragTrace.log("open: window \(window.number) refused as unmoved twice in a row at \(Int(w)) pt: kept as its browser's minimum")
+            if lastClamped {
+                let w = o.frame.width
+                let n = unmovedRefusals.map { abs($0.width - w) < 1 ? $0.count + 1 : 1 } ?? 1
+                unmovedRefusals = (w, n)
+                if n >= 2 {
+                    stops = w
+                    knownStop = true
+                    DragTrace.log("open: window \(window.number) refused as clamped twice in a row at \(Int(w)) pt: kept as its browser's minimum")
+                }
             }
         } else {
             unmovedRefusals = nil
         }
         if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastUnmoved ? .noSize : lastStoppedShort ? .noRoom : notice) }
+        // Opened: a minimum kept from refusals is forgotten, and so is any it went narrower than.
+        if knownStop {
+            knownStop = false
+            DragTrace.log("open: window \(window.number) opened at \(Int(real.width)) pt: its browser's kept minimum forgotten")
+        }
+        if let s = stops, real.width < s - 1 { stops = nil }
         let room = o.frame.width - real.width
         // Its far edge where it was, at the width it really has.
         var at = real

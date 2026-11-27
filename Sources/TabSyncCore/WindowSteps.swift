@@ -167,6 +167,15 @@ public struct WindowSteps: Sendable {
     /// `clampWait` after the position landed, and unchanged `clampResendWait`
     /// after that, refused as clamped (`clamped`).
     private var refusesUnmoved = false
+    /// A show of a window at a width its browser was kept to stop at (two
+    /// clamped refusals in a row): its size asked alone, no position moved
+    /// first (`init(sending:sizeAlone:)`). Not moving, it is decided at the
+    /// clamp's frames: sent once more `clampWait` after the set, and
+    /// unchanged `clampResendWait` after that, refused as unmoved. Seen at
+    /// the size, its position (`follows`) goes at once, in the same look: a
+    /// left show's size alone keeps the top left, so its far edge is in
+    /// until the position lands.
+    public private(set) var sizeAlone = false
     private var setAt = 0.0
     /// Refused that way: when the set was sent, when its size was sent once
     /// more, and when the window last changed before that (nil: never), for
@@ -301,10 +310,11 @@ public struct WindowSteps: Sendable {
     /// that stops at its minimum, or stops short, is checked as then.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
                 stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil, placeFollows: Bool = false,
-                refusesUnmoved: Bool = false) {
+                refusesUnmoved: Bool = false, sizeAlone: Bool = false) {
         self.init(target: target, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
         opened = true
-        self.refusesUnmoved = refusesUnmoved
+        self.refusesUnmoved = refusesUnmoved || sizeAlone
+        self.sizeAlone = sizeAlone
         setAt = at
         self.between = between
         follows = placeFollows
@@ -424,6 +434,15 @@ public struct WindowSteps: Sendable {
                 s.moved = true
                 sent = s
             }
+            // A size asked alone at a kept minimum (`sizeAlone`), seen at the size: its position goes in this same look,
+            // and the two are then one whole frame in flight from where the window was, waited for as a show's set is
+            // (held still before it counts, a browser that widens itself back to its minimum seen as its own, and
+            // clamped if its size ends where it was).
+            if sizeAlone, follows, !foreign, s.moved, case .size = s.call, Self.reached(s.call, seen) {
+                follows = false
+                sent = (.frame(target), s.at, seen, now, s.from, true, nil, false)
+                return .position(target)
+            }
             // A position (or a whole frame's) on its way, the size where it was: a pure move, short of where the
             // position was sent by more than a point (not `WindowSet`'s nudge). An animation of betterlink's (macOS 27's,
             // which can hold partway) goes on to the position; held there `heldMoveWait`, it is someone else's (the
@@ -462,18 +481,18 @@ public struct WindowSteps: Sendable {
                 more += 1
                 return .size(f)
             }
-            // A show's narrower size not moved at all (`refusesUnmoved`).
+            // A show's narrower size not moved at all (`refusesUnmoved`); asked alone at a kept minimum, at the clamp's frames.
             if refusesUnmoved, !foreign, Self.narrows(s.call, s.from), Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height) {
                 if let c = s.checkedAt {
                     if s.changed <= c + 1e-9 {
-                        guard now - c >= Self.unmovedWait - 1e-9 else { return nil }
+                        guard now - c >= (sizeAlone ? Self.clampResendWait : Self.unmovedWait) - 1e-9 else { return nil }
                         unmoved = (setAt, c, lastChangeBeforeResend)
                         stoppedShort = true
                         done = true
                         return nil
                     }
                 } else {
-                    guard now - s.changed >= Self.still - 1e-9 else { return nil }
+                    guard now - s.changed >= (sizeAlone ? Self.clampWait : Self.still) - 1e-9 else { return nil }
                     lastChangeBeforeResend = s.moved ? s.changed : nil
                     s.checkedAt = now
                     s.changed = now
