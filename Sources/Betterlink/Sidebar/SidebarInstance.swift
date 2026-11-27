@@ -743,6 +743,12 @@ final class SidebarInstance: ObservableObject {
     /// set goes once it covers (`stepPanel`).
     private func open(from frame: CGRect, slide: Bool) {
         width = chosenWidth
+        // This window's browser was seen to stop at a width that leaves the sidebar less than chosen, but room: the
+        // sidebar opens that wide, the browser asked for the width it stopped at, so the panel and its seam slide in at
+        // the width they end at, and the set lands whole (seed 20261126, case 4440: asked 1 pt narrower than it went
+        // again, the seam shown only once it had stopped, 317 ms later).
+        let room = cover(of: frame)
+        if slide, room >= SidebarGeometry.widths.lowerBound, room < CGFloat(width) - 0.5 { width = Double(room) }
         let side = sidebar.side
         let browser = SidebarGeometry.opened(frame, width: CGFloat(width), side: side)
         let o = Opening(frame: frame, asked: browser, ends: cap)

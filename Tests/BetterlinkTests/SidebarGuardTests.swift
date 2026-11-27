@@ -1351,11 +1351,25 @@ struct RuleCheck {
         let allowed = offScreen(before, displays) + 2
         let b = rig.fake.behaviour
         let left = rig.side == .left
-        let frames = rig.fake.history[mark...].filter { !$0.byPerson }.map(\.frame).map { f -> CGRect in
-            var f = f
-            if left, f.maxX > before.maxX, f.minX < before.maxX { f.size.width = before.maxX - f.minX }
-            if !left, f.minX < before.minX, f.maxX > before.minX { f.size.width = f.maxX - before.minX; f.origin.x = before.minX }
-            return f
+        // Pushed out past where it was: where the set that pushed it began, the far edge of the last frame within where
+        // the step began (that frame, or one during it: the guard at seed 20261126, case 855, a show pressed
+        // during a hide pushed the far edge out from where the hide had put it). A window nudged 1 pt past that edge
+        // (`WindowSet.nudgeBy`, a window 1 pt wide included) is pushed out too.
+        let all = Array(rig.fake.history)
+        var frames: [CGRect] = []
+        var edge = left ? before.maxX : before.minX
+        let slack = WindowSet.nudgeBy + 0.5
+        for i in mark..<all.count where !all[i].byPerson {
+            var f = all[i].frame
+            // Within where the step began: a frame of its own, from which a set may push the far edge out.
+            if left ? f.maxX <= before.maxX + 0.5 : f.minX >= before.minX - 0.5 {
+                edge = left ? f.maxX : f.minX
+            } else if left, f.maxX > edge, f.minX < edge + slack {
+                f = CGRect(x: min(f.minX, edge), y: f.minY, width: edge - min(f.minX, edge), height: f.height)
+            } else if !left, f.minX < edge, f.maxX > edge - slack {
+                f = CGRect(x: edge, y: f.minY, width: max(f.maxX, edge) - edge, height: f.height)
+            }
+            frames.append(f)
         }
         // Replays (a busy or stalled browser doing late what it was asked, in a burst; a late one
         // doing a size after betterlink stopped waiting for it, after calls sent since) and a browser
@@ -2244,6 +2258,23 @@ struct GuardCase: CustomStringConvertible {
     }
 
     // MARK: Named cases
+
+    /// Seed 20261126's cases the slide-over broke, pinned: browsers that take
+    /// a position at once and a size late, pressed again (337, 567, 2818,
+    /// 3264, and 4984, whose size the show had sent once more); a show pressed during a hide that pushed the far edge out past
+    /// where the hide had put it, weighed against where the step began (855,
+    /// a guard bug); a window 1 pt wide nudged 1 pt past its far edge (3814,
+    /// 4745, a guard bug); a show of a window whose browser was seen to stop
+    /// 1 pt short of the width asked, which asked it for that width again and
+    /// showed the panel's seam only once it had stopped (4440).
+    @Test func seed20261126Cases() {
+        for i in [337, 567, 2818, 3264, 4984, 855, 3814, 4745, 4440] {
+            var r = GuardRandom(seed: 20261126 &+ UInt64(i) &* 0x9E37_79B9)
+            let c = GuardCase.random(&r)
+            let problems = c.run()
+            #expect(problems.isEmpty, "case \(i): \(c)\n  \(problems.prefix(3).joined(separator: "\n  "))")
+        }
+    }
 
     private func run(_ c: GuardCase, sourceLocation: SourceLocation = #_sourceLocation) {
         let problems = c.run()

@@ -363,7 +363,8 @@ public struct WindowSteps: Sendable {
             // Not one seen cut short (its place cut where it began by its size, under an animation), whose other
             // half never comes; nor a narrower size the window is already at its browser's minimum for.
             let atMinimum = Self.size(of: s.call).map { f in earlierStops.map { f.width < s.from.width - 1 && seen.width <= $0 + 0.5 } ?? false } ?? false
-            let started = s.moved && !(foreign && !earlierCut && !atMinimum && Self.halfUnstarted(s.call, from: s.from, seen: seen))
+            let halfWaits = foreign && !earlierCut && !atMinimum && Self.halfUnstarted(s.call, from: s.from, seen: seen)
+            let started = s.moved && !halfWaits
             let still = (started || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
             // narrower size, carrying out a show or hide or sending the final target, only once it has
@@ -388,7 +389,8 @@ public struct WindowSteps: Sendable {
                 return s.call
             }
             // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
-            let stopped = s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false
+            // (Its size sent once more by the steps taken over, and still unstarted: waited for all the same.)
+            let stopped = !halfWaits && (s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false)
             if stopped, atStop { stayed = true }
             if !arrived, !still, !stopped {
                 guard !started, now - s.at >= patience else { return nil }
