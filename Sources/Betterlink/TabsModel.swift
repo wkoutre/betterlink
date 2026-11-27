@@ -149,10 +149,24 @@ final class TabsModel: ObservableObject {
     }
 
     /// What the sidebar calls a connected browser profile: "Work (Google Chrome)",
-    /// or the browser alone while its profile isn't known.
+    /// or the browser alone while its profile isn't known, numbered when two
+    /// read the same (see `TabTransfer.labels`).
     func label(of s: BrowserSession) -> String {
+        TabTransfer.labels(sessions.map { (id: $0.id, base: baseLabel(of: $0)) })[s.id] ?? baseLabel(of: s)
+    }
+
+    private func baseLabel(of s: BrowserSession) -> String {
         guard let name = s.instance.flatMap({ profiles[$0]?.name }), !name.isEmpty else { return s.browser }
         return "\(name) (\(s.browser))"
+    }
+
+    /// The page in front of `s`'s focused window, to tell apart two profiles
+    /// whose names can't be read.
+    func frontTitle(of s: BrowserSession) -> String? {
+        let windows = s.store.orderedWindows.filter { $0.window.isNormal && !$0.window.incognito }
+        let window = windows.first { $0.window.focused } ?? windows.first
+        guard let title = window?.tabs.first(where: \.active)?.title, !title.isEmpty else { return nil }
+        return title
     }
 
     // MARK: Sending a tab to another profile or browser
@@ -165,7 +179,9 @@ final class TabsModel: ObservableObject {
     func sendTargets(for tab: BrowserTab, from s: BrowserSession, incognito: Bool) -> [BrowserSession] {
         guard TabTransfer.canSend(tab.url) else { return [] }
         return sessions.filter { TabTransfer.canSend(from: s.id, to: $0.id, incognito: incognito) }
-            .sorted { label(of: $0).localizedStandardCompare(label(of: $1)) == .orderedAscending }
+            .map { ($0, label(of: $0)) }
+            .sorted { $0.1.localizedStandardCompare($1.1) == .orderedAscending }
+            .map(\.0)
     }
 
     /// Opens `tab`'s page in `target`'s front window and closes it here once

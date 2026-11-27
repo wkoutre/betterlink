@@ -33,6 +33,20 @@ public struct TabTransfer: Equatable, Sendable {
         source != target && !incognito
     }
 
+    /// What each connected session is called: `base` ("Work (Google Chrome)",
+    /// or the browser alone while its profile can't be read). Sessions whose
+    /// base reads the same are numbered in socket path order ("Google Chrome 1",
+    /// "Google Chrome 2"), so the sidebar's menu and `tabs send --to` can always
+    /// tell them apart, and both number them the same way.
+    public static func labels(_ sessions: [(id: String, base: String)]) -> [String: String] {
+        var out: [String: String] = [:]
+        for (base, group) in Dictionary(grouping: sessions, by: \.base) {
+            guard group.count > 1 else { out[group[0].id] = base; continue }
+            for (i, s) in group.sorted(by: { $0.id < $1.id }).enumerated() { out[s.id] = "\(base) \(i + 1)" }
+        }
+        return out
+    }
+
     /// The open command `command` will, once it answers yes, close `source`.
     public mutating func started(command: String, closing source: Source) { pending[command] = source }
 

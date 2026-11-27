@@ -18,6 +18,9 @@ enum SendTabMenu {
         }
         for target in targets {
             let item = ClosureItem(title: model.label(of: target)) { model.send(tab, from: s, to: target) }
+            // Two profiles whose names can't be read are numbered; the page in
+            // front says which is which.
+            if let title = model.frontTitle(of: target) { item.subtitle = "Showing \u{201C}\(title.prefix(60))\u{201D}" }
             menu.addItem(item)
         }
         menu.popUp(positioning: nil, at: NSEvent.mouseLocation, in: nil)

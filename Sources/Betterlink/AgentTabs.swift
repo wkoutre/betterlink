@@ -59,10 +59,14 @@ extension AgentCommand {
         }
     }
 
-    /// What `tabs list` and `tabs send` call a connected browser profile.
-    static func profileLabel(_ s: BrowserSession) -> String {
-        guard let name = TabsModel.profileName(of: s), !name.isEmpty else { return s.browser }
-        return "\(name) (\(s.browser))"
+    /// What `tabs list` and `tabs send` call each connected browser profile,
+    /// by session id: the sidebar's names, numbered the same way when two read
+    /// the same (see `TabTransfer.labels`).
+    static func profileLabels(_ sessions: [BrowserSession]) -> [String: String] {
+        TabTransfer.labels(sessions.map { s in
+            guard let name = TabsModel.profileName(of: s), !name.isEmpty else { return (id: s.id, base: s.browser) }
+            return (id: s.id, base: "\(name) (\(s.browser))")
+        })
     }
 
     /// Where browsers load the Tabs extension from on this Mac, after making
@@ -156,9 +160,10 @@ extension AgentCommand {
         return last
     }
 
-    static func describe(_ s: BrowserSession) -> [String: Any] {
+    static func describe(_ s: BrowserSession, label: String) -> [String: Any] {
         [
             "browser": s.browser,
+            "label": label,
             "profile": TabsModel.profileName(of: s) ?? NSNull(),
             "extension": s.extensionVersion ?? NSNull(),
             "windows": s.store.orderedWindows.map { w in
@@ -229,7 +234,8 @@ extension AgentCommand {
         }
         switch command {
         case "tabs.list":
-            return ["browsers": sessions.map(describe)]
+            let labels = profileLabels(sessions)
+            return ["browsers": sessions.map { describe($0, label: labels[$0.id] ?? $0.browser) }]
         case "tabs.open":
             let url = try webURL(input)
             let windowId = try int(input, "window")
@@ -319,7 +325,8 @@ extension AgentCommand {
                 throw TabError(message: "Tab \(id) shows a browser page or nothing; only web pages and files can be sent.")
             }
             let others = sessions.filter { TabTransfer.canSend(from: s.id, to: $0.id, incognito: false) }
-            let labels = others.map { ($0, profileLabel($0)) }
+            let named = profileLabels(sessions)
+            let labels = others.map { ($0, named[$0.id] ?? $0.browser) }
             let wanted = to.lowercased()
             var hits = labels.filter { $0.1.lowercased() == wanted }
             if hits.isEmpty {

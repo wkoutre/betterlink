@@ -40,4 +40,18 @@ struct TabTransferTests {
         t.gaveUp(command: "c1")
         #expect(t.answered(command: "c1", ok: true) == nil)
     }
+
+    @Test func sessionsThatReadTheSameAreNumbered() {
+        let labels = TabTransfer.labels([
+            (id: "/s/b", base: "Google Chrome"),
+            (id: "/s/a", base: "Google Chrome"),
+            (id: "/s/c", base: "Work (Google Chrome)"),
+            (id: "/s/d", base: "Brave Browser"),
+        ])
+        #expect(labels["/s/a"] == "Google Chrome 1")
+        #expect(labels["/s/b"] == "Google Chrome 2")
+        #expect(labels["/s/c"] == "Work (Google Chrome)")
+        #expect(labels["/s/d"] == "Brave Browser")
+        #expect(Set(labels.values).count == 4)
+    }
 }
