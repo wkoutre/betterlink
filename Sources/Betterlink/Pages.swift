@@ -615,7 +615,7 @@ struct GeneralPage: View {
                 Toggle("Install updates automatically", isOn: $updater.installsAutomatically)
                     .disabled(!updater.isAvailable || !updater.automaticallyChecks)
                 Text(updater.isAvailable
-                     ? "Once an hour betterlink asks GitHub whether a newer version is out. It sends nothing about you or your links. Every update is checked against betterlink's signing key before it installs. Installing automatically downloads it in the background and restarts betterlink the next time you leave the Mac alone for two minutes; otherwise it asks first."
+                     ? "Once an hour betterlink asks GitHub whether a newer version is out. It sends nothing about you or your links. Every update is checked against betterlink's signing key before it installs. Installing automatically downloads it in the background and restarts betterlink the next time you leave the Mac alone for two minutes; otherwise it asks first, from the menu bar menu."
                      : "This build has no update key, so it doesn't check for updates. Release builds do.")
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)

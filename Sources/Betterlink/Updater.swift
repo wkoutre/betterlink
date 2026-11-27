@@ -68,10 +68,14 @@ final class Updater: ObservableObject {
     /// Installs the waiting update and restarts betterlink.
     func restartToUpdate() {
         guard let install = installNow else { return }
-        installNow = nil
+        // Kept until betterlink actually quits: Sparkle allows calling it
+        // again, so if the restart doesn't happen the menu and the idle
+        // install still work.
         stopIdleTimer()
-        readyVersion = nil
         install()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 300) {
+            if self.installNow != nil { self.startIdleTimer() }
+        }
     }
 
     /// `betterlink updates set` changed a setting from another process.
@@ -129,11 +133,9 @@ final class Updater: ObservableObject {
     /// Seconds since the last key press, click, scroll or mouse move. Reading
     /// it needs no permission.
     private static func secondsSinceInput() -> TimeInterval {
-        if let any = CGEventType(rawValue: ~0) {
-            return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: any)
-        }
-        let kinds: [CGEventType] = [.keyDown, .mouseMoved, .leftMouseDown, .rightMouseDown, .scrollWheel, .flagsChanged]
-        return kinds.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
+        // ~0 is kCGAnyInputEventType, which Swift doesn't name.
+        guard let anyInput = CGEventType(rawValue: ~0) else { return 0 }
+        return CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: anyInput)
     }
 }
 
@@ -146,23 +148,14 @@ private final class UpdaterDelegate: NSObject, SPUUpdaterDelegate, SPUStandardUs
         return true  // betterlink offers it (menu, General page) and installs it when the Mac is idle
     }
 
-    // betterlink has no Dock icon, so Sparkle's own window is how an update
-    // that needs a yes reaches the person. It handles that window; when it
-    // shows one for a check nobody asked for, bring it in front instead of
-    // leaving it behind the app being used, where it went unseen.
+    // betterlink has no Dock icon, so a prompt for a check nobody asked for
+    // opens behind the app in use (Sparkle won't pull focus mid work). The
+    // menu bar menu then offers "Update to betterlink X…" to bring it back.
     var supportsGentleScheduledUpdateReminders: Bool { true }
-
-    func standardUserDriverShouldHandleShowingScheduledUpdate(_ update: SUAppcastItem, andInImmediateFocus immediateFocus: Bool) -> Bool {
-        true
-    }
 
     func standardUserDriverWillHandleShowingUpdate(_ handleShowingUpdate: Bool, forUpdate update: SUAppcastItem, state: SPUUserUpdateState) {
         let version = update.displayVersionString
-        let scheduled = !state.userInitiated
-        MainActor.assumeIsolated {
-            Updater.shared.updateFound(version: version)
-            if handleShowingUpdate && scheduled { NSApp.activate(ignoringOtherApps: true) }
-        }
+        MainActor.assumeIsolated { Updater.shared.updateFound(version: version) }
     }
 
     func standardUserDriverWillFinishUpdateSession() {
