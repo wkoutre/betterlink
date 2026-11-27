@@ -66,6 +66,14 @@ public enum WindowSet {
         return calls + [.size(target), .position(target)]
     }
 
+    /// The right edge of the screen `frame` is on (the one with most of it):
+    /// what `calls` weighs growing in place against. Not the displays side by
+    /// side: a size can't grow a window wholly on its own screen past that
+    /// screen's edge, a seam with another display included.
+    public static func screenRight(of frame: CGRect, displays: [CGRect]) -> CGFloat? {
+        displays.max { $0.intersection(frame).width * $0.intersection(frame).height < $1.intersection(frame).width * $1.intersection(frame).height }?.maxX
+    }
+
     /// How far past the screen's right edge the window's far edge is nudged
     /// before it is grown past it (`calls`).
     public static let nudgeBy: CGFloat = 1
@@ -75,15 +83,6 @@ public enum WindowSet {
     public static func expand(_ call: Call, from seen: CGRect, keep: SidebarSide?, right: CGFloat?) -> [Call] {
         if case .frame(let f) = call { return calls(from: seen, to: f, keep: keep, right: right) }
         return [call]
-    }
-
-    /// How far the far edge (away from `keep`) of the frame between the
-    /// calls is inside where it ends, when it is: only a window widened
-    /// against its screen's far edge (the position first). Nil otherwise.
-    public static func farEdgeIn(from seen: CGRect, to target: CGRect, keep: SidebarSide, right: CGFloat?) -> CGFloat? {
-        let frames = betweens(from: seen, calls: calls(from: seen, to: target, keep: keep, right: right))
-        guard let inside = frames.map({ keep == .left ? target.maxX - $0.maxX : $0.minX - target.minX }).max() else { return nil }
-        return inside >= 0.5 ? inside : nil
     }
 
     /// The frame the window has between the calls, when there are two: what
@@ -107,7 +106,6 @@ public enum WindowSet {
         return Array(out.dropLast())
     }
 
-    /// How far the window is nudged right first, when it is (`calls`).
     /// How far the window's near edge is nudged right before it grows past
     /// its screen's right edge (`calls`), when it is: nil otherwise.
     public static func nudge(from seen: CGRect, to target: CGRect, keep: SidebarSide, right: CGFloat?) -> CGFloat? {

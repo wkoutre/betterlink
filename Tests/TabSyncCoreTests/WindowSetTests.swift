@@ -46,13 +46,13 @@ import Testing
         #expect(calls == [.position(CGRect(x: 281, y: 0, width: 1776, height: 1290)), .size(full), .position(full)])
         #expect(WindowSet.betweens(from: left, calls: calls) == [CGRect(x: 281, y: 0, width: 1776, height: 1290), CGRect(x: 281, y: 0, width: 2056, height: 1290)])
         #expect(farIn(from: left, to: full, side: .left, right: 2056) < 0)
-        #expect(WindowSet.farEdgeIn(from: left, to: full, keep: .left, right: 2056) == nil)
+        #expect(farIn(from: left, to: full, side: .left, right: 2056) < 0.5)
         #expect(WindowSet.nudge(from: left, to: full, keep: .left, right: 2056) == 1)
         // Where it can grow in place, and for a show, there is no nudge and nothing comes in.
         let open = CGRect(x: 580, y: 0, width: 920, height: 1290), closed = CGRect(x: 300, y: 0, width: 1200, height: 1290)
-        #expect(WindowSet.farEdgeIn(from: open, to: closed, keep: .left, right: 2056) == nil)
+        #expect(farIn(from: open, to: closed, side: .left, right: 2056) < 0.5)
         #expect(WindowSet.nudge(from: open, to: closed, keep: .left, right: 2056) == nil)
-        #expect(WindowSet.farEdgeIn(from: full, to: left, keep: .left, right: 2056) == nil)
+        #expect(farIn(from: full, to: left, side: .left, right: 2056) < 0.5)
     }
 
     /// Short of the screen's right edge, but too near it to grow in place:
@@ -64,7 +64,7 @@ import Testing
         #expect(calls == [.size(CGRect(x: 1200, y: 0, width: 856, height: 1290)), .position(CGRect(x: 1201, y: 0, width: 856, height: 1290)),
                           .size(closed), .position(closed)])
         #expect(farIn(from: open, to: closed, side: .left, right: 2056) < 0)
-        #expect(WindowSet.farEdgeIn(from: open, to: closed, keep: .left, right: 2056) == nil)
+        #expect(farIn(from: open, to: closed, side: .left, right: 2056) < 0.5)
     }
 
     /// A window already partly off the screen's right edge grows past it:

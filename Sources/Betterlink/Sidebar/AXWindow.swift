@@ -55,7 +55,7 @@ enum AXWindow {
     static func sets(_ call: WindowSteps.Call, of win: WindowHandle, keep: SidebarSide? = nil) -> [AXSet] {
         guard let h = Displays.primaryHeight else { return [] }
         let seen = shownFrame(of: win)
-        let right = seen.flatMap { SidebarGeometry.span(at: $0, of: Displays.all.map(\.frame))?.upperBound }
+        let right = seen.flatMap { WindowSet.screenRight(of: $0, displays: Displays.all.map(\.frame)) }
         let calls = seen.map { WindowSet.expand(call, from: $0, keep: keep, right: right) } ?? { if case .frame(let f) = call { [.size(f), .position(f)] } else { [call] } }()
         return calls.map {
             switch $0 {

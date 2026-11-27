@@ -342,7 +342,7 @@ final class SidebarInstance: ObservableObject {
     private var setsSlow = false
 
     /// The right edge of the displays side by side at `frame`'s height.
-    private func rightEdge(of frame: CGRect) -> CGFloat? { SidebarGeometry.span(at: frame, of: Displays.all.map(\.frame))?.upperBound }
+    private func rightEdge(of frame: CGRect) -> CGFloat? { WindowSet.screenRight(of: frame, displays: Displays.all.map(\.frame)) }
 
     /// The window as the window server shows it. Accessibility can read back
     /// a size or position before it is on screen (on macOS 27 at once, while
@@ -906,7 +906,7 @@ final class SidebarInstance: ObservableObject {
         // Took part and stopped: as far as it goes. (Not moved at all and taken as stopped, `stops` already says so.)
         if real.width > o.asked.width + 2, abs(real.width - o.frame.width) >= 2 { stops = real.width }
         // Stopped short where it was seen to stop before: no room, though it didn't move.
-        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastStoppedShort ? .noRoom : notice) }
+        if let notice = SidebarNotice.refusal(frame: o.frame, took: real.width) { return refuse(o, real: real, lastUnmoved ? .noSize : lastStoppedShort ? .noRoom : notice) }
         let room = o.frame.width - real.width
         // Its far edge where it was, at the width it really has.
         var at = real

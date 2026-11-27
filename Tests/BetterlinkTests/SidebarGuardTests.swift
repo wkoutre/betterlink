@@ -1708,7 +1708,7 @@ struct RuleCheck {
         let sizes = sent.filter { $0.size != nil }.count, positions = sent.filter { $0.position != nil }.count
         // One set: the calls `WindowSet` gives from where the browser was to where it ends.
         let before = rig.fake.history[rig.historyBefore - 1].frame
-        let set = WindowSet.calls(from: before, to: rig.fake.frame, keep: rig.side, right: screenSpan(at: before)?.upperBound)
+        let set = WindowSet.calls(from: before, to: rig.fake.frame, keep: rig.side, right: WindowSet.screenRight(of: before, displays: Displays.all.map(\.frame)))
         let setSizes = set.filter { if case .size = $0 { true } else { false } }.count, setPositions = set.count - setSizes
         if oneSet, sizes > setSizes || positions > setPositions {
             problems.append("\(step): sent \(sizes) sizes and \(positions) positions, more than one set's \(setSizes) and \(setPositions)")
@@ -2009,8 +2009,9 @@ struct GuardCase: CustomStringConvertible {
         // A dropped size is sent once more `still` after the set, and answered from then.
         let dropped = behaviour.dropsSizeCall != nil ? WindowSteps.still : 0
         let answers = (behaviour.timing == .atOnce ? 0 : behaviour.lateBy) + dropped
+        let clamp = WindowSteps.still + WindowSteps.unmovedWait - 0.05
         return behaviour.sizesStick && max(behaviour.minWidth, 1) <= frame.width - SidebarGeometry.widths.lowerBound
-            && answers <= WindowSteps.still + WindowSteps.unmovedWait - 0.05
+            && answers <= clamp
             && behaviour.animationDelay <= WindowSteps.unmovedWait - 0.05 && behaviour.stall == 0
     }
 
@@ -2529,8 +2530,9 @@ struct GuardCase: CustomStringConvertible {
                     #expect(over <= 1, "\(step): the panel over the browser's content by \(Int(over)) pt")
                     let pressed = rig.pressedAt.first?.t ?? 0
                     let note = SidebarRig.noticeTimes.dropFirst(notes).first
-                    // Seen or not, it doesn't move: refused as stopped where it is (nothing seen: unmoved, `WindowSteps.unmovedWait`).
-                    #expect(SidebarRig.notices.dropFirst(notes).map(\.0).first == .noRoom, "\(step): notes \(SidebarRig.notices.dropFirst(notes).map(\.0))")
+                    // Seen, it has stopped where it was seen to stop: no room. Nothing seen, it didn't move at all: refused
+                    // once unmoved (`WindowSteps.unmovedWait`), as a window that made no room.
+                    #expect(SidebarRig.notices.dropFirst(notes).map(\.0).first == (seen ? .noRoom : .noSize), "\(step): notes \(SidebarRig.notices.dropFirst(notes).map(\.0))")
                     do {
                         let allowed = 0.5 + 2 * (b.animation + b.animationDelay) + (seen ? 0 : SidebarSlide.duration + WindowSteps.unmovedWait)
                         #expect(note.map { $0 - pressed <= allowed } == true,
@@ -2664,7 +2666,10 @@ struct GuardCase: CustomStringConvertible {
                 check.refusedPromptly(from: start, step)
                 check.timely(step)
                 #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(step): open \(rig.open), at \(rig.fake.frame)")
-                #expect(SidebarRig.notices.map(\.0) == [.noRoom], "\(step): notes \(SidebarRig.notices.map(\.0))")
+                // An animation that starts as late as the size sent once more lets it (0.3 s, started over by that
+                // size) hasn't moved the window when the unmoved wait is out: refused as making no room.
+                let unmoved = b.animationDelay >= WindowSteps.unmovedWait - 0.05
+                #expect(SidebarRig.notices.map(\.0) == [unmoved ? .noSize : .noRoom], "\(step): notes \(SidebarRig.notices.map(\.0))")
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
         }
@@ -2765,7 +2770,7 @@ struct GuardCase: CustomStringConvertible {
     /// opens later by itself. Since a show's size not moved at all is refused
     /// as stopped where it is once sent once more and unchanged 300 ms after
     /// (`WindowSteps.unmovedWait`), a browser later than about 0.4 s is
-    /// refused that way, with "There isn't room". A hide whose calls land late ends in the
+    /// refused that way, with the "didn't make room" note. A hide whose calls land late ends in the
     /// pair's frame. No width is lost either way. (The fake's late browser
     /// is late with sizes only, its busy one with every call.)
     @Test func aBrowserThatAnswersLateLosesNoWidth() {
@@ -2786,10 +2791,10 @@ struct GuardCase: CustomStringConvertible {
                         #expect(SidebarRig.notices.isEmpty, "\(step): notes \(SidebarRig.notices.map(\.0)), though it opened")
                     } else {
                         // Its size not moved within `WindowSteps.still`, then `unmovedWait` after it was sent once more:
-                        // refused as stopped where it is, its frame back exactly, closed, and one note saying so.
+                        // refused, its frame back exactly, closed, and one note: it didn't make room.
                         check.shown(from: start, mustOpen: false, step)
                         #expect(!rig.open, "\(step): opened")
-                        #expect(SidebarRig.notices.map(\.0) == [.noRoom], "\(step): notes \(SidebarRig.notices.map(\.0))")
+                        #expect(SidebarRig.notices.map(\.0) == [.noSize], "\(step): notes \(SidebarRig.notices.map(\.0))")
                     }
                     // One set (on the left a place and a size, back to back) gets one answer: sent once the panel covers,
                     // 0.225 s in, it runs past the cap 3 s late.
@@ -2846,8 +2851,7 @@ struct GuardCase: CustomStringConvertible {
                     rig.toggle()
                     let step = "\(b) \(side), resized by \(Int(dw)), \(Int(dh))"
                     #expect(!rig.open && GuardFrames.same(rig.fake.frame, start), "\(step): open \(rig.open), at \(rig.fake.frame)")
-                    // Its size not moved at all: refused as stopped where it is (`WindowSteps.unmovedWait`), with that note.
-                    #expect(SidebarRig.notices.map(\.0) == [.noRoom], "\(step): notes \(SidebarRig.notices.map(\.0))")
+                    #expect(SidebarRig.notices.map(\.0) == [.noSize], "\(step): notes \(SidebarRig.notices.map(\.0))")
                     rig.fake.behaviour = BrowserBehaviour()
                     let at = rig.fake.frame
                     let resized = CGRect(x: at.minX, y: at.minY - dh, width: at.width + dw, height: at.height + dh)
@@ -3458,8 +3462,8 @@ struct GuardCase: CustomStringConvertible {
     /// A first show of a window whose browser is already at its minimum
     /// (nothing seen of it yet): its size doesn't move at all. Sent once
     /// more 150 ms after the set, and the window still unchanged 300 ms
-    /// after that, the show is refused as stopped where it is ("There isn't
-    /// room"), and the panel slides out: within the slide, those waits and
+    /// after that, the show is refused as stopped where it is ("This window
+    /// didn't make room for the sidebar"), and the panel slides out: within the slide, those waits and
     /// the slide out, never at the 3 s cap (the panel covered the page for
     /// the whole cap). No minimum is learned from it: the next press asks the
     /// browser again. Either side, against the screen's right edge and free.
@@ -3479,7 +3483,7 @@ struct GuardCase: CustomStringConvertible {
                 let pressed = rig.pressedAt.first?.t ?? 0
                 if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
                 let said = SidebarRig.notices.dropFirst(notes).map(\.0)
-                if said != [.noRoom] { problems.append("\(step): notes \(said)") }
+                if said != [.noSize] { problems.append("\(step): notes \(said)") }
                 if let gone = rig.panelShows.last(where: { $0.revealed > 0.5 })?.t, gone - pressed > bound {
                     problems.append(String(format: "%@: the panel showed until %.0f ms after the press, more than %.0f", step, (gone - pressed) * 1000, bound * 1000))
                 }
@@ -3529,11 +3533,37 @@ struct GuardCase: CustomStringConvertible {
                 rig.fake.showsLate(call: 1, by: 0.8)
                 rig.toggle()
                 if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
+                if SidebarRig.notices.map(\.0) != [.noSize] { problems.append("\(step): notes \(SidebarRig.notices.map(\.0))") }
                 if rig.panelOver > 1 || rig.shownWidth > 0.5 { problems.append("\(step): the panel shows \(rig.shownWidth), \(rig.panelOver) over the browser") }
                 rig.toggle()
                 let want = SidebarGeometry.opened(start, width: 280, side: side)
                 if !rig.open || !GuardFrames.same(rig.fake.frame, want) { problems.append("\(step): the next press ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
             }
+        }
+        #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+    }
+
+    /// Two displays side by side, the browser wholly on the left one and
+    /// against its right edge, the seam: a size may not grow it past the
+    /// edge of its own screen (a review of 12a43a4; a size can't grow a
+    /// window wholly on its screen past that screen's edge), so a left
+    /// hide is nudged 1 pt past the seam first, as against any screen's
+    /// edge, never trusting the displays together to let it grow in place.
+    @Test func aHideAgainstTheSeamBetweenTwoDisplaysIsNudged() {
+        let a = Display(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080), visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1050), scale: 2)
+        let b = Display(frame: CGRect(x: 1920, y: 0, width: 1920, height: 1080), visibleFrame: CGRect(x: 1920, y: 0, width: 1920, height: 1080), scale: 2)
+        var problems: [String] = []
+        for start in [a.visibleFrame, CGRect(x: 820, y: 0, width: 1100, height: 1050)] {
+            let rig = SidebarRig(displays: [a, b], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour())
+            rig.toggle()
+            let open = rig.fake.frame
+            rig.toggle()
+            let sent = rig.fake.sent.dropFirst(rig.pressedAt.first?.calls ?? 0)
+            let positions = sent.compactMap(\.position).map { Int($0.x) }
+            if positions.first != Int(open.minX) + 1 || positions.last != Int(start.minX) { problems.append("\(start): positions \(positions), wanted the nudge to \(Int(open.minX) + 1) first") }
+            let frames = rig.fake.history.dropFirst(rig.historyBefore).filter { !$0.byPerson }.map(\.frame)
+            if let f = frames.first(where: { $0.maxX < start.maxX - 0.5 }) { problems.append("\(start): its far edge in: \(f)") }
+            if rig.open || !GuardFrames.same(rig.fake.frame, start) { problems.append("\(start): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame)") }
         }
         #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
     }
@@ -3683,7 +3713,7 @@ struct GuardCase: CustomStringConvertible {
         // One set: on the left one size and one position, or, a hide against the screen's right edge, the nudge
         // first (two positions); on the right a size alone.
         let from = showing ? start : opened, to = showing ? opened : start
-        let set = WindowSet.calls(from: from, to: to, keep: side, right: screenSpan(at: from)?.upperBound)
+        let set = WindowSet.calls(from: from, to: to, keep: side, right: WindowSet.screenRight(of: from, displays: Displays.all.map(\.frame)))
         let setSizes = set.filter { if case .size = $0 { true } else { false } }.count
         if sizes != setSizes || positions != set.count - setSizes {
             problems.append("\(step): sent \(sizes) sizes and \(positions) positions, wanted \(setSizes) and \(set.count - setSizes)")
