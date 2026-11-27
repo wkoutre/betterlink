@@ -120,7 +120,10 @@ launch_throwaway() {   # launch_throwaway <profile dir under $RUN> <title> <x,y>
 }
 chrome_pid() { pgrep -f "user-data-dir=$(rx "$1")" | head -1; }     # the browser started with that throwaway profile
 app_pid() { pgrep -f "$(rx "$A")/Contents/MacOS/Betterlink" | head -1; }
-start_app() { open -n -g --env BETTERLINK_TRACE=1 --env BETTERLINK_TOUR=off --env BETTERLINK_HOME="$RUN/home" --env BETTERLINK_TABS_SOCKET_DIR="$SOCK" "$A"; }
+# Runs the rig app's binary directly from this terminal, so macOS counts it under the terminal's own
+# Accessibility and Screen Recording grants. `open -n` launches it under its own identity, which has no
+# grant on a fresh Mac, so it would see no windows (found on MAC-MINI-16, 2026-11-27).
+start_app() { BETTERLINK_TRACE=1 BETTERLINK_TOUR=off BETTERLINK_HOME="$RUN/home" BETTERLINK_TABS_SOCKET_DIR="$SOCK" nohup "$B" >"$RUN/app.log" 2>&1 & }
 set_() { "$B" agent sidebar.settings.set "$1" >/dev/null; }
 front() { "$T/ax" "$C" front >/dev/null; }                            # C: the throwaway browser's pid
 # The shortcut goes to the frontmost app, so it is only sent when that is the throwaway browser; otherwise the step is skipped.
