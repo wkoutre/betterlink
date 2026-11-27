@@ -318,12 +318,12 @@ extension AgentCommand {
             guard let query = input["query"] as? String, !query.trimmingCharacters(in: .whitespaces).isEmpty else {
                 throw TabError(message: "Give query: words from a tab's title or address.")
             }
-            let labels = Dictionary(sessions.map { ($0.socketPath, profileLabel($0)) }, uniquingKeysWith: { a, _ in a })
+            let labels = profileLabels(sessions)
             let browsers = Dictionary(sessions.map { ($0.socketPath, $0.browser) }, uniquingKeysWith: { a, _ in a })
             let found = TabSearch.find(query, in: TabSearch.items(sessions))
             return ["tabs": found.map { item in
                 ["id": item.tab.id, "window": item.tab.windowId, "title": item.tab.title, "url": item.tab.url,
-                 "active": item.tab.active, "browser": browsers[item.socketPath] ?? "", "profile": labels[item.socketPath] ?? ""] as [String: Any]
+                 "active": item.tab.active, "browser": browsers[item.socketPath] ?? "", "label": labels[item.socketPath] ?? ""] as [String: Any]
             }]
         case "tabs.send":
             // The sidebar's Send to Another Profile: open the page in the other
