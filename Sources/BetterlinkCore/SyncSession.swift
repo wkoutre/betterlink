@@ -234,7 +234,7 @@ public final class SyncSession {
         if !Set(deleting).isSubset(of: approved),
            SyncGuard.trips(deleting: SyncSafety.roots(deleting, in: state).count, live: live, fresh: fresh)
             || SyncSafety.wipesAKind(before: state, after: next, scope: scope) {
-            var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }, fresh: fresh, since: now)
+            var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }, fresh: fresh, since: now)
             if let was = notes.held, was.ids == hold.ids, was.fresh == hold.fresh { hold = was }
             else { let h = hold; try localNotes.update { $0.held = h } }
             held = hold

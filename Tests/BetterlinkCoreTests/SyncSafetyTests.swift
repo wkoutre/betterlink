@@ -64,6 +64,7 @@ struct SyncSafetyTests {
         #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
         let hold = try #require(b.held)
         #expect(hold.ids.count == 6 && !hold.fresh)
+        #expect(hold.names == hold.names.sorted { $0.localizedStandardCompare($1) == .orderedAscending })   // listed in order
         #expect(hold.reason.hasPrefix("This Mac would delete 6 synced items at once: Link Rule \u{201C}r"))
         #expect(hold.reason.hasSuffix("Sync is paused until you choose."))
         #expect(b.localNotes.load().held == hold)   // for the CLI
