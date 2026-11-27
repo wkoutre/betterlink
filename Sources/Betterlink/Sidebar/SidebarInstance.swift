@@ -217,6 +217,11 @@ final class SidebarInstance: ObservableObject {
         var ready: Double?
         var landed: Double?
         var frames = 0, started = CACurrentMediaTime()
+        /// When it began, on `clock`.
+        var since = 0.0
+        /// A show past `SidebarSlide.coverWait` whose browser hasn't made room:
+        /// the panel is shown only up to the browser's real edge.
+        var masked = false
     }
     private var slideRun: SlideRun? {
         didSet { if slideRun == nil { quiet(false) } }
@@ -230,6 +235,8 @@ final class SidebarInstance: ObservableObject {
     private var lastSlowest = 0.0
     /// The last steps ended at their cap, not where they were going.
     private var lastCapped = false
+    /// The last steps were a show's set refused as unmoved (`WindowSteps.unmoved`): its size may still land.
+    private var lastUnmoved = false
     /// The last steps ended because the window stopped short (`WindowSteps.stoppedShort`).
     private var lastStoppedShort = false
     /// The last steps were one set that landed at once and whole (`WindowSteps.clean`): no final resend is owed.
@@ -313,6 +320,12 @@ final class SidebarInstance: ObservableObject {
     /// A show or hide is under way, the panel over the browser's near edge
     /// by design: for the guard.
     var slidesOver: Bool { slideRun != nil }
+    /// How long the show or hide under way has been, on `clock`: for the guard.
+    var slideAge: Double? { slideRun.map { clock() - $0.since } }
+    /// A hide (or a refusal) under way: how long since its calls were over,
+    /// nil while they aren't (the panel covers the browser until it has
+    /// landed, `beginSlideOut`). For the guard.
+    var slideOutAge: Double?? { slideRun.flatMap { $0.out ? .some($0.ready.map { clock() - $0 }) : nil } }
 
     /// The panel sliding, or the browser being moved.
     var sliding: Bool { slideRun != nil || steps != nil || refitWait != nil || window.handle.sending }
@@ -398,7 +411,7 @@ final class SidebarInstance: ObservableObject {
                 let now = follows ? Array(calls.dropLast()) : calls
                 var s = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops,
                                     sending: follows ? .size(frame) : calls.count > 1 ? .frame(frame) : first, from: seen, at: clock(),
-                                    between: WindowSet.between(from: seen, calls: calls), placeFollows: follows)
+                                    between: WindowSet.between(from: seen, calls: calls), placeFollows: follows, refusesUnmoved: widest != nil)
                 s.patience = patience
                 s.slack = systemSlack
                 steps = s
@@ -508,7 +521,12 @@ final class SidebarInstance: ObservableObject {
             flagWatch = (s.target, clock() + WindowSteps.cap)
             DragTrace.log("enhanced UI: window \(window.number) not at \(s.target) yet: its flag stays held until it is, or \(WindowSteps.cap) s")
         }
+        if let u = s.unmoved {
+            DragTrace.log(String(format: "open: window %d unmoved: set sent at %.3f, its size sent once more at %.3f, the window last changed %@, nothing since in %.0f ms: refused as stopped where it is, no minimum learned",
+                                 window.number, u.set, u.resent, u.lastChange.map { String(format: "at %.3f", $0) } ?? "never", WindowSteps.unmovedWait * 1000))
+        }
         lastSlowest = s.slowest
+        lastUnmoved = s.unmoved != nil
         lastCapped = s.capped
         lastStoppedShort = s.stoppedShort
         lastClean = s.clean
@@ -621,7 +639,8 @@ final class SidebarInstance: ObservableObject {
         let back = underWay ?? closedFrame(from: b, side: side)
         closing = back
         let outer = side == .left ? panel.frame.minX : panel.frame.maxX
-        slideRun = SlideRun(slide: SidebarSlide(shown: true), side: side, outer: outer, hiddenWindow: back, shownWindow: b, cover: CGFloat(width), out: true)
+        slideRun = SlideRun(slide: SidebarSlide(shown: true), side: side, outer: outer, hiddenWindow: back, shownWindow: b, cover: CGFloat(width), out: true,
+                            since: clock())
         hideSet(to: back, keep: side, deadline: ends) { [weak self] in self?.closed(at: back) { self?.slideOutNow() } }
         stepPanel()
     }
@@ -677,7 +696,8 @@ final class SidebarInstance: ObservableObject {
             DragTrace.log(String(format: "hide: window %d not shown at %@ within %.0f ms (at %@): the panel slides out all the same", window.number,
                                  "\(run.hiddenWindow)", SidebarSlide.landedWait * 1000, "\(onScreenFrame)"))
         }
-        run.slide.hide(at: now, reduceMotion: reducesMotion())
+        // Shown only up to the browser's edge (`masked`): nothing to slide out over it; it goes at once.
+        run.slide.hide(at: now, reduceMotion: reducesMotion() || run.masked)
     }
 
     /// A hide's calls are over (landed, or capped): its frame sent once more
@@ -709,6 +729,9 @@ final class SidebarInstance: ObservableObject {
             run.outer = run.side == .left ? panel.frame.minX : panel.frame.maxX
             run.shownWindow = browser
             run.out = false
+            // The hide's wait for the browser to show at its frame is over with it.
+            run.ready = nil
+            run.landed = nil
             let o = Opening(frame: run.hiddenWindow, asked: browser, ends: cap)
             opening = o
             let widest = run.hiddenWindow.width - SidebarGeometry.widths.lowerBound
@@ -780,7 +803,7 @@ final class SidebarInstance: ObservableObject {
         panel.showNow(at: place(panel))
         isShown = true
         var run = SlideRun(slide: SidebarSlide(shown: false), side: side, outer: outer, hiddenWindow: frame, shownWindow: browser,
-                           cover: cover(of: frame), out: false)
+                           cover: cover(of: frame), out: false, since: clock())
         // Nothing to cover (a window its browser was seen to stop at already): no slide, the browser is asked at once.
         run.slide.show(at: clock(), reduceMotion: reducesMotion() || run.cover < 0.5)
         run.pending = set
@@ -813,7 +836,20 @@ final class SidebarInstance: ObservableObject {
         var covers = done
         if begun {
             let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: extent, side: run.side, progress: run.slide.progress(at: now))
-            let reveal: CGFloat? = done && whole && run.slide.phase == .shown ? nil : inner
+            var reveal: CGFloat? = done && whole && run.slide.phase == .shown ? nil : inner
+            // A show whose browser is still not where it was asked once the slide and `SidebarSlide.coverWait` are
+            // over (late, busy, at its minimum, taking over a call of the press before): the panel no longer covers
+            // its page, shown only up to the browser's real edge until it has made room.
+            if !run.out, done, now - run.since > SidebarSlide.duration + SidebarSlide.coverWait, steps != nil || run.pending != nil,
+               let real = AXWindow.shownFrame(of: window.handle) {
+                let edge = run.side == .left ? real.minX : real.maxX
+                let full = run.side == .left ? run.outer + extent : run.outer - extent
+                let short = run.side == .left ? edge < full - 0.5 : edge > full + 0.5
+                if short {
+                    reveal = run.side == .left ? min(max(edge, run.outer), full) : max(min(edge, run.outer), full)
+                    run.masked = true
+                }
+            }
             if panel.reveal != reveal { panel.reveal = reveal }
             if !done { run.frames += 1 }
             covers = covers || abs(inner - run.outer) >= run.cover - 0.5
@@ -926,13 +962,16 @@ final class SidebarInstance: ObservableObject {
             closePanelNow()
             unpair()
         }
-        // Watching for someone else's change unless the open's calls, or the way back's, were capped.
+        // Watching for someone else's change unless the open's calls, or the way back's, were capped. Refused as
+        // unmoved, the open's size may still land, late: the frame is sent whole after it, unwatched, as past the cap
+        // (seed 6221202, case 127: a size 843 ms late landed after the way back, the window left narrowed).
+        let pending = lastCapped || lastUnmoved
         let back: () -> Void = { [weak self] in
             guard let self else { return }
-            if self.lastClean, !self.lastCapped { return self.restored(o.frame) }
-            self.resend(o.frame, watching: !self.lastCapped) { [weak self] in self?.restored(o.frame) }
+            if self.lastClean, !self.lastCapped, !pending { return self.restored(o.frame) }
+            self.resend(o.frame, watching: !self.lastCapped && !pending) { [weak self] in self?.restored(o.frame) }
         }
-        if lastCapped || SidebarGeometry.same(real, o.frame) {
+        if pending || SidebarGeometry.same(real, o.frame) {
             lastClean = false
             back()
         } else {

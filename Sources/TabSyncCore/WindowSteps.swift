@@ -149,6 +149,19 @@ public struct WindowSteps: Sendable {
     /// takes a position at once and a size late) would bring a left hide's
     /// far edge in.
     private var follows = false
+    /// A show's set whose narrower size the window doesn't move for at all:
+    /// sent once more after `still`, and the window unchanged `unmovedWait`
+    /// after that, it has stopped where it is (`stoppedShort`), however little
+    /// is known of the browser's minimum (a first show of a browser already
+    /// at it covered the page for the whole cap). Any change after the size
+    /// sent once more is the normal wait up to the cap.
+    private var refusesUnmoved = false
+    private var setAt = 0.0
+    /// Refused that way: when the set was sent, when its size was sent once
+    /// more, and when the window last changed before that (nil: never), for
+    /// `trace.log`.
+    public private(set) var unmoved: (set: Double, resent: Double, lastChange: Double?)?
+    private var lastChangeBeforeResend: Double?
     /// That position is the call in flight.
     private var placing = false
     /// The steps these took over: their set was seen cut short (`partway`),
@@ -211,6 +224,11 @@ public struct WindowSteps: Sendable {
     /// that changes nothing is waited for before it is sent again.
     public static let still = 0.15
     public static let timeout = 0.6
+    /// A show's size not moved at all, sent once more: how long the window
+    /// may stay unchanged after that before the show is refused as stopped
+    /// where it is (`init(sending:refusesUnmoved:)`).
+    public static let unmovedWait = 0.3
+
     /// The longest a show or a hide may take, every call of it included.
     public static let cap = 3.0
 
@@ -235,6 +253,14 @@ public struct WindowSteps: Sendable {
             startLag = earlier.startLag
             earlierCut = earlier.partway
             earlierStops = earlier.stops
+            // The same show's set, taken over (through a hide's steps, too) by a press that asks the same (a show
+            // turned back and pressed again): still refused if it doesn't move, its size already sent once more.
+            // A press that asks something else (`foreign`) only waits for it.
+            if earlier.refusesUnmoved {
+                refusesUnmoved = true
+                setAt = earlier.setAt
+                lastChangeBeforeResend = earlier.lastChangeBeforeResend
+            }
         }
     }
 
@@ -245,9 +271,12 @@ public struct WindowSteps: Sendable {
     /// from where it leaves the window, as after their own size: a browser
     /// that stops at its minimum, or stops short, is checked as then.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil, placeFollows: Bool = false) {
+                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil, placeFollows: Bool = false,
+                refusesUnmoved: Bool = false) {
         self.init(target: target, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
         opened = true
+        self.refusesUnmoved = refusesUnmoved
+        setAt = at
         self.between = between
         follows = placeFollows
         sent = (call, at, from, at, from, false, nil, false)
@@ -351,6 +380,27 @@ public struct WindowSteps: Sendable {
                 s.moved = true
                 sent = s
             }
+            // A show's narrower size not moved at all (`refusesUnmoved`).
+            if refusesUnmoved, !foreign, Self.narrows(s.call, s.from), Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height) {
+                if let c = s.checkedAt {
+                    if s.changed <= c + 1e-9 {
+                        guard now - c >= Self.unmovedWait - 1e-9 else { return nil }
+                        unmoved = (setAt, c, lastChangeBeforeResend)
+                        stoppedShort = true
+                        done = true
+                        return nil
+                    }
+                } else {
+                    guard now - s.changed >= Self.still - 1e-9 else { return nil }
+                    lastChangeBeforeResend = s.moved ? s.changed : nil
+                    s.checkedAt = now
+                    s.changed = now
+                    sent = s
+                    more += 1
+                    if case .frame(let f) = s.call { return .size(f) }
+                    return s.call
+                }
+            }
             // Still, once it has moved: landed short. Not moved at all yet: not started.
             // A narrower size of a show or hide, the window already no wider than this window's browser
             // was seen to stop at (`stops`), at or above the width asked: not moving is its answer too.
@@ -390,7 +440,9 @@ public struct WindowSteps: Sendable {
             }
             // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
             // (Its size sent once more by the steps taken over, and still unstarted: waited for all the same.)
-            let stopped = !halfWaits && (s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false)
+            // Nor one taken over that hasn't moved at all: not started, it is waited for up to the cap (seed 6221202,
+            // case 11: a busy browser's size, sent once more by the show, landed after the hide had gone on).
+            let stopped = !halfWaits && !(foreign && !s.moved) && (s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false)
             if stopped, atStop { stayed = true }
             if !arrived, !still, !stopped {
                 guard !started, now - s.at >= patience else { return nil }

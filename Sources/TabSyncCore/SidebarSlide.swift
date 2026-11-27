@@ -16,6 +16,10 @@ public struct SidebarSlide: Equatable, Sendable {
     public static let landedMargin = 1.0 / 60
     /// The longest a hide's slide out waits for that, after its calls are over.
     public static let landedWait = 0.15
+    /// How long past its slide a show's panel may cover the browser's near
+    /// edge while the browser hasn't made room; after that it is shown only
+    /// up to the browser's real edge.
+    public static let coverWait = 0.3
 
     public private(set) var phase: Phase
     private var from: Double, to: Double, start: Double, length: Double
