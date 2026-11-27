@@ -109,6 +109,75 @@ struct SyncSafetyTests {
         #expect(try SidebarStore(folder: a.settings).load().profiles.first?.favorites.map(\.url) == ["https://mail.example"])
     }
 
+    @Test func aFolderOrProfileCountsOnceWithWhatIsInIt() {
+        var s = SyncState()
+        let p = UUID().uuidString, f = UUID().uuidString, g = UUID().uuidString
+        func set(_ id: String, _ fields: [String: SyncValue]) { s.entities[id] = fields.mapValues { Stamped($0, HLC(wall: 1, counter: 0, device: "A")) } }
+        set("sp:\(p)", ["name": .string("Work")])
+        set("node:\(f)", ["kind": .string("folder"), "profile": .string(p), "parent": .null])
+        set("node:\(g)", ["kind": .string("folder"), "profile": .string("other"), "parent": .null])
+        set("node:a", ["kind": .string("link"), "profile": .string("other"), "parent": .string(g)])
+        set("node:b", ["kind": .string("link"), "profile": .string("other"), "parent": .null])
+        set("rule:x", ["pattern": .string("x.com")])
+        #expect(SyncSafety.roots(["node:\(g)", "node:a"], in: s) == ["node:\(g)"])
+        #expect(SyncSafety.roots(["sp:\(p)", "node:\(f)"], in: s) == ["sp:\(p)"])
+        #expect(SyncSafety.roots(["node:a", "node:b", "rule:x"], in: s).count == 3)  // the folder stays: each counts
+    }
+
+    @Test func deletingABigFolderOnPurposeDoesntAsk() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        try addRules(["one.com", "two.com"], a)
+        _ = try SidebarStore(folder: a.settings).update { $0.update(shared) {
+            $0.items = [.folder(SidebarFolder(id: UUID(), name: "Big", items: (1...8).map { .link(SavedLink(title: "L\($0)", url: "https://l\($0).example")) }))]
+        } }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        _ = try SidebarStore(folder: b.settings).update { $0.update(shared) { $0.items = [] } }
+        try b.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(b.held == nil)
+        #expect(try SidebarStore(folder: a.settings).load().profiles.first?.items.isEmpty == true)
+        #expect(try patterns(a) == ["one.com", "two.com"])
+    }
+
+    @Test func deletingASidebarProfileWithItsItemsDoesntAsk() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        let extra = UUID()
+        for s in [a, b] { s.selection.profiles[extra] = .init() }
+        try addRules(["one.com", "two.com"], a)
+        _ = try SidebarStore(folder: a.settings).update { $0.profiles.append(SidebarProfile(id: extra, name: "Extra",
+            favorites: (1...6).map { SavedLink(title: "F\($0)", url: "https://f\($0).example") })) }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        #expect(try SidebarStore(folder: b.settings).load().profiles.contains { $0.id == extra })
+        _ = try SidebarStore(folder: b.settings).update { $0.profiles.removeAll { $0.id == extra } }
+        try b.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(b.held == nil)
+        #expect(!(try SidebarStore(folder: a.settings).load().profiles.contains { $0.id == extra }))
+    }
+
+    /// A Mac that synced before sync-local.json existed: its settings are
+    /// there, so the first sync after the update writes the marker and doesn't ask.
+    @Test func anUpdatedMacWithSettingsButNoNotesDoesntAsk() throws {
+        let (a, b, sync) = try pair(rules: 3)
+        try FileManager.default.removeItem(at: b.localNotes.file)
+        let again = session("B", b.settings, sync)   // relaunch after the update
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast() }
+        try again.pull(now: t(3)); try a.pull(now: t(4))
+        #expect(again.held == nil)
+        #expect(again.localNotes.load().device == "B")
+        #expect(try patterns(a).count == 2)
+    }
+
+    @Test func notesFromAnotherDeviceStillCountAsFresh() throws {
+        let (a, b, _) = try pair(rules: 3)
+        try b.localNotes.update { $0.device = "someone-else" }
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        #expect(b.held?.fresh == true)
+        try a.pull(now: t(4))
+        #expect(try patterns(a).count == 3)
+    }
+
     @Test func deleteThemEverywhereProceedsOnceThenAsksAgain() throws {
         let (a, b, _) = try pair(rules: 8)
         _ = try RuleStore(folder: b.settings).update { $0.rules.removeLast(6) }

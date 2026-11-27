@@ -224,9 +224,16 @@ public final class SyncSession {
         let deleting = next.entities.keys.filter { state.isLive($0) && !next.isLive($0) }.sorted()
         let approved = notes.decision?.choice == .delete ? Set(notes.decision?.ids ?? []) : []
         let live = state.entities.keys.filter { scope($0) && state.isLive($0) && $0 != SyncModel.globalID && $0 != SyncModel.configID }.count
+        // A settings folder is new to sync here when its notes name another
+        // device, or when it has no notes and no settings either (an empty
+        // folder, as on 2026-11-25). One with settings but no notes yet is a
+        // Mac that synced before the notes existed: it just gets its marker.
+        let fm = FileManager.default
+        let fresh = notes.device != device && (fm.fileExists(atPath: localNotes.file.path)
+            || !(fm.fileExists(atPath: settings.rulesFile.path) || fm.fileExists(atPath: sidebar.file.path)))
         if !Set(deleting).isSubset(of: approved),
-           SyncGuard.trips(deleting: deleting.count, live: live, fresh: notes.device != device) {
-            var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }, fresh: notes.device != device, since: now)
+           SyncGuard.trips(deleting: SyncSafety.roots(deleting, in: state).count, live: live, fresh: fresh) {
+            var hold = SyncHold(ids: deleting, names: deleting.map { SyncSafety.describe($0, in: state) }, fresh: fresh, since: now)
             if let was = notes.held, was.ids == hold.ids, was.fresh == hold.fresh { hold = was }
             else { let h = hold; try localNotes.update { $0.held = h } }
             held = hold

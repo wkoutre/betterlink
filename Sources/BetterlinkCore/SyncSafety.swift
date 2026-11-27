@@ -10,7 +10,8 @@ public enum SyncGuard {
     /// Deleting this many synced items at once always asks.
     public static let many = 5
 
-    /// `deleting` items out of `live` synced ones, from a settings folder
+    /// `deleting` items (counted by `SyncSafety.roots`: a folder or Sidebar
+    /// Profile with what is inside it is one) out of `live` synced ones, from a settings folder
     /// that has (`fresh` false) or hasn't synced as this Mac before. A fresh
     /// one asks before deleting anything: its empty settings are far more
     /// likely a new folder than a choice. Otherwise five at once asks, and
@@ -210,6 +211,21 @@ public enum SyncSafety {
             }
         }
         return out
+    }
+
+    /// The deletes that count toward SyncGuard: a deleted folder or Sidebar
+    /// Profile counts once, with everything deleted inside it in the same
+    /// push. So deleting a big folder on purpose doesn't ask.
+    public static func roots(_ deleting: [String], in state: SyncState) -> [String] {
+        let set = Set(deleting)
+        // Deleting a folder deletes all of it, so the direct parent (or the
+        // profile) being deleted too is enough.
+        func inside(_ id: String) -> Bool {
+            if let p = state.value(id, "profile")?.string, set.contains("sp:\(p)") { return true }
+            if let parent = state.value(id, "parent")?.string, set.contains("node:\(parent)") { return true }
+            return false
+        }
+        return deleting.filter { !inside($0) }
     }
 
     /// The entries to put back for `wanted`: each one, and for a deleted
