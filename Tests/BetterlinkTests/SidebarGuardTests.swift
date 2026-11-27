@@ -1121,16 +1121,18 @@ final class SidebarRig {
 /// Whether the guard expects a resize of the open pair at rest to fit the
 /// pair again, from the rule itself and not from the app's
 /// `SidebarGeometry.refitsAfterResize`: only a placement (both of the
-/// browser's horizontal edges moved, or the browser on a display's whole
-/// visible frame: Fill, a zoom, tiling) that would leave the sidebar beside it
-/// further off the displays' visible frames than it was. A drag of one edge or
-/// of a corner, and a move, stand (rule 3), wherever they leave the sidebar.
+/// browser's horizontal edges moved, or the browser across a display's whole
+/// visible width at any height: Fill, a zoom, tiling to a half or a quarter,
+/// a pair that filled the screen's width tiled to its top or bottom half)
+/// that would leave the sidebar beside it further off the displays' visible
+/// frames than it was. A drag of one edge or of a corner short of a whole
+/// visible width, and a move, stand (rule 3), wherever they leave the sidebar.
 @MainActor
 func placedPushingTheSidebarOff(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, _ displays: [Display]) -> Bool {
     let resized = abs(now.width - was.width) >= 2 || abs(now.height - was.height) >= 2
     let leftMoved = abs(now.minX - was.minX) >= 2, rightMoved = abs(now.maxX - was.maxX) >= 2
-    let onAWholeVisibleFrame = displays.contains { GuardFrames.same($0.visibleFrame, now) }
-    guard resized, (leftMoved && rightMoved) || onAWholeVisibleFrame else { return false }
+    let acrossAWholeVisibleWidth = displays.contains { abs($0.visibleFrame.minX - now.minX) < 2 && abs($0.visibleFrame.maxX - now.maxX) < 2 }
+    guard resized, (leftMoved && rightMoved) || acrossAWholeVisibleWidth else { return false }
     let visible = displays.map { Display(frame: $0.visibleFrame, visibleFrame: $0.visibleFrame, scale: $0.scale) }
     func sidebar(beside b: CGRect) -> CGRect { CGRect(x: side == .left ? b.minX - width : b.maxX, y: b.minY, width: width, height: b.height) }
     return offScreen(sidebar(beside: now), visible) > offScreen(sidebar(beside: was), visible) + 1
@@ -1251,16 +1253,17 @@ struct RuleCheck {
     }
 
     /// After the person placed the browser somewhere new while its sidebar was
-    /// open (both horizontal edges moved, or the whole visible frame): the
-    /// sidebar is never left further off the displays than it was (bug 3:
-    /// Fill put the browser on the whole visible frame, and the sidebar was
-    /// left off the screen). `before`: the browser's frame before, and the
-    /// sidebar's width then.
+    /// open (both horizontal edges moved, or across a display's whole visible
+    /// width at any height): the sidebar is never left further off the
+    /// displays than it was (bug 3: Fill put the browser on the whole visible
+    /// frame, and the sidebar was left off the screen; review round 3 of PR
+    /// 105, F2: a full-width pair tiled to the top half). `before`: the
+    /// browser's frame before, and the sidebar's width then.
     mutating func sidebarStaysOnScreen(before: CGRect, width: CGFloat, put: CGRect, _ step: String) {
-        // A move (the size within 2 pt), or a drag of one horizontal edge or a corner, is the person's and stands
-        // (rule 3), wherever it leaves the sidebar.
+        // A move (the size within 2 pt), or a drag of one horizontal edge or a corner short of a whole visible
+        // width, is the person's and stands (rule 3), wherever it leaves the sidebar.
         let placed = (abs(put.minX - before.minX) >= 2 && abs(put.maxX - before.maxX) >= 2)
-            || displays.contains { GuardFrames.same($0.visibleFrame, put) }
+            || displays.contains { abs($0.visibleFrame.minX - put.minX) < 2 && abs($0.visibleFrame.maxX - put.maxX) < 2 }
         guard rig.open, abs(put.width - before.width) >= 2 || abs(put.height - before.height) >= 2, placed else { return }
         let was = SidebarGeometry.strip(beside: before, width: width, side: rig.side)
         let now = SidebarGeometry.strip(beside: rig.fake.frame, width: rig.sidebarWidth, side: rig.side)
@@ -3150,6 +3153,42 @@ struct GuardCase: CustomStringConvertible {
         }
         personDrags(side: .left, "the top left corner dragged 100 left and 200 down", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
             CGRect(x: $0.minX - 100, y: $0.minY, width: $0.width + 100, height: $0.height - 200)
+        }
+    }
+
+    /// A drag of the sidebar-side edge that stops short of the screen's whole
+    /// visible width (3 pt short) is a drag of one edge, and stands, either side.
+    @Test func anEdgeDraggedShortOfTheFullWidthStands() {
+        personDrags(side: .right, "the right edge dragged to 3 pt short of the screen's width", from: CGRect(x: 0, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: $0.minX, y: $0.minY, width: 2053 - $0.minX, height: $0.height)
+        }
+        personDrags(side: .left, "the left edge dragged to 3 pt short of the screen's width", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: 3, y: $0.minY, width: $0.maxX - 3, height: $0.height)
+        }
+    }
+
+    /// Review round 3 of PR 105, F2: a pair that fills the screen's width,
+    /// tiled to the top or bottom half (Window › Move & Resize), moves only
+    /// the browser's edge on the sidebar's side, and the tile isn't the whole
+    /// visible frame. It spans the display's whole visible width, so it is a
+    /// placement: the pair fits again in the tile, either side.
+    @Test func tilingAFullWidthPairToTheTopOrBottomHalfFitsThePairAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for side in SidebarSide.allCases {
+            for tile in [CGRect(x: 0, y: 630, width: 2056, height: 629), CGRect(x: 0, y: 0, width: 2056, height: 630)] {
+                let rig = SidebarRig(displays: [screen], frame: screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
+                rig.toggle()
+                #expect(rig.open, "\(side): didn't open")
+                let before = rig.fake.frame
+                rig.personSets(tile)
+                let step = "\(side), from \(before), tiled to \(tile)"
+                var check = RuleCheck(rig, displays: [screen])
+                check.shown(from: tile, mustOpen: true, step)
+                check.sidebarStaysOnScreen(before: before, width: 280, put: tile, step)
+                #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(step): open \(rig.open), sidebar \(rig.sidebarWidth)")
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
         }
     }
 

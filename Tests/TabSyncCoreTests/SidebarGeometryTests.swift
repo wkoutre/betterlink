@@ -251,4 +251,32 @@ struct SidebarGeometryTests {
         // A move alone stands, wherever it puts the sidebar.
         #expect(!SidebarGeometry.refitsAfterResize(from: right, to: right.offsetBy(dx: 300, dy: 0), width: 280, side: .right, visible: visible))
     }
+
+    /// A pair that fills the screen's width, tiled to the top or bottom half
+    /// (Window › Move & Resize; review round 3 of PR 105, F2): only the
+    /// browser's edge on the sidebar's side moves, and the tile isn't the
+    /// whole visible frame, but the browser now spans the display's whole
+    /// visible width. That is a placement: the pair fits again. Either side.
+    @Test func aFullWidthPairTiledToATopOrBottomHalfRefits() {
+        let visible = [CGRect(x: 0, y: 0, width: 2056, height: 1259)]
+        let right = CGRect(x: 0, y: 0, width: 1776, height: 1259) // sidebar 1776...2056
+        let left = CGRect(x: 280, y: 0, width: 1776, height: 1259) // sidebar 0...280
+        for half in [CGRect(x: 0, y: 630, width: 2056, height: 629), CGRect(x: 0, y: 0, width: 2056, height: 630)] {
+            #expect(SidebarGeometry.refitsAfterResize(from: right, to: half, width: 280, side: .right, visible: visible), "right, to \(half)")
+            #expect(SidebarGeometry.refitsAfterResize(from: left, to: half, width: 280, side: .left, visible: visible), "left, to \(half)")
+        }
+        // On the second of two displays side by side: its whole visible width.
+        let two = [CGRect(x: -1440, y: 0, width: 1440, height: 875), visible[0]]
+        #expect(SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 0, y: 630, width: 2056, height: 629), width: 280, side: .right, visible: two))
+        // The sidebar-side edge dragged to 3 pt short of the full width: a drag of one edge, which stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 0, y: 0, width: 2053, height: 1259), width: 280, side: .right,
+                                                   visible: visible))
+        #expect(!SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 3, y: 0, width: 2053, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // A corner dragged short of the full width (one horizontal edge and a vertical one): stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 0, y: 630, width: 2000, height: 629), width: 280, side: .right,
+                                                   visible: visible))
+        #expect(!SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 56, y: 0, width: 2000, height: 630), width: 280, side: .left,
+                                                   visible: visible))
+    }
 }
