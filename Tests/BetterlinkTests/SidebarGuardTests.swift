@@ -344,15 +344,15 @@ final class FakeBrowser: WindowHandle {
     /// clock) the window moves by `dx`, its size kept, by no call of anyone's
     /// (MINI-16 on macOS 27 at 6ebd0da: Move & Resize › Right put it at x
     /// 1027, then 1028, after betterlink had begun the refit).
-    func systemSettles(by dx: CGFloat, at t: Double) { systemNudge = (dx, t) }
-    private var systemNudge: (dx: CGFloat, at: Double)?
+    func systemSettles(by dx: CGFloat, dy: CGFloat = 0, at t: Double) { systemNudge = (dx, dy, t) }
+    private var systemNudge: (dx: CGFloat, dy: CGFloat, at: Double)?
 
     private func tick() {
         if let n = systemNudge, now() >= n.at {
             systemNudge = nil
             let f = real
             anim = nil
-            base = f.offsetBy(dx: n.dx, dy: 0)
+            base = f.offsetBy(dx: n.dx, dy: n.dy)
             history.append((base, false))
         }
         if let at = widenAt, now() >= at {
@@ -3217,30 +3217,37 @@ struct GuardCase: CustomStringConvertible {
     ///     moved by someone else: window at (1028,0,1028), left there
     ///
     /// The 1 pt was taken for the person's move: the sidebar stayed closed
-    /// and the browser kept the whole half. The system settling the window
-    /// by 2 pt or less, before the refit starts or while it is carried out,
-    /// is no one's move: the pair fits again in the half as it settled.
+    /// and the browser kept the whole half. MINI-16 saw the same let-go in 2
+    /// of 5 right-side tiles, once to the Right half and once to the Bottom
+    /// half (no trace of the Bottom half's settle: modelled as 1 pt down).
+    /// The system settling the window by 2 pt or less, before the refit
+    /// starts or while it is carried out, is no one's move: the pair fits
+    /// again in the tile as it settled.
     @Test func aTileTheSystemSettlesBy1ptStillFitsThePair() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
         let pair = CGRect(x: 400, y: 0, width: 1256, height: 1259)
-        let tile = CGRect(x: 1027, y: 0, width: 1028, height: 1259), settled = CGRect(x: 1028, y: 0, width: 1028, height: 1259)
+        let tiles: [(tile: CGRect, dx: CGFloat, dy: CGFloat)] = [(CGRect(x: 1027, y: 0, width: 1028, height: 1259), 1, 0),
+                                                                 (CGRect(x: 0, y: 1, width: 2056, height: 629), 0, -1)]
         // When the 1 pt comes after the window tracker reports the tile at rest (`SidebarRig.rest`, 1 s after the
         // person's change): at once, within the refit's first ticks, mid-refit, and near its end.
+        for (tile, dx, dy) in tiles {
+        let settled = tile.offsetBy(dx: dx, dy: dy)
         for after in [0.0, 0.02, 0.05, 0.12, 0.2, 0.3] {
             for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
                 let rig = SidebarRig(displays: [screen], frame: pair, side: .right, width: 280, behaviour: b)
                 rig.toggle()
                 let before = rig.fake.frame
                 #expect(rig.open && GuardFrames.same(before, CGRect(x: 400, y: 0, width: 976, height: 1259)), "opened \(rig.open) at \(before)")
-                rig.fake.systemSettles(by: 1, at: rig.now + 1 + after)
+                rig.fake.systemSettles(by: dx, dy: dy, at: rig.now + 1 + after)
                 rig.personSets(tile)
-                let step = "\(b), settled 1 pt \(Int(after * 1000)) ms after the tile came to rest"
+                let step = "\(b), tiled to \(tile), settled 1 pt \(Int(after * 1000)) ms after the tile came to rest"
                 var check = RuleCheck(rig, displays: [screen])
                 check.shown(from: settled, mustOpen: true, step)
                 #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(step): open \(rig.open), sidebar \(rig.sidebarWidth), browser \(rig.fake.frame)")
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
+        }
         }
     }
 
