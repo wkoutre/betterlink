@@ -127,6 +127,7 @@ final class SidebarInstance: ObservableObject {
         edgeTimer = nil
         restoring = nil
         refitWait = nil
+        systemSlack = 0
         if closed { slideRun = nil; steps = nil; glide = nil; glideSteps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
         releaseFlag()
         panelTokens.forEach(NotificationCenter.default.removeObserver)
@@ -179,6 +180,7 @@ final class SidebarInstance: ObservableObject {
     /// pair's frame, or show it in the browser's frame.
     func toggle() {
         refitWait = nil
+        systemSlack = 0
         DragTrace.log("toggle: window \(window.number) hidden \(hidden) -> \(!hidden)")
         if hidden { slideIn() } else { slideOut() }
     }
@@ -527,6 +529,8 @@ final class SidebarInstance: ObservableObject {
         DragTrace.log("moved by someone else: window \(window.number) at \(onScreenFrame), left there")
         // Theirs, at rest from here: not weighed later as a resize of the person's (`settle`).
         defer { restFrame = hidden ? nil : onScreenFrame }
+        // The refit's slack ends with it (`systemSlack`): a glide let go returns before its steps' end clears it.
+        systemSlack = 0
         let giveUp = opening.map { !$0.answered } ?? false
         opening = nil
         refitting = nil
@@ -828,6 +832,7 @@ final class SidebarInstance: ObservableObject {
         opening = nil
         refitting = nil
         closing = nil
+        systemSlack = 0
         let goingBack = restoring // a refused open's window on its way back
         restoring = nil
         let mid = slideRun
@@ -877,6 +882,7 @@ final class SidebarInstance: ObservableObject {
                             Double(SidebarGeometry.widths.upperBound))
                 return layout()
             }
+            systemSlack = 0
             open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
@@ -911,11 +917,15 @@ final class SidebarInstance: ObservableObject {
     /// tracker's rest, itself 150 ms after the last move).
     static let refitQuiet = 0.05
     static let refitWaitCap = 0.15
-    /// Set for a refit's motion, cleared once nothing moves the window: how
-    /// far the system may move the window on its own meanwhile without it
-    /// counting as someone else's change (`WindowSteps.slack`): 2 pt, as
-    /// frames within 2 pt are the same (`SidebarGeometry.same`). A bigger
-    /// change, or any change once the refit is over, is the person's and stands.
+    /// Set for a refit's motion, cleared once nothing moves the window, when
+    /// someone else's change lets it go (`takenByOther`), and as every other
+    /// motion begins (a show or hide, a new width, a drag of the edge, a
+    /// window followed, given back after full screen or moved with its
+    /// panel, letting the window go): how far the system may move the window
+    /// on its own meanwhile without it counting as someone else's change
+    /// (`WindowSteps.slack`): 2 pt, as frames within 2 pt are the same
+    /// (`SidebarGeometry.same`). A bigger change, or any change outside a
+    /// refit, is the person's and stands (the review of 33444c7, F1).
     private var systemSlack: CGFloat = 0
 
     /// A tick of a refit's wait: the frame on screen held still for
@@ -953,6 +963,7 @@ final class SidebarInstance: ObservableObject {
     /// browser takes the pair's frame (rule 4).
     private func giveBackAfterFullScreen(_ t: WindowTracker.Target) {
         let back = closedFrame(from: t.frame, side: placedSide)
+        systemSlack = 0
         DragTrace.log("hide: window \(window.number) out of full screen, given its space back: \(back)")
         closing = back
         move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in self?.closed(at: back) { self?.unpair() } }
@@ -967,6 +978,7 @@ final class SidebarInstance: ObservableObject {
     func refit() {
         guard paired, !hidden, !sliding else { return }
         let back = closedUnderWay ?? closedFrame(from: onScreenFrame, side: placedSide)
+        systemSlack = 0
         opening = nil
         refitting = back
         move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in
@@ -1051,6 +1063,7 @@ final class SidebarInstance: ObservableObject {
         endResize() // a single step still waiting for its window ends when a drag begins
         guard !sliding, !hidden, isShown, let panel, panel.isVisible else { return false }
         let t = onScreenFrame
+        systemSlack = 0
         resizing = Resize(drag: EdgeDrag(window: t, width: width, side: placedSide), asked: t)
         return true
     }
@@ -1363,6 +1376,7 @@ final class SidebarInstance: ObservableObject {
         guard let panel, let placed = placedPanelFrame, !SidebarGeometry.same(panel.frame, placed), !hidden, isShown else { return }
         let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: panel.frame, window: window.target.frame, width: width,
                                                           side: placedSide)
+        systemSlack = 0
         move(to: inner, keep: nil, deadline: cap) { [weak self] in self?.remember() }
         layout()
     }
