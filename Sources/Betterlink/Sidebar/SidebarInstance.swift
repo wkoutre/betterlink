@@ -126,7 +126,7 @@ final class SidebarInstance: ObservableObject {
         edgeTimer?.invalidate()
         edgeTimer = nil
         restoring = nil
-        if closed { slideRun = nil; steps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
+        if closed { slideRun = nil; steps = nil; glide = nil; glideSteps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
         releaseFlag()
         panelTokens.forEach(NotificationCenter.default.removeObserver)
         panelTokens = []
@@ -239,7 +239,7 @@ final class SidebarInstance: ObservableObject {
 
     /// Released once nothing of this window is moving: no steps, no drag of the edge.
     private func releaseFlagIfIdle() {
-        if steps == nil, resizing == nil { releaseFlag() }
+        if steps == nil, glide == nil, resizing == nil { releaseFlag() }
     }
 
     /// Reduce Motion, and the clock. Tests set their own and step the slide
@@ -254,7 +254,34 @@ final class SidebarInstance: ObservableObject {
     var opensWithoutSlide: Bool { opening != nil && slideRun == nil }
 
     /// The panel sliding, or the browser being moved.
-    var sliding: Bool { slideRun != nil || steps != nil }
+    var sliding: Bool { slideRun != nil || steps != nil || glide != nil }
+
+    /// The browser moved with the slide, frame by frame, its far edge kept
+    /// (`WindowGlide`), while its sets land at once; then the steps that end
+    /// the motion from where it is (`glideSteps`, made at the hand-over).
+    private var glide: WindowGlide?
+    private var glideSteps: ((WindowGlide.Handover) -> WindowSteps)?
+    private var glideDeadline: Double?
+    /// This window's browser was seen to animate (or answer late) a glide's
+    /// frame: its shows and hides are carried out by `WindowSteps` alone.
+    private var setsSlow = false
+    /// A glide's probe, or every call of steps, landed at once: this window's sets do (`WindowGlide.proven`,
+    /// `WindowSteps.landedAtOnce`).
+    private var setsInstant = false
+
+    /// The right edge of the displays side by side at `frame`'s height.
+    private func rightEdge(of frame: CGRect) -> CGFloat? { SidebarGeometry.span(at: frame, of: Displays.all.map(\.frame))?.upperBound }
+
+    /// The glide's call in flight, as steps that take it over wait for it (`WindowSteps.after`).
+    private var glideInFlight: WindowSteps? {
+        guard let g = glide, let make = glideSteps else { return nil }
+        let h = g.handover(seen: onScreenFrame, takenOver: true)
+        switch h {
+        case .none: return nil
+        case .waits(let w): return w
+        case .holds: return make(h)
+        }
+    }
 
     /// The window as the window server shows it. Accessibility can read back
     /// a size or position before it is on screen (on macOS 27 at once, while
@@ -282,11 +309,57 @@ final class SidebarInstance: ObservableObject {
     /// show or hide is capped (`WindowSteps.cap`); with one, a change by
     /// someone else meanwhile ends it, and `then` is not done: `takenByOther()` is.
     /// `retreats`: false when giving space back (`WindowSteps.retreats`).
+    /// `glides`: a show or hide with its slide: while the browser's sets land
+    /// at once (its enhanced UI off, and not seen to animate), it is moved
+    /// with the slide frame by frame (`WindowGlide`), and `WindowSteps`
+    /// finish from where it is.
     private func move(to frame: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, patience: Double = WindowSteps.timeout,
-                      deadline: Double? = nil, then: @escaping () -> Void = {}) {
+                      deadline: Double? = nil, glides: Bool = false, then: @escaping () -> Void = {}) {
         // Opening (only an open has `widest`): what this window's browser was seen to stop at.
-        steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: widest == nil ? nil : stops,
-                            after: steps)
+        let stops = widest == nil ? nil : self.stops
+        let make = { (h: WindowGlide.Handover) -> WindowSteps in
+            switch h {
+            case .none: WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
+            case .holds(let r): WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops, resuming: r)
+            case .waits(let w): WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops, after: w)
+            }
+        }
+        if glides, let keep, let run = slideRun {
+            if var g = glide {
+                // Turned back mid-glide: the same glide goes on with the slide.
+                g.retarget(closed: run.hiddenWindow, open: run.shownWindow)
+                glide = g
+                glideSteps = make
+                glideDeadline = deadline
+                afterSteps = then
+                return
+            }
+            // Its far edge where it is at both ends of the slide (a pair moved back on screen at closing isn't).
+            let far = { (r: CGRect) in keep == .left ? r.maxX : r.minX }
+            if steps == nil, !SidebarGeometry.same(onScreenFrame, frame), abs(far(run.hiddenWindow) - far(run.shownWindow)) < 1 {
+                holdFlag()
+                // Not with Reduce Motion: the slide is over at once, and a glide's one frame would be the whole
+                // way, which an animating browser cuts short between its size and its position.
+                // Until this window's sets are seen to land at once, the glide's first frame is a probe of its
+                // size alone; a window that can only widen toward the sidebar by moving first waits for that.
+                let right = rightEdge(of: onScreenFrame)
+                let growsInPlace = frame.width <= onScreenFrame.width + 0.5 || right.map { onScreenFrame.minX + frame.width <= $0 + 0.5 } ?? false
+                if flagOff, !setsSlow, !reducesMotion(), setsInstant || growsInPlace {
+                    glide = WindowGlide(closed: run.hiddenWindow, open: run.shownWindow, side: keep, right: right, proven: setsInstant)
+                    glideSteps = make
+                    glideDeadline = deadline
+                    afterSteps = then
+                    stepWindow()
+                    runTicker()
+                    return
+                }
+            }
+        }
+        let earlier = glideInFlight ?? steps
+        glide = nil
+        glideSteps = nil
+        steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops,
+                            after: earlier)
         steps?.patience = patience
         afterSteps = then
         stepWindow()
@@ -362,13 +435,48 @@ final class SidebarInstance: ObservableObject {
     }
 
     private func stepWindow() {
+        if var g = glide {
+            let now = clock()
+            let q = slideRun.map { $0.slide.progress(at: now) } ?? 1
+            let end = slideRun.map { $0.slide.done(at: now) } ?? true
+            var call = g.step(seen: onScreenFrame, now: now, progress: q, end: end, deadline: glideDeadline)
+            // Every call of a frame in one go, within one display refresh: a size and a position sent
+            // together land as one frame. The width read back after a size places the far edge.
+            while let c = call {
+                holdFlag()
+                AXWindow.send(c, to: window.handle)
+                var w: CGFloat?, unanswered = false
+                // Read back at once. A read that got no answer in time (the browser busy) is no width: the window
+                // server says what the size did.
+                if case .size = c {
+                    let read = window.handle.size()
+                    if let read, !window.handle.missed { w = read.width } else { unanswered = true }
+                }
+                call = g.next(width: w, unanswered: unanswered)
+            }
+            guard g.done else { glide = g; return }
+            glide = nil
+            if g.slow { setsSlow = true }
+            if g.proven { setsInstant = true }
+            DragTrace.log("glide: window \(window.number) \(g.interrupted ? "moved by someone else" : g.slow ? "slow: sets animated or late" : g.capped ? "capped" : "done") at \(onScreenFrame)")
+            let make = glideSteps
+            glideSteps = nil
+            if g.interrupted {
+                afterSteps = nil
+                takenByOther()
+                return releaseFlagIfIdle()
+            }
+            steps = make?(g.handover(seen: onScreenFrame))
+        }
         guard var s = steps else { return }
         if let call = s.step(seen: onScreenFrame, now: clock()) {
             holdFlag()
             AXWindow.send(call, to: window.handle)
         }
         guard s.done else { steps = s; return }
+        DragTrace.log("steps: window \(window.number) to \(s.target) done at \(onScreenFrame)\(s.capped ? ", capped" : "")\(s.interrupted ? ", interrupted" : "")\(s.stoppedShort ? ", stopped short" : "")")
         steps = nil
+        if s.landedAtOnce { setsInstant = true }
         lastSlowest = s.slowest
         lastCapped = s.capped
         lastStoppedShort = s.stoppedShort
@@ -432,7 +540,7 @@ final class SidebarInstance: ObservableObject {
             slideRun = run
             let back = run.hiddenWindow
             closing = back
-            return move(to: back, keep: run.side, retreats: false, deadline: ends) { [weak self] in self?.closed(at: back) }
+            return move(to: back, keep: run.side, retreats: false, deadline: ends, glides: true) { [weak self] in self?.closed(at: back) }
         }
         guard paired else { return layout() }
         // Out of sight (another Space, minimized): no slide to watch.
@@ -450,7 +558,7 @@ final class SidebarInstance: ObservableObject {
         var run = SlideRun(slide: SidebarSlide(shown: true), side: side, outer: outer, hiddenWindow: back, shownWindow: b)
         run.slide.hide(at: clock(), reduceMotion: reducesMotion())
         slideRun = run
-        move(to: back, keep: side, retreats: false, deadline: ends) { [weak self] in self?.closed(at: back) }
+        move(to: back, keep: side, retreats: false, deadline: ends, glides: true) { [weak self] in self?.closed(at: back) }
         stepPanel()
     }
 
@@ -479,7 +587,8 @@ final class SidebarInstance: ObservableObject {
             slideRun = run
             let o = Opening(frame: run.hiddenWindow, asked: browser, ends: cap)
             opening = o
-            return move(to: browser, keep: run.side, widest: run.hiddenWindow.width - SidebarGeometry.widths.lowerBound, deadline: o.ends) { [weak self] in
+            return move(to: browser, keep: run.side, widest: run.hiddenWindow.width - SidebarGeometry.widths.lowerBound, deadline: o.ends,
+                        glides: true) { [weak self] in
                 self?.answer()
             }
         }
@@ -519,7 +628,9 @@ final class SidebarInstance: ObservableObject {
             run.slide.show(at: clock(), reduceMotion: reducesMotion())
             slideRun = run
         }
-        move(to: browser, keep: side, widest: frame.width - SidebarGeometry.widths.lowerBound, deadline: o.ends) { [weak self] in self?.answer() }
+        move(to: browser, keep: side, widest: frame.width - SidebarGeometry.widths.lowerBound, deadline: o.ends, glides: slide) { [weak self] in
+            self?.answer()
+        }
         stepPanel()
     }
 
@@ -539,7 +650,7 @@ final class SidebarInstance: ObservableObject {
         }
         panel.reveal = seam
         run.frames += 1
-        guard run.slide.done(at: now), steps == nil else { slideRun = run; return runTicker() }
+        guard run.slide.done(at: now), steps == nil, glide == nil else { slideRun = run; return runTicker() }
         run.slide.settle(at: now)
         slideRun = nil
         finishSlide(run)
@@ -685,9 +796,11 @@ final class SidebarInstance: ObservableObject {
         let goingBack = restoring // a refused open's window on its way back
         restoring = nil
         let mid = slideRun
-        let inFlight = steps
+        let inFlight = glideInFlight ?? steps
         slideRun = nil
         steps = nil
+        glide = nil
+        glideSteps = nil
         afterSteps = nil
         stopTicker()
         // The sidebar goes: ordered out before its mask is lifted, so it is never drawn whole over the

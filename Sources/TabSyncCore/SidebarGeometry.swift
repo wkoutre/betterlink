@@ -86,7 +86,7 @@ public enum SidebarGeometry {
 
     /// The horizontal span of the display under most of `r` and of those
     /// touching it side by side at `r`'s height.
-    static func span(at r: CGRect, of displays: [CGRect]) -> ClosedRange<CGFloat>? {
+    public static func span(at r: CGRect, of displays: [CGRect]) -> ClosedRange<CGFloat>? {
         let level = displays.filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }
         guard let home = level.max(by: { $0.intersection(r).area < $1.intersection(r).area }) else { return nil }
         var lo = home.minX, hi = home.maxX
