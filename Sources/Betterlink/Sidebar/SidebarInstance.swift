@@ -933,9 +933,18 @@ final class SidebarInstance: ObservableObject {
 
     /// A tick of a refit's wait: the frame on screen held still for
     /// `refitQuiet`, or `refitWaitCap` passed: the refit starts from where the
-    /// window is, if it still pushes the sidebar off the screen.
+    /// window is, if it still pushes the sidebar off the screen. Not while the
+    /// person drags the window, nor minimized, in full screen or with its
+    /// app hidden, as `settle` weighs it: the wait ends, and the refit is
+    /// weighed again, against the same frame before, once the window comes
+    /// to rest (`settle`).
     private func stepRefitWait() {
         guard var w = refitWait else { return }
+        let t = window.target
+        guard !(isDragged?() ?? tracker.isDragging(window)), !t.fullScreen, !t.minimized, !t.appHidden else {
+            refitWait = nil
+            return
+        }
         let now = clock()
         let seen = onScreenFrame
         if seen != w.frame { w.frame = seen; w.since = now }
