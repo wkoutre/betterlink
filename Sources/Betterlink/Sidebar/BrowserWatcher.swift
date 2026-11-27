@@ -46,7 +46,7 @@ final class TrackedWindow {
         target.frame = frame
         target.title = AXWindow.copy(element, kAXTitleAttribute) ?? ""
         titleReads.readWhole()
-        target.fullScreen = AXWindow.copy(element, "AXFullScreen") ?? false
+        target.fullScreen = handle.isFullScreen() ?? false
         target.minimized = AXWindow.copy(element, kAXMinimizedAttribute) ?? false
         target.appHidden = watcher?.isHidden ?? false
         return true

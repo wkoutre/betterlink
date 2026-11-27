@@ -118,8 +118,13 @@ final class SidebarController: ObservableObject {
         applyForAll() // set while betterlink wasn't running
     }
 
-    /// Called at launch: brings the sidebar back if it was on.
-    func restore() { if enabled { start() } }
+    /// Called at launch: sets back any browser's enhanced user interface a
+    /// betterlink that stopped mid-motion left off (`EnhancedUI.recover`),
+    /// and brings the sidebar back if it was on.
+    func restore() {
+        EnhancedUI.shared.recover()
+        if enabled { start() }
+    }
 
     func requestTrust() { WindowTracker.requestTrust() }
 
@@ -278,13 +283,41 @@ final class SidebarController: ObservableObject {
     /// its record, so it is recognised later instead of narrowed again, and
     /// is sent nothing more, also when it is let go (`stop()`, review F2).
     /// `clock` and `pause`: the time, and waiting (tests step their own).
+    ///
+    /// Each moved window's browser has its enhanced user interface held off
+    /// for the moves (`EnhancedUI`, one hold per browser, read and set
+    /// within the bound) and set back after, also within it: a browser that
+    /// doesn't answer the read is hung, and is sent nothing. Returns the
+    /// windows whose browser missed a call.
+    @discardableResult
     func giveSpaceBack(of all: [SidebarInstance], clock: @escaping () -> Double = CACurrentMediaTime,
-                       pause: @escaping (Double) -> Void = AXWindow.sleep) {
+                       pause: @escaping (Double) -> Void = AXWindow.sleep) -> Set<ObjectIdentifier> {
+        let began = clock()
         let moves = all.compactMap { $0.spaceBack() }
-        let missed = AXWindow.placeNow(moves, clock: clock, pause: pause)
+        let pids = Set(moves.map(\.pid))
+        var hung: Set<pid_t> = []
+        var held: [pid_t] = []
+        for pid in pids.sorted() {
+            // Its read, set and read back may each wait `placeCall`; none is begun that could end past the bound.
+            guard clock() - began + 3 * AXWindow.placeCall <= AXWindow.placeBound else { break }
+            let h = EnhancedUI.shared.hold(pid, by: self, wait: AXWindow.placeCall)
+            held.append(pid)
+            if h.missed { hung.insert(pid) }
+        }
+        // Time kept for setting each flag back (read back only if time is left: else a crash record keeps it).
+        let reserve = Double(held.filter { !hung.contains($0) && EnhancedUI.shared.turnedOff($0) }.count) * AXWindow.placeCall
+        let missed = AXWindow.placeNow(moves, hung: hung, began: began, reserve: reserve, clock: clock, pause: pause)
+        // Every call setting a flag back, the windows' own holds' included (one may be the last owner when the
+        // loop above ran out of time before its browser), is begun only when it can end within the bound.
+        let inBound = { clock() - began + AXWindow.placeCall <= AXWindow.placeBound }
         for i in all {
+            i.releaseFlag(wait: AXWindow.placeCall, within: inBound)
             if missed.contains(ObjectIdentifier(i.window.handle)) { i.letAlone() } else { i.unpair() }
         }
+        for pid in held {
+            EnhancedUI.shared.release(pid, by: self, wait: AXWindow.placeCall, retries: 0, sets: inBound, readsBack: inBound)
+        }
+        return missed
     }
 
     private func trustMayHaveChanged() {

@@ -86,7 +86,7 @@ public enum SidebarGeometry {
 
     /// The horizontal span of the display under most of `r` and of those
     /// touching it side by side at `r`'s height.
-    static func span(at r: CGRect, of displays: [CGRect]) -> ClosedRange<CGFloat>? {
+    public static func span(at r: CGRect, of displays: [CGRect]) -> ClosedRange<CGFloat>? {
         let level = displays.filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }
         guard let home = level.max(by: { $0.intersection(r).area < $1.intersection(r).area }) else { return nil }
         var lo = home.minX, hi = home.maxX
@@ -99,6 +99,47 @@ public enum SidebarGeometry {
             }
         }
         return lo...hi
+    }
+
+    /// How far `r` runs past the displays beside each other at its height, in
+    /// points: its horizontal span over no display there.
+    public static func offScreen(_ r: CGRect, displays: [CGRect]) -> CGFloat {
+        let spans = displays.filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }.map { ($0.minX, $0.maxX) }.sorted { $0.0 < $1.0 }
+        var covered: CGFloat = 0, reach = -CGFloat.infinity
+        for (a, b) in spans {
+            let lo = max(a, r.minX, reach), hi = min(b, r.maxX)
+            if hi > lo { covered += hi - lo }
+            reach = max(reach, b)
+        }
+        return max(0, r.width - covered)
+    }
+
+    /// Where a sidebar `width` wide is beside a browser at `b`, on `side`.
+    public static func strip(beside b: CGRect, width: CGFloat, side: SidebarSide) -> CGRect {
+        CGRect(x: side == .left ? b.minX - width : b.maxX, y: b.minY, width: width, height: b.height)
+    }
+
+    /// The browser was put somewhere new, from `was` to `now`, while its
+    /// sidebar was open, and the pair must fit again (bug 3, live on
+    /// 3d5c1e4: Window › Fill or a tiling app put the browser on the whole
+    /// visible frame, and the sidebar was left off the screen). Both must
+    /// hold: it was placed, not dragged (both horizontal edges moved, as
+    /// Fill, a zoom or tiling to a half or a quarter move them, or it is on a
+    /// display's whole visible frame, as Fill puts a pair that filled it
+    /// already); and the sidebar beside the new frame would be further
+    /// outside the visible frames of the displays at its height (`visible`)
+    /// than it was beside the old one. Then the browser's new frame is the
+    /// pair's, and the sidebar opens in it again (rule 2). A drag of one
+    /// horizontal edge, or of a corner, is the person's and stands wherever
+    /// it leaves the sidebar (rule 3; review F1 of 1df43a3, the review of
+    /// 9354d68), and so does a move alone (the same size).
+    public static func refitsAfterResize(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, visible displays: [CGRect]) -> Bool {
+        guard abs(was.width - now.width) >= 2 || abs(was.height - now.height) >= 2 else { return false }
+        let bothEdges = abs(was.minX - now.minX) >= 2 && abs(was.maxX - now.maxX) >= 2
+        let filled = displays.contains { abs($0.minX - now.minX) < 2 && abs($0.maxX - now.maxX) < 2 && abs($0.minY - now.minY) < 2 && abs($0.maxY - now.maxY) < 2 }
+        guard bothEdges || filled else { return false }
+        let before = offScreen(strip(beside: was, width: width, side: side), displays: displays)
+        return offScreen(strip(beside: now, width: width, side: side), displays: displays) > before + 1
     }
 
     /// The narrowest and widest the sidebar gets.

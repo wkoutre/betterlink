@@ -117,6 +117,11 @@ public struct WindowSteps: Sendable {
     public var patience = WindowSteps.timeout
     /// The longest any call took to land (its last change), in seconds.
     public private(set) var slowest = 0.0
+    /// How many calls moved the window.
+    private var moves = 0
+    /// Every call that moved the window had landed within `WindowGlide.instant`
+    /// of being sent, and one did: this window's sets land at once.
+    public var landedAtOnce: Bool { moves > 0 && slowest <= WindowGlide.instant }
     /// The longest the window took to start on a call of these steps (its
     /// first change), in seconds: macOS 27's animation can begin late.
     private var startLag = 0.0
@@ -166,10 +171,53 @@ public struct WindowSteps: Sendable {
     /// The longest a show or a hide may take, every call of it included.
     public static let cap = 3.0
 
+    /// A glide (`WindowGlide`) that moved the window toward `target` and gave
+    /// way: the steps go on as though their size had been sent at `at` from
+    /// `from` (the window before the glide), the window seen at `seen` and
+    /// last changed at `changed`. A size of the glide's still on its way
+    /// keeps the window's top left, so it is taken as theirs; held still
+    /// short of the target, the size is sent once more and the steps' checks
+    /// (a stop short, its minimum, the far edge) are made as after a size.
+    public struct Resume: Equatable, Sendable {
+        public var from: CGRect
+        public var seen: CGRect
+        public var at: Double
+        public var changed: Double
+        /// The window has changed since the call: else it hasn't started on it, and it is waited for (and sent
+        /// again every `patience`) as a call of the steps' own that changes nothing.
+        public var moved: Bool
+        public init(from: CGRect, seen: CGRect, at: Double, changed: Double, moved: Bool = true) {
+            self.from = from
+            self.seen = seen
+            self.at = at
+            self.changed = changed
+            self.moved = moved
+        }
+    }
+
+    /// Steps whose one call, `call`, was sent at `at` by someone of
+    /// betterlink's other than steps (a glide): to pass as `after` to the
+    /// steps that take over, which wait for it and never send it again.
+    /// `from`: the window when it was sent; `seen`: now; `changed`: when it
+    /// last changed; `moved`: whether it has changed since the call.
+    /// `own`: the steps that take over treat it as theirs (sent again if
+    /// dropped or held partway), though it isn't what they ask: a glide's
+    /// probe of a widening (`WindowGlide`), of the same motion.
+    public static func inFlight(_ call: Call, at: Double, from: CGRect, seen: CGRect, changed: Double, moved: Bool, own: Bool = false) -> WindowSteps {
+        var w = WindowSteps(target: seen, keep: nil)
+        w.sent = (call, at, seen, changed, from, moved, nil, false)
+        w.lends = own
+        return w
+    }
+
+    /// Its call in flight is the taking-over steps' own (`inFlight(own:)`).
+    private var lends = false
+
     /// `after`: the steps these replace, mid-way: their call in flight is
-    /// waited for first.
+    /// waited for first. `resuming`: a glide's, which these finish.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil,
+                resuming glide: Resume? = nil) {
         self.target = target
         self.keep = keep
         self.widest = widest
@@ -183,8 +231,11 @@ public struct WindowSteps: Sendable {
         if let earlier, !earlier.done {
             sent = earlier.sent
             inherited = sent != nil
-            foreign = sent.map { !Self.reached($0.call, target) } ?? false
+            foreign = earlier.lends ? false : sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
+        } else if let glide {
+            phase = .sizing(from: glide.from, movedFirst: nil)
+            sent = (.size(target), glide.at, glide.seen, glide.changed, glide.from, glide.moved, nil, false)
         }
     }
 
@@ -285,7 +336,7 @@ public struct WindowSteps: Sendable {
                 }
             }
             sent = nil
-            if s.moved { slowest = max(slowest, s.changed - s.at) }
+            if s.moved { slowest = max(slowest, s.changed - s.at); moves += 1 }
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
             // Not one taken over that isn't these steps' own: never checked, it may be held partway.

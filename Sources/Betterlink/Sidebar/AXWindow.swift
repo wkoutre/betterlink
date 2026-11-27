@@ -23,7 +23,7 @@ enum AXWindow {
     /// answer. Set on every element kept or asked more than once: per the
     /// header it holds for that object only, not for others equal to it.
     static func limitWaiting(on el: AXUIElement) { AXUIElementSetMessagingTimeout(el, Float(callLimit)) }
-    static let callLimit = 1.0
+    nonisolated static let callLimit = 1.0
 
     static func frame(of win: WindowHandle) -> CGRect? {
         guard let p = win.position(), let s = win.size(), let mainHeight = Displays.primaryHeight else { return nil }
@@ -59,8 +59,8 @@ enum AXWindow {
     /// The longest quitting (or turning the sidebar off) holds the app up,
     /// however many windows there are and whatever their browsers do; and
     /// the longest one call to a browser may wait meanwhile.
-    static let placeBound = 4 * WindowSteps.timeout
-    static let placeCall = 0.2
+    nonisolated static let placeBound = 4 * WindowSteps.timeout
+    nonisolated static let placeCall = 0.2
 
     /// Moves each window to its frame now, for when there is no later (the
     /// app quitting, the sidebar turned off): its final target sent whole
@@ -73,14 +73,18 @@ enum AXWindow {
     /// for any of its windows, and what hasn't landed then is left as it is.
     /// Returns the windows whose browser missed. `clock` and `pause`: the
     /// time, and waiting (tests step their own).
+    /// `hung`: browsers known not to answer, sent nothing. `began`: when the
+    /// bound started (before this, when the caller spent some of it), and
+    /// `reserve`: time the caller keeps for after.
     @discardableResult
-    static func placeNow(_ moves: [Move], clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) -> Set<ObjectIdentifier> {
+    static func placeNow(_ moves: [Move], hung known: Set<pid_t> = [], began start: Double? = nil, reserve: Double = 0,
+                         clock: () -> Double = CACurrentMediaTime, pause: (Double) -> Void = AXWindow.sleep) -> Set<ObjectIdentifier> {
         var all = moves.map { (move: $0, steps: WindowSteps(target: $0.frame, keep: nil, resends: true, after: $0.after), over: false) }
-        var hung: Set<pid_t> = []
+        var hung = known
         var missed: Set<ObjectIdentifier> = []
         for m in moves { m.window.limitWaiting(placeCall) }
         defer { for m in moves { m.window.limitWaiting(callLimit) } }
-        let began = clock()
+        let began = start ?? clock()
         while all.contains(where: { !$0.over }) {
             for k in all.indices where !all[k].over {
                 let m = all[k].move
@@ -90,7 +94,7 @@ enum AXWindow {
                     continue
                 }
                 // Out of time: left as it is. Gone: nothing to do.
-                guard clock() - began + placeCall <= placeBound, let seen = shownFrame(of: m.window) else { all[k].over = true; continue }
+                guard clock() - began + placeCall + reserve <= placeBound, let seen = shownFrame(of: m.window) else { all[k].over = true; continue }
                 if let call = all[k].steps.step(seen: seen, now: clock()) {
                     send(call, to: m.window)
                     if m.window.missed {

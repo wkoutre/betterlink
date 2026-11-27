@@ -15,7 +15,11 @@ enum DragTrace {
     nonisolated(unsafe) private static var timer: DispatchSourceTimer?
     nonisolated(unsafe) private static var samples: [(t: Double, browser: CGRect, panel: CGRect)] = []
 
+    /// Tests: every line, wherever tracing is off (`BETTERLINK_GUARD_ONLY` prints them).
+    nonisolated(unsafe) static var echo: ((String) -> Void)?
+
     static func log(_ line: String) {
+        echo?(line)
         guard enabled else { return }
         let s = String(format: "%.3f ", Date().timeIntervalSince1970) + line + "\n"
         queue.async {
