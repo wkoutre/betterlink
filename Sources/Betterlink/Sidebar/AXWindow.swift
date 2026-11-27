@@ -37,31 +37,12 @@ enum AXWindow {
         return SidebarGeometry.cocoa(fromAX: b, mainScreenHeight: h)
     }
 
-    /// Sends one of `WindowSteps`' calls now, on this thread (quitting,
-    /// which has no later). A whole frame is its size and its position in
-    /// `WindowSet`'s order.
+    /// Sends one of `WindowSteps`' calls.
     static func send(_ call: WindowSteps.Call, to win: WindowHandle) {
-        for s in sets(call, of: win) {
-            switch s {
-            case .size(let z): win.setSize(z)
-            case .position(let p): win.setPosition(p)
-            }
-        }
-    }
-
-    /// One of `WindowSteps`' calls as the Accessibility sets that make it,
-    /// from where the window is on screen now. `keep`: the side whose far
-    /// edge a whole frame keeps (`WindowSet`).
-    static func sets(_ call: WindowSteps.Call, of win: WindowHandle, keep: SidebarSide? = nil) -> [AXSet] {
-        guard let h = Displays.primaryHeight else { return [] }
-        let seen = shownFrame(of: win)
-        let right = seen.flatMap { WindowSet.screenRight(of: $0, displays: Displays.all.map(\.frame)) }
-        let calls = seen.map { WindowSet.expand(call, from: $0, keep: keep, right: right) } ?? { if case .frame(let f) = call { [.size(f), .position(f)] } else { [call] } }()
-        return calls.map {
-            switch $0 {
-            case .size(let f), .frame(let f): .size(f.size)
-            case .position(let f): .position(SidebarGeometry.ax(fromCocoa: f, mainScreenHeight: h).origin)
-            }
+        guard let h = Displays.primaryHeight else { return }
+        switch call {
+        case .size(let f): win.setSize(f.size)
+        case .position(let f): win.setPosition(SidebarGeometry.ax(fromCocoa: f, mainScreenHeight: h).origin)
         }
     }
 
@@ -101,8 +82,6 @@ enum AXWindow {
         var all = moves.map { (move: $0, steps: WindowSteps(target: $0.frame, keep: nil, resends: true, after: $0.after), over: false) }
         var hung = known
         var missed: Set<ObjectIdentifier> = []
-        // Sets still queued on a window's own queue are dropped: what is sent here, now, is betterlink's last word.
-        for m in moves { m.window.dropUnsent() }
         for m in moves { m.window.limitWaiting(placeCall) }
         defer { for m in moves { m.window.limitWaiting(callLimit) } }
         let began = start ?? clock()

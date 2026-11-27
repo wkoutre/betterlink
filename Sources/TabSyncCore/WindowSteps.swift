@@ -55,10 +55,7 @@ import CoreGraphics
 ///   call before it has landed (steps that take over from others wait for
 ///   their call in flight first), so it is the only one of
 ///   betterlink's that can be moving the window. Nothing is remembered past
-///   the steps. A move of a position's short of it by more than a point is
-///   betterlink's only while it goes on: held there `heldMoveWait`, nothing
-///   sent meanwhile, it is someone else's. A frame of a show refused as
-///   unmoved may still land late (`late`): that is betterlink's too.
+///   the steps.
 /// - `resends`: the steps' end, the final target sent whole once more, its
 ///   size and its position, whatever the window looks like. Accessibility
 ///   sets are done in order, so a call of betterlink's still on its way
@@ -71,13 +68,10 @@ import CoreGraphics
 /// Pure: the caller reads the frame on screen and sends what `step` returns.
 public struct WindowSteps: Sendable {
     /// What to send: a size, or a position, each as the frame it gives (Cocoa
-    /// coordinates), the window's top edge where `frame` has it; or both, the
-    /// frame whole, as a size and a position sent back to back in the order
-    /// `WindowSet` gives from where the window is (a slide-over's one set).
+    /// coordinates), the window's top edge where `frame` has it.
     public enum Call: Equatable, Sendable {
         case size(CGRect)
         case position(CGRect)
-        case frame(CGRect)
     }
 
     public let target: CGRect
@@ -110,11 +104,6 @@ public struct WindowSteps: Sendable {
     /// a narrower one (the end of a drag, whose last size the window may
     /// look done with before its browser has widened itself back).
     public let settles: Bool
-    /// A frame betterlink asked earlier whose calls may still land, late
-    /// (a show refused as unmoved, its set unanswered): watching, its size
-    /// landing (the top left kept) or its position landing (within a point,
-    /// the size kept) is betterlink's, not someone else's change.
-    public let late: CGRect?
     public private(set) var done = false
     /// Done because something else changed the window (see above).
     public private(set) var interrupted = false
@@ -138,61 +127,9 @@ public struct WindowSteps: Sendable {
     public private(set) var slowest = 0.0
     /// How many calls moved the window.
     private var moves = 0
-    /// Every call that moved the window had landed within `instant` of being
-    /// sent, and one did: this window's sets land at once.
-    public var landedAtOnce: Bool { moves > 0 && slowest <= Self.instant }
-    /// Longer than this to show a call: the browser's sets don't land at once.
-    public static let instant = 0.05
-    /// How many calls `step` has returned: none after the call the steps
-    /// were made with (`sending`) is one set and nothing more.
-    public private(set) var more = 0
-    /// The steps were made with their first call already sent
-    /// (`init(sending:)`), it landed at once and whole, and nothing more was
-    /// sent: the motion was that one set (no final resend is owed).
-    public var clean: Bool { opened && done && more == 0 && !capped && !interrupted && !stoppedShort && landedAtOnce && short == nil }
-    private var opened = false
-    /// The set's last call, its position, is these steps' to send once its
-    /// size has landed (`init(sending:placeFollows:)`), and is part of the set:
-    /// a position landing before a size sent ahead of it (a browser that
-    /// takes a position at once and a size late) would bring a left hide's
-    /// far edge in.
-    private var follows = false
-    /// A show's set whose narrower size the window doesn't move for at all:
-    /// sent once more after `still`, and the window unchanged `unmovedWait`
-    /// after that, it has stopped where it is (`stoppedShort`), however little
-    /// is known of the browser's minimum (a first show of a browser already
-    /// at it covered the page for the whole cap). Any change after the size
-    /// sent once more is the normal wait up to the cap. Its position landed
-    /// (within a point) and its size unmoved, sooner: the size sent once more
-    /// `clampWait` after the position landed, and unchanged `clampResendWait`
-    /// after that, refused as clamped (`clamped`).
-    private var refusesUnmoved = false
-    private var setAt = 0.0
-    /// Refused that way: when the set was sent, when its size was sent once
-    /// more, and when the window last changed before that (nil: never), for
-    /// `trace.log`.
-    public private(set) var unmoved: (set: Double, resent: Double, lastChange: Double?)?
-    /// Refused that way with its position landed and its size clamped (`clampWait`, `clampResendWait`).
-    public private(set) var clamped = false
-    private var lastChangeBeforeResend: Double?
-    /// When a clamped size was sent once more (`clampWait`).
-    private var clampResent: Double?
-    /// That position is the call in flight.
-    private var placing = false
-    /// The steps these took over: their set was seen cut short (`partway`),
-    /// and the width their window's browser was seen to stop at (`stops`).
-    private var earlierCut = false
-    private var earlierStops: CGFloat?
-    /// Made with their first call already sent (`init(sending:)`): a slide-over's one set.
-    public var oneSet: Bool { opened }
-    /// That set was seen partway: its position on its way, or cut short by its
-    /// size where it began (`WindowSet.between` says which went first). The
-    /// browser's sets animate (macOS 27's, or its
-    /// enhanced UI on), and the second of a set cuts the first short: its
-    /// next show or hide goes a call at a time. A set that shows late, but
-    /// whole, is no such sign (MINI-16, 1df43a3: one set 70 ms late).
-    public private(set) var partway = false
-    private var between: CGRect?
+    /// Every call that moved the window had landed within `WindowGlide.instant`
+    /// of being sent, and one did: this window's sets land at once.
+    public var landedAtOnce: Bool { moves > 0 && slowest <= WindowGlide.instant }
     /// The longest the window took to start on a call of these steps (its
     /// first change), in seconds: macOS 27's animation can begin late.
     private var startLag = 0.0
@@ -239,33 +176,57 @@ public struct WindowSteps: Sendable {
     /// that changes nothing is waited for before it is sent again.
     public static let still = 0.15
     public static let timeout = 0.6
-    /// A show's size not moved at all, sent once more: how long the window
-    /// may stay unchanged after that before the show is refused as stopped
-    /// where it is (`init(sending:refusesUnmoved:)`).
-    public static let unmovedWait = 0.3
-    /// A show's set whose position has landed and whose size hasn't moved at
-    /// all: how long after the position landed the size is sent once more
-    /// (four 60 Hz display frames), and how long after that it may stay
-    /// unchanged before the show is refused as clamped (six more): about
-    /// 167 ms from the position, the window then put back where it was.
-    public static let clampWait = 4.0 / 60
-    public static let clampResendWait = 6.0 / 60
-    /// How long a whole frame's position may hold short of where it was sent,
-    /// its size untouched, before the move is taken as someone else's: longer
-    /// than macOS 27 holds an animation partway (250 ms measured, 100 to 300
-    /// in the guard).
-    public static let heldMoveWait = still + unmovedWait
-
     /// The longest a show or a hide may take, every call of it included.
     public static let cap = 3.0
 
+    /// A glide (`WindowGlide`) that moved the window toward `target` and gave
+    /// way: the steps go on as though their size had been sent at `at` from
+    /// `from` (the window before the glide), the window seen at `seen` and
+    /// last changed at `changed`. A size of the glide's still on its way
+    /// keeps the window's top left, so it is taken as theirs; held still
+    /// short of the target, the size is sent once more and the steps' checks
+    /// (a stop short, its minimum, the far edge) are made as after a size.
+    public struct Resume: Equatable, Sendable {
+        public var from: CGRect
+        public var seen: CGRect
+        public var at: Double
+        public var changed: Double
+        /// The window has changed since the call: else it hasn't started on it, and it is waited for (and sent
+        /// again every `patience`) as a call of the steps' own that changes nothing.
+        public var moved: Bool
+        public init(from: CGRect, seen: CGRect, at: Double, changed: Double, moved: Bool = true) {
+            self.from = from
+            self.seen = seen
+            self.at = at
+            self.changed = changed
+            self.moved = moved
+        }
+    }
+
+    /// Steps whose one call, `call`, was sent at `at` by someone of
+    /// betterlink's other than steps (a glide): to pass as `after` to the
+    /// steps that take over, which wait for it and never send it again.
+    /// `from`: the window when it was sent; `seen`: now; `changed`: when it
+    /// last changed; `moved`: whether it has changed since the call.
+    /// `own`: the steps that take over treat it as theirs (sent again if
+    /// dropped or held partway), though it isn't what they ask: a glide's
+    /// probe of a widening (`WindowGlide`), of the same motion.
+    public static func inFlight(_ call: Call, at: Double, from: CGRect, seen: CGRect, changed: Double, moved: Bool, own: Bool = false) -> WindowSteps {
+        var w = WindowSteps(target: seen, keep: nil)
+        w.sent = (call, at, seen, changed, from, moved, nil, false)
+        w.lends = own
+        return w
+    }
+
+    /// Its call in flight is the taking-over steps' own (`inFlight(own:)`).
+    private var lends = false
+
     /// `after`: the steps these replace, mid-way: their call in flight is
-    /// waited for first.
+    /// waited for first. `resuming`: a glide's, which these finish.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, late: CGRect? = nil,
-                after earlier: WindowSteps? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil,
+                resuming glide: Resume? = nil) {
         self.target = target
-        self.late = late
         self.keep = keep
         self.widest = widest
         self.retreats = retreats
@@ -278,38 +239,12 @@ public struct WindowSteps: Sendable {
         if let earlier, !earlier.done {
             sent = earlier.sent
             inherited = sent != nil
-            foreign = sent.map { !Self.reached($0.call, target) } ?? false
+            foreign = earlier.lends ? false : sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
-            earlierCut = earlier.partway
-            earlierStops = earlier.stops
-            // The same show's set, taken over (through a hide's steps, too) by a press that asks the same (a show
-            // turned back and pressed again): still refused if it doesn't move, its size already sent once more.
-            // A press that asks something else (`foreign`) only waits for it.
-            if earlier.refusesUnmoved {
-                refusesUnmoved = true
-                setAt = earlier.setAt
-                lastChangeBeforeResend = earlier.lastChangeBeforeResend
-            }
+        } else if let glide {
+            phase = .sizing(from: glide.from, movedFirst: nil)
+            sent = (.size(target), glide.at, glide.seen, glide.changed, glide.from, glide.moved, nil, false)
         }
-    }
-
-    /// Steps whose first call, `call`, the caller has just sent at `at`, the
-    /// window then at `from`: a slide-over's one set (`WindowSet`), a size, a
-    /// position or both back to back (`.frame`). They wait for it as their
-    /// own (sent again if dropped, checked if it holds still short) and go on
-    /// from where it leaves the window, as after their own size: a browser
-    /// that stops at its minimum, or stops short, is checked as then.
-    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil, placeFollows: Bool = false,
-                refusesUnmoved: Bool = false) {
-        self.init(target: target, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
-        opened = true
-        self.refusesUnmoved = refusesUnmoved
-        setAt = at
-        self.between = between
-        follows = placeFollows
-        sent = (call, at, from, at, from, false, nil, false)
-        if case .position = call { phase = .placed } else { phase = .sizing(from: from, movedFirst: nil) }
     }
 
     private static func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1 }
@@ -324,67 +259,21 @@ public struct WindowSteps: Sendable {
             x >= min(a, b) - max(1.5, slack) && x <= max(a, b) + max(1.5, slack)
         }
         switch c {
-        // A size keeps the top left (within `WindowSet`'s nudge, sent before a size that grows a window past its screen's edge).
-        case .size: return (near(p.minX, seen.minX) || abs(p.minX - seen.minX) <= WindowSet.nudgeBy + 0.5) && near(p.maxY, seen.maxY)
+        case .size: return near(p.minX, seen.minX) && near(p.maxY, seen.maxY)
         case .position(let t):
             return near(p.width, seen.width) && near(p.height, seen.height)
                 && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
-        case .frame(let t):
-            // A position and a size, back to back, either first: there, or the position on its way (the size kept, the
-            // left and top edges going toward where they were sent), or the size on its way (the top left kept, where
-            // it was or where the position put it), at any width (a browser takes what it can). Where it was takes in
-            // `WindowSet`'s nudge, 1 pt right, before a size that grows the window past its screen's edge.
-            let nudged = { (a: CGFloat, b: CGFloat) in near(a, b) || abs(a - b) <= WindowSet.nudgeBy + 0.5 }
-            let topLeft = (nudged(p.minX, seen.minX) && near(p.maxY, seen.maxY)) || (near(t.minX, seen.minX) && near(t.maxY, seen.maxY))
-            let moving = near(p.width, seen.width) && near(p.height, seen.height)
-                && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
-            return topLeft || moving
-        }
-    }
-
-    /// Whether `late`'s size (or as much of it as the browser takes) or its
-    /// position landing takes a window at `p` to `seen`, the call in flight
-    /// (`c`) landing with it or not.
-    private func lands(_ late: CGRect?, _ c: Call, from p: CGRect, to seen: CGRect) -> Bool {
-        guard let late else { return false }
-        // Its size, or what the browser could take of it (no narrower than asked, at its minimum).
-        let sized = Self.between(seen.width, late.width, p.width) && Self.near(seen.height, late.height)
-        let placed = abs(seen.minX - late.minX) <= 1 && abs(seen.maxY - late.maxY) <= 1
-        let topLeft = Self.near(seen.minX, p.minX) && Self.near(seen.maxY, p.maxY)
-        let size = Self.near(seen.width, p.width) && Self.near(seen.height, p.height)
-        // The late size and the call in flight's position in the same look.
-        let resized = CGRect(x: seen.minX, y: seen.maxY - p.height, width: p.width, height: p.height)
-        return (sized && (topLeft || placed || Self.can(c, from: p, to: resized, slack: slack))) || (placed && size)
-    }
-
-    /// A whole frame (`.frame`) whose size asks a change the window hasn't
-    /// begun to make, its place landed (a browser that takes a position at
-    /// once and a size late). Not its place unstarted, its size landed: under
-    /// an animation (macOS 27's) the size cuts the place short where it
-    /// began, and the place never comes.
-    private static func halfUnstarted(_ c: Call, from: CGRect, seen: CGRect) -> Bool {
-        guard case .frame(let f) = c else { return false }
-        let sized = !near(f.width, from.width) || !near(f.height, from.height)
-        return sized && near(seen.width, from.width) && near(seen.height, from.height)
-    }
-
-    /// The size a call asks, if it asks one.
-    private static func size(of c: Call) -> CGRect? {
-        switch c {
-        case .size(let f), .frame(let f): f
-        case .position: nil
         }
     }
 
     private static func narrows(_ c: Call, _ from: CGRect) -> Bool {
-        size(of: c).map { $0.width < from.width - 1 } ?? false
+        if case .size(let f) = c { f.width < from.width - 1 } else { false }
     }
 
     private static func reached(_ c: Call, _ seen: CGRect) -> Bool {
         switch c {
         case .size(let f): return near(seen.width, f.width) && near(seen.height, f.height)
         case .position(let f): return near(seen.minX, f.minX) && near(seen.maxY, f.maxY)
-        case .frame(let f): return near(seen.width, f.width) && near(seen.height, f.height) && near(seen.minX, f.minX) && near(seen.maxY, f.maxY)
         }
     }
 
@@ -402,20 +291,10 @@ public struct WindowSteps: Sendable {
         let capped = deadline != nil
         if var s = sent {
             if seen != s.last {
-                guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) || lands(late, s.call, from: s.last, to: seen) else {
+                guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) else {
                     interrupted = true
                     done = true
                     return nil
-                }
-                if opened, moves == 0, more == 0 {
-                    // A position on its way (its left edge between where it was and where it was sent), or, where the
-                    // position goes first, a size that landed before it (the position cut short where it began). A
-                    // browser that stops at its minimum, its position landed, is neither.
-                    let from = s.from
-                    let across = abs(seen.minX - from.minX) > WindowSet.nudgeBy + 0.5 && !Self.near(seen.minX, target.minX)
-                    let positionFirst = between.map { Self.near($0.minX, target.minX) && !Self.near(from.minX, target.minX) } ?? false
-                    let cut = positionFirst && Self.near(seen.minX, from.minX) && !Self.near(seen.width, from.width)
-                    if across || cut { partway = true }
                 }
                 if !s.moved { startLag = max(startLag, now - s.at) }
                 if let c = s.checkedAt, !s.resumed { s.resumed = true; startLag = max(startLag, now - c) }
@@ -424,86 +303,18 @@ public struct WindowSteps: Sendable {
                 s.moved = true
                 sent = s
             }
-            // A position (or a whole frame's) on its way, the size where it was: a pure move, short of where the
-            // position was sent by more than a point (not `WindowSet`'s nudge). An animation of betterlink's (macOS 27's,
-            // which can hold partway) goes on to the position; held there `heldMoveWait`, it is someone else's (the
-            // person's: seed 20261126, case 2997, with a busy browser's set not begun; case 4992, a refusal's way back),
-            // and nothing of these steps' is sent over it meanwhile (a call sent once more would cut an animation short
-            // where it holds, or put the window back over the person's move).
-            let aimed: CGRect? = { switch s.call { case .frame(let f), .position(let f): f; case .size: nil } }()
-            if checks, !foreign, s.moved, let f = aimed, Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height),
-               abs(seen.minX - f.minX) > 1 || abs(seen.maxY - f.maxY) > 1,
-               abs(seen.minX - s.from.minX) > WindowSet.nudgeBy + 0.5 || !Self.near(seen.maxY, s.from.maxY) {
-                guard now - s.changed >= Self.heldMoveWait - 1e-9 else { return nil }
-                interrupted = true
-                done = true
-                return nil
-            }
-            // A show's set whose position has landed (within a point) and whose narrower size hasn't moved at all
-            // (`refusesUnmoved`): Chromium applies both through one path, so the size is clamped (a browser at its
-            // minimum; live at 23966a6 the window sat a sidebar's width to the right at its old width for 0.69 s).
-            // `clampWait` after the position landed the size is sent once more, and unchanged `clampResendWait` after
-            // that, the show is refused. Any change of the size is progress: the normal wait up to the cap.
-            if refusesUnmoved, !foreign, case .frame(let f) = s.call, Self.narrows(s.call, s.from),
-               !(Self.near(f.minX, s.from.minX) && Self.near(f.maxY, s.from.maxY)),
-               Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height),
-               abs(seen.minX - f.minX) <= 1, abs(seen.maxY - f.maxY) <= 1 {
-                if let c = clampResent {
-                    guard now - max(c, s.changed) >= Self.clampResendWait - 1e-9 else { return nil }
-                    unmoved = (setAt, c, lastChangeBeforeResend)
-                    clamped = true
-                    stoppedShort = true
-                    done = true
-                    return nil
-                }
-                guard now - s.changed >= Self.clampWait - 1e-9 else { return nil }
-                lastChangeBeforeResend = s.changed
-                clampResent = now
-                more += 1
-                return .size(f)
-            }
-            // A show's narrower size not moved at all (`refusesUnmoved`).
-            if refusesUnmoved, !foreign, Self.narrows(s.call, s.from), Self.near(seen.width, s.from.width), Self.near(seen.height, s.from.height) {
-                if let c = s.checkedAt {
-                    if s.changed <= c + 1e-9 {
-                        guard now - c >= Self.unmovedWait - 1e-9 else { return nil }
-                        unmoved = (setAt, c, lastChangeBeforeResend)
-                        stoppedShort = true
-                        done = true
-                        return nil
-                    }
-                } else {
-                    guard now - s.changed >= Self.still - 1e-9 else { return nil }
-                    lastChangeBeforeResend = s.moved ? s.changed : nil
-                    s.checkedAt = now
-                    s.changed = now
-                    sent = s
-                    more += 1
-                    if case .frame(let f) = s.call { return .size(f) }
-                    return s.call
-                }
-            }
             // Still, once it has moved: landed short. Not moved at all yet: not started.
             // A narrower size of a show or hide, the window already no wider than this window's browser
             // was seen to stop at (`stops`), at or above the width asked: not moving is its answer too.
             let atStop = capped && !foreign && Self.narrows(s.call, s.from) && !s.moved
-                && { if let f = Self.size(of: s.call), let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
-            // A whole frame taken over from the press before, half of it landed and the other half not started (a
-            // browser that takes a position at once and a size late; Chromium's lands 0 to 31 ms after, docs/tabs.md): not started either,
-            // and waited for as such, since its other half may still land (the guard at seed 20261126: the new
-            // press's calls went out while the size was on its way, and it landed on top of them).
-            // Not one seen cut short (its place cut where it began by its size, under an animation), whose other
-            // half never comes; nor a narrower size the window is already at its browser's minimum for.
-            let atMinimum = Self.size(of: s.call).map { f in earlierStops.map { f.width < s.from.width - 1 && seen.width <= $0 + 0.5 } ?? false } ?? false
-            let halfWaits = foreign && !earlierCut && !atMinimum && Self.halfUnstarted(s.call, from: s.from, seen: seen)
-            let started = s.moved && !halfWaits
-            let still = (started || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
+                && { if case .size(let f) = s.call, let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
+            let still = (s.moved || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
             // narrower size, carrying out a show or hide or sending the final target, only once it has
             // held still too: a browser can take it and then widen itself back to its minimum.
             let holds = (capped || resends) && Self.narrows(s.call, s.from)
             // Settling: a size, reached, and nothing changed for `still`, whether it moved or not.
-            let settling = settles && Self.size(of: s.call) != nil
+            let settling = settles && { if case .size = s.call { true } else { false } }()
             let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still) && (!settling || now - s.changed >= Self.still)
             // Held still short of what it asked, carrying out a show or hide or sending the final target:
             // sent once more, since macOS 27 can hold an animation partway. Moving again, it goes on;
@@ -514,20 +325,13 @@ public struct WindowSteps: Sendable {
                 s.checkedAt = now
                 s.changed = now
                 sent = s
-                more += 1
-                // A whole frame held still: its size, which is what an animation holds partway (its place, if missing,
-                // goes after, as after a size); sent whole, a position cut short the first time would move it again.
-                if case .frame(let f) = s.call { return .size(f) }
                 return s.call
             }
             // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
-            // (Its size sent once more by the steps taken over, and still unstarted: waited for all the same.)
-            // Nor one taken over that hasn't moved at all: not started, it is waited for up to the cap (seed 6221202,
-            // case 11: a busy browser's size, sent once more by the show, landed after the hide had gone on).
-            let stopped = !halfWaits && !(foreign && !s.moved) && (s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false)
+            let stopped = s.checkedAt.map { !s.resumed && now - $0 >= Self.still + startLag } ?? false
             if stopped, atStop { stayed = true }
             if !arrived, !still, !stopped {
-                guard !started, now - s.at >= patience else { return nil }
+                guard !s.moved, now - s.at >= patience else { return nil }
                 // Not started within `patience`: sent again (a call can be dropped). Carrying out a show
                 // or hide, waited for up to the deadline; the final target's, once; a drag's, or one the
                 // final target took over, let go (it lands before the final target's all the same). One a
@@ -540,15 +344,11 @@ public struct WindowSteps: Sendable {
                     s.at = now
                     s.changed = now
                     sent = s
-                    more += 1
                     return s.call
                 }
             }
             sent = nil
-            // The set's own position, sent once its size landed (`follows`): its time behind the window's queue,
-            // held by the browser answering the size, is the size's, not a sign the browser's sets don't land at once.
-            if s.moved { if !placing { slowest = max(slowest, s.changed - s.at) }; moves += 1 }
-            placing = false
+            if s.moved { slowest = max(slowest, s.changed - s.at); moves += 1 }
             // A move that stopped short across: macOS doesn't stop a move
             // sideways, so something else stopped it there.
             // Not one taken over that isn't these steps' own: never checked, it may be held partway.
@@ -589,7 +389,7 @@ public struct WindowSteps: Sendable {
                 return nil
             }
             // The steps taken over from asked this same narrower size, and the window answered: that answer is this one's.
-            if let a = adopt, a.moved, let f = Self.size(of: a.call), abs(f.width - target.width) < 1, abs(f.height - target.height) < 1,
+            if let a = adopt, a.moved, case .size(let f) = a.call, abs(f.width - target.width) < 1, abs(f.height - target.height) < 1,
                target.width < a.from.width {
                 adopt = nil
                 phase = .sizing(from: a.from, movedFirst: nil)
@@ -650,10 +450,7 @@ public struct WindowSteps: Sendable {
             if abs(seen.width - target.width) >= 2 || abs(seen.height - target.height) >= 2 { short = at }
             phase = .placed
             if Self.near(at.minX, seen.minX), Self.near(at.maxY, seen.maxY) { return step(seen: seen, now: now) }
-            let place = send(.position(at), seen, now)
-            // The set's own position: not a call more than the set.
-            if follows { follows = false; more -= 1; placing = true }
-            return place
+            return send(.position(at), seen, now)
         case .placed:
             // As asked, or what it could: once more for what is missing.
             if SidebarGeometry.same(seen, target) || retried { done = true; return nil }
@@ -670,7 +467,6 @@ public struct WindowSteps: Sendable {
     }
 
     private mutating func send(_ c: Call, _ seen: CGRect, _ now: Double) -> Call {
-        more += 1
         sent = (c, now, seen, now, seen, false, nil, false)
         inherited = false
         foreign = false
