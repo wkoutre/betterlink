@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 import BetterlinkCore
@@ -12,6 +13,43 @@ import BetterlinkCore
         let journal = FileManager.default.temporaryDirectory.appendingPathComponent("enhanced-ui-\(UUID().uuidString).json")
         let apps = FakeApps()
         return (EnhancedUI(app: apps, journal: journal), apps, journal)
+    }
+
+    /// With VoiceOver or Switch Control on, the flag is theirs: no hold, not
+    /// read, not set, nothing recorded; the motion goes as it did before
+    /// there was a hold (Nick, F3 of 1df43a3's review). Read anew at each
+    /// motion: once it is off, the next hold sets the flag off as built.
+    @Test func leftAloneWhileAnAssistiveAppIsOn() {
+        for name in ["VoiceOver", "Switch Control"] {
+            let (ui, apps, journal) = make()
+            apps.flags[pid] = true
+            var lines: [String] = []
+            DragTrace.echo = { lines.append($0) }
+            defer { DragTrace.echo = nil }
+            ui.assistive = { name }
+            let owner = NSObject()
+            #expect(ui.hold(pid, by: owner) == .init(off: false, missed: false), "\(name)")
+            #expect(!ui.isHeld(pid))
+            ui.release(pid, by: owner)
+            #expect(apps.calls.isEmpty, "\(name): \(apps.calls.map(\.set))")
+            #expect(apps.flags[pid] == true)
+            #expect(!FileManager.default.fileExists(atPath: journal.path))
+            #expect(lines.contains("enhanced UI: pid \(pid) left alone, \(name) on"), "\(lines)")
+            // Turned off: the next motion holds the flag off and sets it back.
+            ui.assistive = { nil }
+            #expect(ui.hold(pid, by: owner).off)
+            #expect(apps.flags[pid] == false)
+            ui.release(pid, by: owner)
+            #expect(apps.flags[pid] == true)
+        }
+    }
+
+    /// The app's own reading: VoiceOver's and Switch Control's state from
+    /// NSWorkspace, nothing else (the default seam).
+    @Test func theSystemReadingIsVoiceOverAndSwitchControl() {
+        let reading = EnhancedUI.systemAssistive()
+        let ws = NSWorkspace.shared
+        #expect(reading == (ws.isVoiceOverEnabled ? "VoiceOver" : ws.isSwitchControlEnabled ? "Switch Control" : nil))
     }
 
     @Test func onIsSetOffRecordedAndSetBack() {

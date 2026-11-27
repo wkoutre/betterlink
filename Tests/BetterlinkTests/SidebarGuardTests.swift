@@ -2960,6 +2960,36 @@ struct GuardCase: CustomStringConvertible {
         }
     }
 
+    /// VoiceOver on: a show and a hide leave the browser's flag alone (no
+    /// read, no set) and move it as before there was a hold, by
+    /// `WindowSteps`, its sets animated by the flag; the four rules hold.
+    @Test func voiceOverOnLeavesTheFlagAlone() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        defer { EnhancedUI.shared.assistive = EnhancedUI.systemAssistive }
+        for side in SidebarSide.allCases {
+            let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: BrowserBehaviour(enhancedUI: true))
+            EnhancedUI.shared.assistive = { "VoiceOver" }
+            var lines: [String] = []
+            DragTrace.echo = { lines.append($0) }
+            defer { DragTrace.echo = nil }
+            rig.toggle()
+            var check = RuleCheck(rig, displays: [screen])
+            check.shown(from: full, mustOpen: true, "\(side): show")
+            check.timely("\(side): show")
+            let browser = rig.fake.frame
+            rig.toggle()
+            check.hidden(from: browser, sidebar: 280, wasOpen: true, "\(side): hide")
+            check.timely("\(side): hide")
+            #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            #expect(FakeApps.shared.calls.isEmpty, "\(side): the flag touched: \(FakeApps.shared.calls.map(\.set))")
+            #expect(FakeApps.shared.flag(rig.pid), "\(side): the flag is off")
+            #expect(!lines.contains { $0.hasPrefix("glide:") }, "\(side): glided with VoiceOver on")
+            #expect(lines.filter { $0.contains("left alone, VoiceOver on") }.count == 2, "\(side): \(lines.filter { $0.contains("enhanced UI") })")
+        }
+    }
+
     @Test func nicksShowAndHideOnAnEnhancedUIBrowser() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
                              visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)

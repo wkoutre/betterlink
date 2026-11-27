@@ -34,6 +34,9 @@ protocol EnhancedUIApp: AnyObject {
 /// where it has got to. With it off, each set lands at once (measured on
 /// macOS 26.5.2 and 27.2.1 with a probe, betterlink-captures/probe27). So:
 ///
+/// - With VoiceOver or Switch Control on (read anew at each motion), the
+///   flag is theirs: it is left alone, not read or set, and the window moves
+///   as before there was a hold, by `WindowSteps` (`assistive`).
 /// - Right before the first set of a show, hide, new width, edge drag or
 ///   quit, the browser's flag is read (one call, never cached: something
 ///   may turn it on again between motions). Only when it is on is it set
@@ -88,6 +91,19 @@ final class EnhancedUI {
     var app: EnhancedUIApp
     var journal: URL
 
+    /// The assistive app that is on, if any, read at each motion (`hold`):
+    /// with VoiceOver or Switch Control on, the flag is left alone (Nick, F3
+    /// of 1df43a3's review). Tests set their own.
+    var assistive: () -> String? = EnhancedUI.systemAssistive
+
+    /// VoiceOver or Switch Control, as NSWorkspace reports them now.
+    static func systemAssistive() -> String? {
+        let ws = NSWorkspace.shared
+        if ws.isVoiceOverEnabled { return "VoiceOver" }
+        if ws.isSwitchControlEnabled { return "Switch Control" }
+        return nil
+    }
+
     init(app: EnhancedUIApp, journal: URL) {
         self.app = app
         self.journal = journal
@@ -96,7 +112,8 @@ final class EnhancedUI {
     /// What a hold found.
     struct Held: Equatable {
         /// The flag is off now (it was, the app has none, or it was set off):
-        /// sets to the app's windows are not animated by it.
+        /// sets to the app's windows are not animated by it. False when it is
+        /// left alone (an assistive app on): the windows move as before.
         var off: Bool
         /// The app didn't answer in time: it is hung or busy.
         var missed: Bool
@@ -127,6 +144,12 @@ final class EnhancedUI {
             h.owners.insert(ObjectIdentifier(owner))
             holds[pid] = h
             return Held(off: h.off, missed: false)
+        }
+        // An assistive app relies on the flag: it is theirs, left alone (no read, no set, nothing recorded), and the
+        // window is moved as before there was a hold. Read anew at each motion.
+        if let name = assistive() {
+            DragTrace.log("enhanced UI: pid \(pid) left alone, \(name) on")
+            return Held(off: false, missed: false)
         }
         let was = timedRead(pid, wait: wait, why: "read")
         let missed = app.missed
