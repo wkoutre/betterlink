@@ -102,6 +102,9 @@ final class EnhancedUI {
     /// Whether anything holds `pid`'s flag now.
     func isHeld(_ pid: pid_t) -> Bool { holds[pid] != nil }
 
+    /// Whether the hold of `pid` set its flag off (it must be set back).
+    func turnedOff(_ pid: pid_t) -> Bool { holds[pid]?.turnedOff == true }
+
     /// Holds `pid`'s flag off for `owner`'s motion: read, and set off if it
     /// is on. `wait`: how long each call may wait for the app.
     @discardableResult
@@ -144,7 +147,10 @@ final class EnhancedUI {
     /// `owner`'s motion is over. The last of the app's holds sets the flag
     /// back to what it was, when the hold set it off: read back, and set once
     /// more if it didn't take (`retries`).
-    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit, retries: Int = 1) {
+    /// `readsBack`: whether there is time to read it back (quitting has its
+    /// bound); not, it is kept on record, set back at the next launch if it
+    /// didn't take.
+    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit, retries: Int = 1, readsBack: () -> Bool = { true }) {
         guard var h = holds[pid], h.owners.remove(ObjectIdentifier(owner)) != nil else { return }
         guard h.owners.isEmpty else { holds[pid] = h; return }
         holds[pid] = nil
@@ -152,6 +158,11 @@ final class EnhancedUI {
         let want = h.was ?? true
         for attempt in 0...retries {
             timedSet(pid, want, wait: wait)
+            guard readsBack() else {
+                DragTrace.log("enhanced UI: pid \(pid) set back to \(want), no time to read it back: kept on record")
+                if app.missed { owed.insert(pid) }
+                return
+            }
             let now = timedRead(pid, wait: wait, why: "read back")
             if now == want {
                 write(removing: pid)

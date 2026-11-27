@@ -59,6 +59,8 @@ protocol WindowHandle: AnyObject {
     func limitWaiting(_ seconds: Double)
     /// The last call got no answer in time: the browser is hung or busy.
     var missed: Bool { get }
+    /// In native full screen (`AXFullScreen`); nil when it can't be read.
+    func isFullScreen() -> Bool?
 }
 
 /// A browser window through Accessibility, and the window server by its number.
@@ -103,6 +105,8 @@ final class AXHandle: WindowHandle {
     }
 
     func shownBounds() -> CGRect? { WindowServer.bounds(number) }
+
+    func isFullScreen() -> Bool? { AXWindow.copy(element, "AXFullScreen") }
 
     var isOnScreen: Bool { WindowServer.onScreen().contains(number) }
 }

@@ -483,6 +483,7 @@ final class SidebarInstance: ObservableObject {
         let then = afterSteps
         afterSteps = nil
         if s.interrupted { takenByOther() } else { then?() }
+        if steps == nil, glide == nil { restFrame = hidden ? nil : onScreenFrame }
         releaseFlagIfIdle()
     }
 
@@ -494,6 +495,8 @@ final class SidebarInstance: ObservableObject {
     /// A press held meanwhile goes with it: theirs is the latest word.
     private func takenByOther() {
         DragTrace.log("moved by someone else: window \(window.number) at \(onScreenFrame), left there")
+        // Theirs, at rest from here: not weighed later as a resize of the person's (`settle`).
+        defer { restFrame = hidden ? nil : onScreenFrame }
         let giveUp = opening.map { !$0.answered } ?? false
         opening = nil
         refitting = nil
@@ -530,6 +533,8 @@ final class SidebarInstance: ObservableObject {
         hidden = true
         // A refused open still going back: it stays closed once there.
         if restoring != nil { return }
+        // In native full screen: nothing is sent now; the space goes back when the window leaves it (`settle`).
+        if window.target.fullScreen, paired, !sliding, closedUnderWay == nil { return layout() }
         // An open or a new width still under way: closed in the frame it began in.
         let underWay = closedUnderWay
         opening = nil
@@ -612,9 +617,9 @@ final class SidebarInstance: ObservableObject {
         let o = Opening(frame: frame, asked: browser, ends: cap)
         opening = o
         paired = true
-        // A panel on screen already (a new width's open): masked to where the browser really is before it
-        // is put beside the frame asked, so it never shows over the browser for a moment (`revealOpening`).
-        if !slide, let shown = self.panel, shown.isVisible {
+        // A panel on screen already (a new width's open, a re-fit): masked to where the browser really is
+        // before it is put beside the frame asked, so it never shows over the browser for a moment.
+        if let shown = self.panel, shown.isVisible {
             let real = onScreenFrame
             shown.reveal = side == .left ? real.minX : real.maxX
         }
@@ -831,6 +836,8 @@ final class SidebarInstance: ObservableObject {
             cornerDisplay = on
         }
         guard resizing == nil, !sliding else { return }
+        // Hidden while the window was in native full screen: given its space back now it has left it.
+        if hidden, paired, !t.fullScreen, !t.minimized, !t.appHidden { return giveBackAfterFullScreen(t) }
         guard !hidden, !t.fullScreen, !t.minimized, !t.appHidden else { return }
         guard paired else {
             // Open since before betterlink last started, and still where it was: narrowed already.
@@ -843,7 +850,36 @@ final class SidebarInstance: ObservableObject {
             open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
+        // Resized by the person so that the browser covers where the sidebar was, or the sidebar would be off
+        // the screen (Window › Fill, a tiling app, a zoom): the browser's new frame is the pair's, and the
+        // sidebar slides back on in it (`SidebarGeometry.refitsAfterResize`).
+        if let was = restFrame, SidebarGeometry.refitsAfterResize(from: was, to: t.frame, width: CGFloat(width), side: placedSide,
+                                                                  displays: Displays.all.map(\.frame)) {
+            DragTrace.log("refit: window \(window.number) resized from \(was) to \(t.frame) over its sidebar or past the screen: opens again in it")
+            restFrame = nil
+            unpair()
+            open(from: t.frame, slide: isShown && panel?.isVisible == true)
+            return layout()
+        }
+        restFrame = t.frame
         remember()
+        layout()
+    }
+
+    /// The browser's frame when it last came to rest with its sidebar open,
+    /// or when betterlink last moved it: what a person's resize is weighed
+    /// against (`SidebarGeometry.refitsAfterResize`).
+    private var restFrame: CGRect?
+
+    /// A hide pressed while the window was in native full screen: nothing
+    /// was sent to it then (a window in full screen can't be resized, and
+    /// leaving full screen puts back the frame it had). Now it has left, the
+    /// browser takes the pair's frame (rule 4).
+    private func giveBackAfterFullScreen(_ t: WindowTracker.Target) {
+        let back = closedFrame(from: t.frame, side: placedSide)
+        DragTrace.log("hide: window \(window.number) out of full screen, given its space back: \(back)")
+        closing = back
+        move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in self?.closed(at: back) { self?.unpair() } }
         layout()
     }
 
@@ -1108,6 +1144,7 @@ final class SidebarInstance: ObservableObject {
         let now = onScreenFrame
         DragTrace.log("edge drag: window \(window.number) \(r.drag.side) wanted \(Int(r.delta)), window \(r.drag.window) -> \(now), "
                       + "sidebar \(Int(r.drag.width)) -> \(Int(width))")
+        restFrame = now
         remember()
         layout()
         releaseFlagIfIdle()
@@ -1130,6 +1167,8 @@ final class SidebarInstance: ObservableObject {
         // A slide places the panel itself, frame by frame. Mid-drag, beside
         // the window as it is on screen.
         guard slideRun == nil, panel?.isVisible == true else { return }
+        // Masked to where the browser really is before it is moved (`revealOpening`), then after.
+        revealOpening()
         placePanel(placement(beside: resizing != nil ? onScreenFrame : window.target.frame))
         revealOpening()
     }
@@ -1153,6 +1192,8 @@ final class SidebarInstance: ObservableObject {
             if panel?.isVisible == true { placePanel(p) }
         case .shown(let rehome, let reorder):
             isShown = true
+            // Masked to where the browser really is before it is moved beside the frame asked (`revealOpening`).
+            if self.panel != nil { revealOpening(ordering: true) }
             let panel = placePanel(p)
             if !panel.isVisible { revealOpening(ordering: true) }
             if rehome { panel.reenter(at: place(panel)) } else if reorder, panel.isVisible { panel.order(at: place(panel)) }

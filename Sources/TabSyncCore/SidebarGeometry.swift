@@ -101,6 +101,40 @@ public enum SidebarGeometry {
         return lo...hi
     }
 
+    /// How far `r` runs past the displays beside each other at its height, in
+    /// points: its horizontal span over no display there.
+    public static func offScreen(_ r: CGRect, displays: [CGRect]) -> CGFloat {
+        let spans = displays.filter { $0.minY < r.maxY - 1 && $0.maxY > r.minY + 1 }.map { ($0.minX, $0.maxX) }.sorted { $0.0 < $1.0 }
+        var covered: CGFloat = 0, reach = -CGFloat.infinity
+        for (a, b) in spans {
+            let lo = max(a, r.minX, reach), hi = min(b, r.maxX)
+            if hi > lo { covered += hi - lo }
+            reach = max(reach, b)
+        }
+        return max(0, r.width - covered)
+    }
+
+    /// Where a sidebar `width` wide is beside a browser at `b`, on `side`.
+    public static func strip(beside b: CGRect, width: CGFloat, side: SidebarSide) -> CGRect {
+        CGRect(x: side == .left ? b.minX - width : b.maxX, y: b.minY, width: width, height: b.height)
+    }
+
+    /// The person resized the browser from `was` to `now` while its sidebar
+    /// was open, and the pair must fit again (bug 3, live on 3d5c1e4: Window
+    /// › Fill or a tiling app put the browser on the whole visible frame, and
+    /// the sidebar was left off the screen): the browser now covers where the
+    /// sidebar was, or the sidebar beside it would be further off the
+    /// displays than it was. Then the browser's new frame is the pair's, and
+    /// the sidebar opens in it again (rule 2). A move alone (the same size)
+    /// is the person's and stands (rule 3).
+    public static func refitsAfterResize(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, displays: [CGRect]) -> Bool {
+        guard abs(was.width - now.width) >= 2 || abs(was.height - now.height) >= 2 else { return false }
+        let old = strip(beside: was, width: width, side: side)
+        let over = now.intersection(old)
+        if !over.isNull, over.width > 1, over.height > 1 { return true }
+        return offScreen(strip(beside: now, width: width, side: side), displays: displays) > offScreen(old, displays: displays) + 1
+    }
+
     /// The narrowest and widest the sidebar gets.
     public static let widths: ClosedRange<CGFloat> = 200...440
 
