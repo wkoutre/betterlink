@@ -307,13 +307,15 @@ final class SidebarController: ObservableObject {
         // Time kept for setting each flag back (read back only if time is left: else a crash record keeps it).
         let reserve = Double(held.filter { !hung.contains($0) && EnhancedUI.shared.turnedOff($0) }.count) * AXWindow.placeCall
         let missed = AXWindow.placeNow(moves, hung: hung, began: began, reserve: reserve, clock: clock, pause: pause)
+        // Every call setting a flag back, the windows' own holds' included (one may be the last owner when the
+        // loop above ran out of time before its browser), is begun only when it can end within the bound.
+        let inBound = { clock() - began + AXWindow.placeCall <= AXWindow.placeBound }
         for i in all {
-            i.releaseFlag(wait: AXWindow.placeCall)
+            i.releaseFlag(wait: AXWindow.placeCall, within: inBound)
             if missed.contains(ObjectIdentifier(i.window.handle)) { i.letAlone() } else { i.unpair() }
         }
         for pid in held {
-            EnhancedUI.shared.release(pid, by: self, wait: AXWindow.placeCall, retries: 0,
-                                      readsBack: { clock() - began + AXWindow.placeCall <= AXWindow.placeBound })
+            EnhancedUI.shared.release(pid, by: self, wait: AXWindow.placeCall, retries: 0, sets: inBound, readsBack: inBound)
         }
         return missed
     }

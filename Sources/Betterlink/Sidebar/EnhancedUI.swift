@@ -187,13 +187,21 @@ final class EnhancedUI {
     /// `readsBack`: whether there is time to read it back (quitting has its
     /// bound); not, it is kept on record, set back at the next launch if it
     /// didn't take.
-    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit, retries: Int = 1, readsBack: () -> Bool = { true }) {
+    func release(_ pid: pid_t, by owner: AnyObject, wait: Double = AXWindow.callLimit, retries: Int = 1, sets: () -> Bool = { true },
+                 readsBack: () -> Bool = { true }) {
         guard var h = holds[pid], h.owners.remove(ObjectIdentifier(owner)) != nil else { return }
         guard h.owners.isEmpty else { holds[pid] = h; return }
         holds[pid] = nil
         guard h.turnedOff else { return }
         let want = h.was ?? true
         for attempt in 0...retries {
+            // Quitting or turning off: no set is begun that could end past the bound. Owed, and on record for the
+            // next hold or launch (review F4 of 1df43a3).
+            guard sets() else {
+                DragTrace.log("enhanced UI: pid \(pid) no time to set it back to \(want): kept on record")
+                owed.insert(pid)
+                return
+            }
             timedSet(pid, want, wait: wait)
             guard readsBack() else {
                 DragTrace.log("enhanced UI: pid \(pid) set back to \(want), no time to read it back: kept on record")

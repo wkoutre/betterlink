@@ -2667,6 +2667,43 @@ struct GuardCase: CustomStringConvertible {
     /// it): the app is held up no longer than quitting may be
     /// (`GuardTiming.quit`), however many windows it has. What misses that
     /// is left as it is, the person's, and nothing is sent to it again.
+    /// Quitting with many hung browsers before it, and a window mid-show
+    /// whose own hold of its browser's flag is the last (the hold loop ran
+    /// out of time before its browser): setting that flag back stays within
+    /// the bound too, or is left on record for the next launch (review F4 of
+    /// 1df43a3: its release could send up to 4 calls of 0.2 s after the
+    /// moves, past 2.4 s).
+    @Test func quittingSetsEveryFlagBackWithinTheBound() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for side in SidebarSide.allCases {
+            // Ten idle browsers, hung at quit (each hold's read waits out 0.2 s), then the one mid-show.
+            let rigs = (0..<11).map { k in
+                SidebarRig(displays: [screen], frame: CGRect(x: CGFloat(k) * 60, y: 0, width: 1200, height: 1259), side: side, width: 280,
+                           behaviour: BrowserBehaviour(enhancedUI: true), pid: SidebarRig.browserPid + 100 + pid_t(k), freshApps: k == 0)
+            }
+            for r in rigs.dropLast() { r.toggle(); #expect(r.open, "\(side): didn't open") }
+            let last = rigs.last!
+            last.toggle(within: 0.05)
+            #expect(EnhancedUI.shared.isHeld(last.pid), "\(side): the show's hold isn't on")
+            var clock = (rigs.map(\.now).max() ?? 0) + 10
+            let began = clock
+            for r in rigs {
+                r.fake.behaviour.hangs = true
+                r.fake.now = { clock }
+                r.fake.wait = { clock += $0 }
+                r.instance.clock = { clock }
+                r.instance.pause = { clock += $0 }
+            }
+            SidebarController.shared.giveSpaceBack(of: rigs.map(\.instance), clock: { clock }, pause: { clock += $0 })
+            #expect(clock - began <= GuardTiming.quit + 0.02, "\(side): quitting waited \(Int((clock - began) * 1000)) ms")
+            // Its flag: set back, or on record for the next launch.
+            let back = FakeApps.shared.flag(last.pid)
+            #expect(back || EnhancedUI.shared.read().contains { $0.pid == last.pid && $0.was }, "\(side): the flag left off and not recorded")
+            #expect(!EnhancedUI.shared.isHeld(last.pid))
+        }
+    }
+
     @Test func quittingWithAHungBrowserStaysWithinTheBound() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)

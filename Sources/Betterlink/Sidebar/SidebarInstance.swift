@@ -231,10 +231,16 @@ final class SidebarInstance: ObservableObject {
 
     /// The motion is over: the flag goes back to what it was. `wait`: how
     /// long the call may wait for the browser (quitting has its bound).
-    func releaseFlag(wait: Double = AXWindow.callLimit) {
+    /// Quitting or turning off (`within`): one set back at most, and each
+    /// call only when it can end within the bound (`EnhancedUI.release`).
+    func releaseFlag(wait: Double = AXWindow.callLimit, within: (() -> Bool)? = nil) {
         guard holdsFlag else { return }
         holdsFlag = false
-        EnhancedUI.shared.release(window.target.pid, by: self, wait: wait)
+        if let within {
+            EnhancedUI.shared.release(window.target.pid, by: self, wait: wait, retries: 0, sets: within, readsBack: within)
+        } else {
+            EnhancedUI.shared.release(window.target.pid, by: self, wait: wait)
+        }
     }
 
     /// Released once nothing of this window is moving: no steps, no drag of the edge.
