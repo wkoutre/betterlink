@@ -57,6 +57,15 @@ public enum WindowSet {
         return [call]
     }
 
+    /// How far the far edge (away from `keep`) of the frame between the
+    /// calls is inside where it ends, when it is: only a window widened
+    /// against its screen's far edge (the position first). Nil otherwise.
+    public static func farEdgeIn(from seen: CGRect, to target: CGRect, keep: SidebarSide, right: CGFloat?) -> CGFloat? {
+        guard let b = between(from: seen, calls: calls(from: seen, to: target, keep: keep, right: right)) else { return nil }
+        let inside = keep == .left ? target.maxX - b.maxX : b.minX - target.minX
+        return inside >= 0.5 ? inside : nil
+    }
+
     /// The frame the window has between the calls, when there are two: what
     /// the window server may show for as long as the first has landed and the
     /// second hasn't.

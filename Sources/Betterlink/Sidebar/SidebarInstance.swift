@@ -127,6 +127,7 @@ final class SidebarInstance: ObservableObject {
         edgeTimer = nil
         restoring = nil
         refitWait = nil
+        systemSlack = 0
         window.readOwed = false // a window that is gone, or let go, is not read for a slide
         flagWatch = nil
         if closed { slideRun = nil; steps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
@@ -181,6 +182,7 @@ final class SidebarInstance: ObservableObject {
     /// pair's frame, or show it in the browser's frame.
     func toggle() {
         refitWait = nil
+        systemSlack = 0
         DragTrace.log("toggle: window \(window.number) hidden \(hidden) -> \(!hidden)")
         if hidden { slideIn() } else { slideOut() }
     }
@@ -290,6 +292,9 @@ final class SidebarInstance: ObservableObject {
     /// and the browser's moves tick by tick (`stepSlide`), as the timer does.
     var reducesMotion: () -> Bool = { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     var clock: () -> CFTimeInterval = CACurrentMediaTime
+    /// Whether the person is dragging the window now: the window tracker's
+    /// live drag, unless a test sets its own.
+    var isDragged: (() -> Bool)?
     /// Waiting on the main thread, for quitting, which has no later.
     var pause: (Double) -> Void = AXWindow.sleep
     /// An open without a slide is under way (a new width, a window followed
@@ -509,6 +514,8 @@ final class SidebarInstance: ObservableObject {
         DragTrace.log("moved by someone else: window \(window.number) at \(onScreenFrame), left there")
         // Theirs, at rest from here: not weighed later as a resize of the person's (`settle`).
         defer { restFrame = hidden ? nil : onScreenFrame }
+        // The refit's slack ends with it (`systemSlack`): someone else's change ends its steps before their end clears it.
+        systemSlack = 0
         let giveUp = opening.map { !$0.answered } ?? false
         opening = nil
         refitting = nil
@@ -583,9 +590,7 @@ final class SidebarInstance: ObservableObject {
             // The show's set is out: the browser goes back under the panel first.
             slideRun = run
             closing = back
-            return move(to: back, keep: run.side, retreats: false, deadline: ends, oneSet: true) { [weak self] in
-                self?.closed(at: back) { self?.slideOutNow() }
-            }
+            return hideSet(to: back, keep: run.side, deadline: ends) { [weak self] in self?.closed(at: back) { self?.slideOutNow() } }
         }
         guard paired else { return layout() }
         // Out of sight (another Space, minimized): no slide to watch.
@@ -601,8 +606,24 @@ final class SidebarInstance: ObservableObject {
         closing = back
         let outer = side == .left ? panel.frame.minX : panel.frame.maxX
         slideRun = SlideRun(slide: SidebarSlide(shown: true), side: side, outer: outer, hiddenWindow: back, shownWindow: b, cover: CGFloat(width), out: true)
-        move(to: back, keep: side, retreats: false, deadline: ends, oneSet: true) { [weak self] in self?.closed(at: back) { self?.slideOutNow() } }
+        hideSet(to: back, keep: side, deadline: ends) { [weak self] in self?.closed(at: back) { self?.slideOutNow() } }
         stepPanel()
+    }
+
+    /// A hide's one set, under the panel (or a show's, turned back once its
+    /// set was out): the browser to the pair's frame `back`, its far edge
+    /// kept (`WindowSet`). The one case where that edge can come in, a left
+    /// sidebar's window against the far screen edge (its position, then its
+    /// size), is found here (`WindowSet.farEdgeIn`): the seam where a second
+    /// panel could cover the far strip for the length of the set, if live
+    /// measurement shows the frame between at all (not built). `trace.log`
+    /// says each time.
+    private func hideSet(to back: CGRect, keep: SidebarSide, deadline: Double, then: @escaping () -> Void) {
+        let seen = onScreenFrame
+        if let strip = WindowSet.farEdgeIn(from: seen, to: back, keep: keep, right: rightEdge(of: seen)) {
+            DragTrace.log(String(format: "hide: window %d against the far screen edge: its far edge in %.0f pt between the set's position and size", window.number, Double(strip)))
+        }
+        move(to: back, keep: keep, retreats: false, deadline: deadline, oneSet: true, then: then)
     }
 
     /// The browser is under the panel at its full frame (a hide's or a
@@ -912,6 +933,7 @@ final class SidebarInstance: ObservableObject {
         opening = nil
         refitting = nil
         closing = nil
+        systemSlack = 0
         let goingBack = restoring // a refused open's window on its way back
         restoring = nil
         let mid = slideRun
@@ -961,14 +983,15 @@ final class SidebarInstance: ObservableObject {
                             Double(SidebarGeometry.widths.upperBound))
                 return layout()
             }
+            systemSlack = 0
             open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
-        // Placed anew (both horizontal edges moved, or across a display's whole visible width at any height: Window ›
-        // Fill, a tiling app, a zoom, a full-width pair tiled to the top or bottom half) so that the sidebar would be
-        // further off the screen than it was: the browser's new frame is the pair's, and the sidebar slides back on in
-        // it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a corner short of that, and any other resize
-        // of theirs, stands.
+        // Placed anew (both horizontal edges moved, or across a display's whole visible width with its top or bottom
+        // on that visible frame's: Window › Fill, a tiling app, a zoom, a full-width pair tiled to the top or bottom
+        // half) so that the sidebar would be further off the screen than it was: the browser's new frame is the pair's,
+        // and the sidebar slides back on in it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a corner
+        // short of that, and any other resize of theirs, stands.
         // Not at once: macOS's tiling can settle the window a point after it reports it at rest (MINI-16 on macOS 27
         // at 6ebd0da: 1027, then 1028, after the refit had begun, which took it for the person's move). The refit
         // starts once the window server's frame has held still for `refitQuiet`, or at `refitWaitCap` whatever it
@@ -995,18 +1018,31 @@ final class SidebarInstance: ObservableObject {
     /// tracker's rest, itself 150 ms after the last move).
     static let refitQuiet = 0.05
     static let refitWaitCap = 0.15
-    /// Set for a refit's motion, cleared once nothing moves the window: how
-    /// far the system may move the window on its own meanwhile without it
-    /// counting as someone else's change (`WindowSteps.slack`): 2 pt, as
-    /// frames within 2 pt are the same (`SidebarGeometry.same`). A bigger
-    /// change, or any change once the refit is over, is the person's and stands.
+    /// Set for a refit's motion, cleared once nothing moves the window, when
+    /// someone else's change lets it go (`takenByOther`), and as every other
+    /// motion begins (a show or hide, a new width, a drag of the edge, a
+    /// window followed, given back after full screen or moved with its
+    /// panel, letting the window go): how far the system may move the window
+    /// on its own meanwhile without it counting as someone else's change
+    /// (`WindowSteps.slack`): 2 pt, as frames within 2 pt are the same
+    /// (`SidebarGeometry.same`). A bigger change, or any change outside a
+    /// refit, is the person's and stands (the review of 33444c7, F1).
     private var systemSlack: CGFloat = 0
 
     /// A tick of a refit's wait: the frame on screen held still for
     /// `refitQuiet`, or `refitWaitCap` passed: the refit starts from where the
-    /// window is, if it still pushes the sidebar off the screen.
+    /// window is, if it still pushes the sidebar off the screen. Not while the
+    /// person drags the window, nor minimized, in full screen or with its
+    /// app hidden, as `settle` weighs it: the wait ends, and the refit is
+    /// weighed again, against the same frame before, once the window comes
+    /// to rest (`settle`).
     private func stepRefitWait() {
         guard var w = refitWait else { return }
+        let t = window.target
+        guard !(isDragged?() ?? tracker.isDragging(window)), !t.fullScreen, !t.minimized, !t.appHidden else {
+            refitWait = nil
+            return
+        }
         let now = clock()
         let seen = onScreenFrame
         if seen != w.frame { w.frame = seen; w.since = now }
@@ -1037,6 +1073,7 @@ final class SidebarInstance: ObservableObject {
     /// browser takes the pair's frame (rule 4).
     private func giveBackAfterFullScreen(_ t: WindowTracker.Target) {
         let back = closedFrame(from: t.frame, side: placedSide)
+        systemSlack = 0
         DragTrace.log("hide: window \(window.number) out of full screen, given its space back: \(back)")
         closing = back
         move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in self?.closed(at: back) { self?.unpair() } }
@@ -1051,6 +1088,7 @@ final class SidebarInstance: ObservableObject {
     func refit() {
         guard paired, !hidden, !sliding else { return }
         let back = closedUnderWay ?? closedFrame(from: onScreenFrame, side: placedSide)
+        systemSlack = 0
         opening = nil
         refitting = back
         move(to: back, keep: nil, retreats: false, deadline: cap) { [weak self] in
@@ -1135,6 +1173,7 @@ final class SidebarInstance: ObservableObject {
         endResize() // a single step still waiting for its window ends when a drag begins
         guard !sliding, !hidden, isShown, let panel, panel.isVisible else { return false }
         let t = onScreenFrame
+        systemSlack = 0
         resizing = Resize(drag: EdgeDrag(window: t, width: width, side: placedSide), asked: t)
         return true
     }
@@ -1448,6 +1487,7 @@ final class SidebarInstance: ObservableObject {
         guard let panel, let placed = placedPanelFrame, !SidebarGeometry.same(panel.frame, placed), !hidden, isShown else { return }
         let inner = SidebarGeometry.windowAfterPanelMoved(from: placed, to: panel.frame, window: window.target.frame, width: width,
                                                           side: placedSide)
+        systemSlack = 0
         move(to: inner, keep: nil, deadline: cap) { [weak self] in self?.remember() }
         layout()
     }

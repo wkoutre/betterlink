@@ -1105,6 +1105,29 @@ final class SidebarRig {
         events()
     }
 
+    /// The person puts the browser at `f`; the window tracker reports it at
+    /// rest (as `rest` does, 1 s on); `after` seconds later they begin
+    /// dragging the window and hold it still, `held` seconds, tick by tick,
+    /// then let go (the rest is the caller's: `rest`). How many calls the
+    /// browser was sent from the rest to the end of the drag.
+    func personSetsThenDrags(_ f: CGRect, after: Double, held: Double) -> Int {
+        appCallsBefore = FakeApps.shared.calls.count
+        fake.person(f)
+        events()
+        time += 0.5
+        _ = fake.answer()
+        time += 0.5
+        events()
+        instance.settle(window.target)
+        let calls = fake.setCalls
+        let began = time
+        while time - began < after { tick() }
+        instance.isDragged = { true }
+        while time - began < after + held { tick() }
+        instance.isDragged = nil
+        return fake.setCalls - calls
+    }
+
     /// The person drags the edge between the sidebar and the browser: the
     /// pointer moves there over 0.2 s (a move every 1/60 s), the button comes
     /// up, and the app finishes; then the window rests. Sampled from the
@@ -1189,17 +1212,22 @@ final class SidebarRig {
 /// pair again, from the rule itself and not from the app's
 /// `SidebarGeometry.refitsAfterResize`: only a placement (both of the
 /// browser's horizontal edges moved, or the browser across a display's whole
-/// visible width at any height: Fill, a zoom, tiling to a half or a quarter,
-/// a pair that filled the screen's width tiled to its top or bottom half)
-/// that would leave the sidebar beside it further off the displays' visible
-/// frames than it was. A drag of one edge or of a corner short of a whole
-/// visible width, and a move, stand (rule 3), wherever they leave the sidebar.
+/// visible width with its top or bottom on that visible frame's: Fill, a
+/// zoom, tiling to a half or a quarter, a pair that filled the screen's width
+/// tiled to its top or bottom half) that would leave the sidebar beside it
+/// further off the displays' visible frames than it was. A drag of one edge
+/// or of a corner that leaves the window short of both, and a move, stand
+/// (rule 3), wherever they leave the sidebar.
 @MainActor
 func placedPushingTheSidebarOff(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, _ displays: [Display]) -> Bool {
     let resized = abs(now.width - was.width) >= 2 || abs(now.height - was.height) >= 2
     let leftMoved = abs(now.minX - was.minX) >= 2, rightMoved = abs(now.maxX - was.maxX) >= 2
-    let acrossAWholeVisibleWidth = displays.contains { abs($0.visibleFrame.minX - now.minX) < 2 && abs($0.visibleFrame.maxX - now.maxX) < 2 }
-    guard resized, (leftMoved && rightMoved) || acrossAWholeVisibleWidth else { return false }
+    // A tile across a display: its whole visible width, and the top or the bottom of that visible frame.
+    let tiledAcross = displays.contains {
+        let v = $0.visibleFrame
+        return abs(v.minX - now.minX) < 2 && abs(v.maxX - now.maxX) < 2 && (abs(v.minY - now.minY) < 2 || abs(v.maxY - now.maxY) < 2)
+    }
+    guard resized, (leftMoved && rightMoved) || tiledAcross else { return false }
     let visible = displays.map { Display(frame: $0.visibleFrame, visibleFrame: $0.visibleFrame, scale: $0.scale) }
     func sidebar(beside b: CGRect) -> CGRect { CGRect(x: side == .left ? b.minX - width : b.maxX, y: b.minY, width: width, height: b.height) }
     return offScreen(sidebar(beside: now), visible) > offScreen(sidebar(beside: was), visible) + 1
@@ -1332,16 +1360,20 @@ struct RuleCheck {
 
     /// After the person placed the browser somewhere new while its sidebar was
     /// open (both horizontal edges moved, or across a display's whole visible
-    /// width at any height): the sidebar is never left further off the
-    /// displays than it was (bug 3: Fill put the browser on the whole visible
-    /// frame, and the sidebar was left off the screen; review round 3 of PR
-    /// 105, F2: a full-width pair tiled to the top half). `before`: the
-    /// browser's frame before, and the sidebar's width then.
+    /// width with its top or bottom on that visible frame's): the sidebar is
+    /// never left further off the displays than it was (bug 3: Fill put the
+    /// browser on the whole visible frame, and the sidebar was left off the
+    /// screen; review round 3 of PR 105, F2: a full-width pair tiled to the
+    /// top half). `before`: the browser's frame before, and the sidebar's
+    /// width then.
     mutating func sidebarStaysOnScreen(before: CGRect, width: CGFloat, put: CGRect, _ step: String) {
-        // A move (the size within 2 pt), or a drag of one horizontal edge or a corner short of a whole visible
-        // width, is the person's and stands (rule 3), wherever it leaves the sidebar.
-        let placed = (abs(put.minX - before.minX) >= 2 && abs(put.maxX - before.maxX) >= 2)
-            || displays.contains { abs($0.visibleFrame.minX - put.minX) < 2 && abs($0.visibleFrame.maxX - put.maxX) < 2 }
+        // A move (the size within 2 pt), or a drag of one horizontal edge or a corner that leaves the window short
+        // of a tile across a display (its whole visible width, and its top or its bottom), is the person's and
+        // stands (rule 3), wherever it leaves the sidebar.
+        let placed = (abs(put.minX - before.minX) >= 2 && abs(put.maxX - before.maxX) >= 2) || displays.contains {
+            let v = $0.visibleFrame
+            return abs(v.minX - put.minX) < 2 && abs(v.maxX - put.maxX) < 2 && (abs(v.minY - put.minY) < 2 || abs(v.maxY - put.maxY) < 2)
+        }
         guard rig.open, abs(put.width - before.width) >= 2 || abs(put.height - before.height) >= 2, placed else { return }
         let was = SidebarGeometry.strip(beside: before, width: width, side: rig.side)
         let now = SidebarGeometry.strip(beside: rig.fake.frame, width: rig.sidebarWidth, side: rig.side)
@@ -2087,22 +2119,34 @@ struct GuardCase: CustomStringConvertible {
 
     /// `BETTERLINK_GUARD_SEED` and `BETTERLINK_GUARD_CASES` override the seed
     /// and the count; a failure prints the seed and the case to rerun it.
-    @Test func everyCaseKeepsTheFourRules() {
+    /// `BETTERLINK_GUARD_SHARD=k/n` runs only every n-th case from the k-th
+    /// (1...n): the release workflow runs the n parts on n machines at once,
+    /// which together run every case. Each case comes from its own number, so
+    /// a case is the same whichever part runs it.
+    @Test func everyCaseKeepsTheFourRules() throws {
         let env = ProcessInfo.processInfo.environment
         let seed = env["BETTERLINK_GUARD_SEED"].flatMap { UInt64($0) } ?? 0x5EED_92
         let count = env["BETTERLINK_GUARD_CASES"].flatMap { Int($0) } ?? 2000
         var failed: [(Int, GuardCase, [String])] = []
         let only = env["BETTERLINK_GUARD_ONLY"].map { Set($0.split(separator: ",").compactMap { Int($0) }) }
+        var part = (k: 1, n: 1)
+        if let shard = env["BETTERLINK_GUARD_SHARD"], !shard.isEmpty {
+            let kn = shard.split(separator: "/").compactMap { Int($0) }
+            try #require(kn.count == 2 && kn[1] >= 1 && (1...kn[1]).contains(kn[0]), "BETTERLINK_GUARD_SHARD is k/n with 1 <= k <= n, not \(shard)")
+            part = (kn[0], kn[1])
+        }
         GuardCase.verbose = only != nil
         DragTrace.echo = only != nil ? { print("trace: \($0)") } : nil
         defer { DragTrace.echo = nil }
-        for i in 0..<count where only?.contains(i) ?? true {
+        var ran = 0
+        for i in 0..<count where (only?.contains(i) ?? true) && i % part.n == part.k - 1 {
             var r = GuardRandom(seed: seed &+ UInt64(i) &* 0x9E37_79B9)
             let c = GuardCase.random(&r)
             let problems = c.run()
+            ran += 1
             if !problems.isEmpty { failed.append((i, c, problems)) }
         }
-        print("SidebarGuard: \(count) random cases from seed \(seed), \(failed.count) failed")
+        print("SidebarGuard: part \(part.k) of \(part.n), \(ran) of \(count) random cases from seed \(seed), \(failed.count) failed")
         // BETTERLINK_GUARD_LIST=1: each failed case's first problem, one line each.
         if env["BETTERLINK_GUARD_LIST"] == "1" {
             for (i, c, problems) in failed { print("SidebarGuard case \(i): \(problems[0]) || \(c.behaviour) || \(c.side) \(Int(c.width)) window \(c.window)") }
@@ -3335,12 +3379,13 @@ struct GuardCase: CustomStringConvertible {
     /// off the screen, and the pair was fitted again, 180 pt narrower than
     /// the person left the browser. A drag of one horizontal edge, or of a
     /// corner, is the person's and stands, wherever it leaves the sidebar
-    /// (rule 3). Only a placement (both horizontal edges moved, or the whole
-    /// visible frame) fits the pair again.
-    private func personDrags(side: SidebarSide, _ what: String, from want: CGRect, to put: (CGRect) -> CGRect) {
+    /// (rule 3). Only a placement (both horizontal edges moved, or across a
+    /// whole visible width with the top or bottom on its edge) fits the pair
+    /// again. `pair`: the pair's frame, the whole visible frame unless given.
+    private func personDrags(side: SidebarSide, _ what: String, pair: CGRect? = nil, from want: CGRect, to put: (CGRect) -> CGRect) {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
-        let rig = SidebarRig(displays: [screen], frame: screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
+        let rig = SidebarRig(displays: [screen], frame: pair ?? screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
         rig.toggle()
         let b = rig.fake.frame
         #expect(rig.open && GuardFrames.same(b, want), "\(side): opened \(rig.open) at \(b), wanted \(want)")
@@ -3381,6 +3426,53 @@ struct GuardCase: CustomStringConvertible {
         }
         personDrags(side: .left, "the left edge dragged to 3 pt short of the screen's width", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
             CGRect(x: 3, y: $0.minY, width: $0.maxX - 3, height: $0.height)
+        }
+    }
+
+    /// The review of 33444c7, F2: a pair short of the screen's top and
+    /// bottom, its sidebar-side edge, or a corner, dragged to the screen's
+    /// whole visible width, the window still short of both: a drag of one
+    /// edge or a corner, which stands, either side. Only a tile's top or
+    /// bottom edge on the visible frame's makes the whole width a placement.
+    @Test func aDragToTheFullWidthShortOfTheTopAndBottomStands() {
+        let pair = CGRect(x: 0, y: 100, width: 2056, height: 1000)
+        personDrags(side: .right, "the right edge dragged to the screen's width, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 0, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: $0.minX, y: $0.minY, width: 2056 - $0.minX, height: $0.height)
+        }
+        personDrags(side: .left, "the left edge dragged to the screen's width, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 280, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: 0, y: $0.minY, width: $0.maxX, height: $0.height)
+        }
+        personDrags(side: .right, "a right corner dragged to the screen's width and 50 further down, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 0, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: $0.minX, y: $0.minY, width: 2056 - $0.minX, height: $0.height + 50)
+        }
+        personDrags(side: .left, "a left corner dragged to the screen's width and 50 further up, short of its top and bottom", pair: pair,
+                    from: CGRect(x: 280, y: 100, width: 1776, height: 1000)) {
+            CGRect(x: 0, y: $0.minY - 50, width: $0.maxX, height: $0.height + 50)
+        }
+    }
+
+    /// The review of 33444c7, F2: the sidebar-side edge dragged so the
+    /// browser is on exactly the whole visible frame is Fill's frame: the
+    /// pair fits again in it, either side.
+    @Test func anEdgeDraggedToTheWholeVisibleFrameFitsThePairAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for (side, pair) in [(SidebarSide.right, CGRect(x: 0, y: 0, width: 1900, height: 1259)),
+                             (SidebarSide.left, CGRect(x: 156, y: 0, width: 1900, height: 1259))] {
+            let rig = SidebarRig(displays: [screen], frame: pair, side: side, width: 280, behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open, "\(side): didn't open")
+            let before = rig.fake.frame
+            let step = "\(side), from \(before), its edge dragged to the whole visible frame"
+            rig.personSets(screen.visibleFrame)
+            var check = RuleCheck(rig, displays: [screen])
+            check.shown(from: screen.visibleFrame, mustOpen: true, step)
+            check.sidebarStaysOnScreen(before: before, width: 280, put: screen.visibleFrame, step)
+            #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(step): open \(rig.open), sidebar \(rig.sidebarWidth)")
+            #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
         }
     }
 
@@ -3451,6 +3543,58 @@ struct GuardCase: CustomStringConvertible {
                 #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
             }
         }
+        }
+    }
+
+    /// The review of 33444c7: a refit waits for the tile to hold still, and
+    /// the person may begin dragging the window meanwhile. Nothing is sent to
+    /// it while they drag (not even once the wait's cap is out): the refit
+    /// is weighed again once the window comes to rest, and the pair fits
+    /// again then, in the tile.
+    @Test func aDragDuringTheRefitsWaitGetsNoRefitUntilItRests() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let tile = CGRect(x: 1027, y: 0, width: 1028, height: 1259)
+        for after in [0.0, 0.02, 0.04] {
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 400, y: 0, width: 1256, height: 1259), side: .right, width: 280,
+                                 behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open, "didn't open")
+            let step = "a drag begun \(Int(after * 1000)) ms into the refit's wait"
+            let sent = rig.personSetsThenDrags(tile, after: after, held: 0.4)
+            #expect(sent == 0, "\(step): \(sent) calls sent during the drag, browser at \(rig.fake.frame)")
+            #expect(GuardFrames.same(rig.fake.frame, tile), "\(step): the browser at \(rig.fake.frame) during the drag")
+            rig.rest()
+            #expect(rig.open && abs(rig.sidebarWidth - 280) < 2 && GuardFrames.same(rig.fake.frame, CGRect(x: 1027, y: 0, width: 748, height: 1259)),
+                    "\(step): at rest, open \(rig.open), sidebar \(rig.sidebarWidth), browser \(rig.fake.frame)")
+        }
+    }
+
+    /// The review of 33444c7, F1: a refit's slack for the system's settle
+    /// (2 pt) is the refit's alone. Someone else moving the window 40 pt
+    /// while the refit is carried out lets the refit go; the next show then
+    /// runs with no slack: a 2 pt change during it that none of its calls
+    /// makes is the person's, and their frame stands (the show given up, as
+    /// for any change of theirs), not taken for the system settling a tile.
+    @Test func anInterruptedRefitLeavesNoSlackForTheNextShow() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let tile = CGRect(x: 1027, y: 0, width: 1028, height: 1259)
+        for after in [0.08, 0.12, 0.2] {
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 400, y: 0, width: 1256, height: 1259), side: .right, width: 280,
+                                 behaviour: BrowserBehaviour())
+            rig.toggle()
+            #expect(rig.open && GuardFrames.same(rig.fake.frame, CGRect(x: 400, y: 0, width: 976, height: 1259)), "opened \(rig.open) at \(rig.fake.frame)")
+            // Moved 40 pt left by someone else `after` the tile came to rest (`SidebarRig.rest`: 1 s after the change).
+            rig.fake.systemSettles(by: -40, at: rig.now + 1 + after)
+            rig.personSets(tile)
+            let step = "moved 40 pt \(Int(after * 1000)) ms after the tile came to rest"
+            #expect(!rig.open, "\(step): the refit wasn't let go (browser \(rig.fake.frame))")
+            // The next show: 2 pt over, 60 ms in, by no call of betterlink's.
+            let from = rig.fake.frame
+            rig.fake.systemSettles(by: 2, at: rig.now + 0.06)
+            rig.toggle()
+            #expect(!rig.open, "\(step): the show from \(from) took a 2 pt change for the system's: open, browser \(rig.fake.frame)")
         }
     }
 

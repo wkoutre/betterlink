@@ -40,6 +40,11 @@ import Testing
         let calls = WindowSet.calls(from: left, to: full, keep: .left, right: 2056)
         #expect(calls == [.position(full), .size(full)])
         #expect(farIn(from: left, to: full, side: .left, right: 2056) == 280)
+        #expect(WindowSet.farEdgeIn(from: left, to: full, keep: .left, right: 2056) == 280)
+        // Where it can grow in place, and for a show, nothing comes in.
+        #expect(WindowSet.farEdgeIn(from: CGRect(x: 580, y: 0, width: 920, height: 1290), to: CGRect(x: 300, y: 0, width: 1200, height: 1290),
+                                    keep: .left, right: 2056) == nil)
+        #expect(WindowSet.farEdgeIn(from: full, to: left, keep: .left, right: 2056) == nil)
     }
 
     /// On the right the window keeps its left edge: a size alone, either way.
