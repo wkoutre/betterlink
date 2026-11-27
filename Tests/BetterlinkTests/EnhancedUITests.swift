@@ -17,7 +17,7 @@ import BetterlinkCore
 
     /// With VoiceOver or Switch Control on, the flag is theirs: no hold, not
     /// read, not set, nothing recorded; the motion goes as it did before
-    /// there was a hold (Nick, F3 of 1df43a3's review). Read anew at each
+    /// there was a hold. Read anew at each
     /// motion: once it is off, the next hold sets the flag off as built.
     @Test func leftAloneWhileAnAssistiveAppIsOn() {
         for name in ["VoiceOver", "Switch Control"] {
