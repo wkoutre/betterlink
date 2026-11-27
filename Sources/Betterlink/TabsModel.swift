@@ -41,6 +41,10 @@ final class TabsModel: ObservableObject {
     func start() {
         guard hub == nil else { return }
         refreshExtension()
+        // Brave set up before betterlink knew Brave reads Chrome's folder.
+        for b in Browser.known where b.hostsSidebar {
+            if let f = b.dataFolder, HostRegistration.repair(dataFolder: f, hostPath: Self.hostPath) { registrationVersion += 1 }
+        }
         // The hub hands on a title or icon change once, then holds the rest
         // until `publish()` collects the lists: under churn the main thread
         // hears of what tabs show once per publish, not once per message.
@@ -316,6 +320,15 @@ final class TabsModel: ObservableObject {
         return Bundle.main.executableURL!.deletingLastPathComponent().appendingPathComponent("betterlink-tabhost").path
     }
 
+    /// Every sidebar browser's data folder, for a file two browsers share.
+    nonisolated static var sharers: [String] { Browser.known.filter(\.hostsSidebar).compactMap(\.dataFolder) }
+
+    /// Why Uninstall left the file: another browser reads the same one.
+    nonisolated static func keptNote(_ b: Browser, _ others: [String]) -> String {
+        let names = others.compactMap { f in Browser.known.first { $0.dataFolder == f }?.name }
+        return "\(b.name) reads the same helper file as \(names.joined(separator: " and ")), which is still set up, so the file stays. Uninstall it there too to remove it."
+    }
+
     func state(_ b: Browser) -> HostRegistration.State {
         guard let folder = b.dataFolder else { return .notInstalled }
         return HostRegistration.state(dataFolder: folder, hostPath: Self.hostPath)
@@ -328,7 +341,9 @@ final class TabsModel: ObservableObject {
         guard let folder = b.dataFolder else { return }
         do {
             if on { try HostRegistration.install(dataFolder: folder, hostPath: Self.hostPath) }
-            else { try HostRegistration.uninstall(dataFolder: folder) }
+            else if case .keptFor(let others) = try HostRegistration.uninstall(dataFolder: folder, sharers: Self.sharers) {
+                registrationError = Self.keptNote(b, others); registrationVersion += 1; return
+            }
             registrationError = nil
         } catch {
             registrationError = "Couldn't update \(b.name): \(error.localizedDescription)"
