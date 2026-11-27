@@ -17,9 +17,10 @@ import CoreGraphics
 ///   whole points, its far edge where `closed` and `open` have it.
 /// - Narrowing: the size, the width it took read back at once (a browser at
 ///   its minimum takes less), then the position that puts its far edge back
-///   at that width. On the left, once a frame of this glide (or its probe)
-///   landed at once as asked, and no size has been taken otherwise or gone
-///   unanswered (`pairs`), the size and the position for the width asked go
+///   at that width. On the left, once a frame of this glide (its first, no
+///   more than `firstStep`) landed at once as asked, and no size has been
+///   taken otherwise or gone unanswered (`pairs`), the size and the position
+///   for the width asked go
 ///   back to back, nothing read between, and the width is read after both:
 ///   a read between them let the window server show the new width a refresh
 ///   before the new position, the far edge in by up to 120 pt for a frame
@@ -122,10 +123,10 @@ public struct WindowGlide: Sendable {
     public private(set) var late = 0
     /// No call sent yet: the first goes out with the press (`step`).
     private var sentAny = false
-    /// A frame of this glide (or its probe) landed at once as asked, its
-    /// width read back as asked, and no size of it has been taken otherwise
-    /// or gone unanswered: a left narrowing frame goes out as a size and its
-    /// position back to back (`begin`). The first frame of every glide reads between
+    /// A frame of this glide landed at once as asked, its width read back as
+    /// asked, and no size of it has been taken otherwise or gone unanswered:
+    /// a left narrowing frame goes out as a size and its position back to
+    /// back (`begin`). The first frame of every glide (`firstStep` at most) reads between
     /// (a browser at its minimum, late, busy or dropping sizes shows it
     /// there, where a position already sent would push the window past its
     /// far edge); once a size isn't taken as asked, or isn't answered, the
@@ -259,8 +260,6 @@ public struct WindowGlide: Sendable {
                     if pendingSeen, now - sentAt > Self.instant { slow = true; landedLast = true; done = true; return nil }
                     probing = false
                     proven = true
-                    // Its size taken as asked, at once: the next left narrowing frame may pair.
-                    if !noPairs { pairs = true }
                     expect = nil; asked = nil; took = nil
                     before = seen
                     landedLast = true
@@ -331,10 +330,20 @@ public struct WindowGlide: Sendable {
             if end { final = true; done = true }
             return nil
         }
+        // A left narrowing frame before any has landed as asked (`pairs`): its width read between, and no more than
+        // `firstStep` from where the window is, so the size shown alone for a refresh (a read between let the window
+        // server show it so) leaves the far edge within 2 pt; the next frames catch up with the slide.
+        if side == .left, proven, !pairs, !noPairs, !end, f.width < b.width - Self.firstStep {
+            let w = b.width - Self.firstStep
+            f = CGRect(x: f.maxX - w, y: f.minY, width: w, height: f.height)
+        }
         final = end
         resent = false
         return begin(f, from: b, now: now)
     }
+
+    /// The most a left narrowing frame asks before one has landed as asked.
+    public static let firstStep: CGFloat = 2
 
     private mutating func begin(_ f: CGRect, from b: CGRect, now: Double) -> Call? {
         sentAny = true
