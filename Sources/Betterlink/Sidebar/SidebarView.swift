@@ -974,6 +974,14 @@ struct SidebarView: View {
         if m.session.can(.newWindow), open.count > 1 {
             Button("Move to New Window") { tabs.moveToNewWindow(tab, in: m.session) }
         }
+        // Another browser profile or browser: the page opens there and the
+        // tab closes here once it has. Never out of a private window.
+        if TabTransfer.canSend(tab.url), !m.incognito {
+            Button("Send to Another Profile…") {
+                // After this menu has closed, so the next one can open.
+                DispatchQueue.main.async { SendTabMenu.popUp(sidebar.current(tab), from: m.session, incognito: m.incognito) }
+            }
+        }
         Divider()
         Button("Close Tab") { tabs.close(tab, in: m.session) }
         // Only the plain tabs: a saved link's tab is closed from its link.

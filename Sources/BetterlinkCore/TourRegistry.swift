@@ -194,6 +194,16 @@ public enum TourRegistry {
                      status: nil, control: nil, requires: .sidebarBrowser,
                      cli: "betterlink sidebar icon set <folder id> --emoji 📚", cliWhy: nil),
         ]),
+        TourTopic(id: "sidebar-tabs", title: "Tabs across browsers",
+                  summary: "Move a tab into another browser profile or browser.",
+                  symbol: "arrow.left.arrow.right", tile: .tileTeal, tier: .more, page: "tabs", steps: [
+            TourStep(id: "sidebar-send", revision: 1,
+                     title: "Send a tab to another profile",
+                     body: "Right-click a tab in the sidebar and choose Send to Another Profile to move its page into another browser profile or browser that is open with the Tabs extension. The page opens there, and the tab here closes only once it has.",
+                     changed: nil, symbol: "arrow.left.arrow.right",
+                     status: nil, control: nil, requires: .sidebarBrowser,
+                     cli: "betterlink tabs send --tab 12 --to \"Work (Google Chrome)\"", cliWhy: nil),
+        ]),
         TourTopic(id: "sync", title: "Sync between Macs",
                   summary: "Share rules and Sidebar Profiles through a folder your cloud drive syncs.",
                   symbol: "arrow.triangle.2.circlepath", tile: .accent, tier: .more, page: "general", steps: [

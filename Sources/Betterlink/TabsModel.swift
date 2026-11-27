@@ -44,8 +44,12 @@ final class TabsModel: ObservableObject {
         let hub = SyncHub(holdingContent: true, onLine: { [weak self] path, m in
             // Two things saved links' held tabs need the moment the browser says
             // them: the tab an open made (its ack), and a tab closed on its own.
-            if m.type == "ack", let id = m.id, let tab = m.tabId {
-                DispatchQueue.main.async { SidebarHoldsModel.shared.opened(command: id, tab: tab) }
+            if m.type == "ack", let id = m.id {
+                let ok = m.ok == true
+                DispatchQueue.main.async {
+                    if let tab = m.tabId { SidebarHoldsModel.shared.opened(command: id, tab: tab) }
+                    self?.answered(command: id, ok: ok)
+                }
             } else if m.type == "event", m.kind == "tabRemoved", m.isWindowClosing != true, let tab = m.tabId {
                 DispatchQueue.main.async { SidebarHoldsModel.shared.closed(tab: tab, socketPath: path) }
             }
@@ -111,6 +115,91 @@ final class TabsModel: ObservableObject {
         reloadOutdatedExtensions(s)
     }
 
+    /// The browser a session runs in and the folder its profiles live in.
+    nonisolated static func profileFolder(of s: BrowserSession) -> (browser: Browser, root: URL)? {
+        guard let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
+              let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
+              let folder = browser.dataFolder else { return nil }
+        let root = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
+        return (browser, root)
+    }
+
+    /// Which profile holds the extension copy `instance`, its name and its
+    /// color. Reads files: off the main thread.
+    nonisolated static func readProfile(instance: String, _ browser: Browser, _ root: URL) -> (ProfileRef, String, UInt32?)? {
+        guard let dir = ProfileLocator.directory(instance: instance, dataFolder: root) else { return nil }
+        let state = FileManager.default.contents(atPath: root.appendingPathComponent("Local State").path)
+        let name = state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: browser.bundleId)
+            .profiles.first { $0.directory == dir }?.name } ?? dir
+        let ref = ProfileRef(browser: browser.bundleId, directory: dir)
+        // A custom color theme's own color first (it is what the frame
+        // shows), else the frame color Chrome records for the profile.
+        let prefs = FileManager.default.contents(atPath: root.appendingPathComponent(dir).appendingPathComponent("Preferences").path)
+        let color = prefs.flatMap { ProfileCatalog.themeColor(preferencesJSON: $0) }
+            ?? state.flatMap { ProfileCatalog.frameColor(localStateJSON: $0, directory: dir) }
+        return (ref, name, color)
+    }
+
+    /// A session's profile name, at once (the command line has no time to wait
+    /// for the background look). Nil when it can't be told.
+    nonisolated static func profileName(of s: BrowserSession) -> String? {
+        guard let instance = s.instance, let place = profileFolder(of: s) else { return nil }
+        return readProfile(instance: instance, place.browser, place.root)?.1
+    }
+
+    /// What the sidebar calls a connected browser profile: "Work (Google Chrome)",
+    /// or the browser alone while its profile isn't known, numbered when two
+    /// read the same (see `TabTransfer.labels`).
+    func label(of s: BrowserSession) -> String {
+        TabTransfer.labels(sessions.map { (id: $0.id, base: baseLabel(of: $0)) })[s.id] ?? baseLabel(of: s)
+    }
+
+    private func baseLabel(of s: BrowserSession) -> String {
+        guard let name = s.instance.flatMap({ profiles[$0]?.name }), !name.isEmpty else { return s.browser }
+        return "\(name) (\(s.browser))"
+    }
+
+    /// The page in front of `s`'s focused window, to tell apart two profiles
+    /// whose names can't be read.
+    func frontTitle(of s: BrowserSession) -> String? {
+        let windows = s.store.orderedWindows.filter { $0.window.isNormal && !$0.window.incognito }
+        let window = windows.first { $0.window.focused } ?? windows.first
+        guard let title = window?.tabs.first(where: \.active)?.title, !title.isEmpty else { return nil }
+        return title
+    }
+
+    // MARK: Sending a tab to another profile or browser
+
+    private var transfers = TabTransfer()
+
+    /// The other connected profiles and browsers `tab` can go to from window
+    /// `incognito` or not, by their sidebar label. Empty when its page can't
+    /// be sent (a browser's own page, a blank tab).
+    func sendTargets(for tab: BrowserTab, from s: BrowserSession, incognito: Bool) -> [BrowserSession] {
+        guard TabTransfer.canSend(tab.url) else { return [] }
+        return sessions.filter { TabTransfer.canSend(from: s.id, to: $0.id, incognito: incognito) }
+            .map { ($0, label(of: $0)) }
+            .sorted { $0.1.localizedStandardCompare($1.1) == .orderedAscending }
+            .map(\.0)
+    }
+
+    /// Opens `tab`'s page in `target`'s front window and closes it here once
+    /// `target` says it opened. No answer in 10 s: the tab stays.
+    func send(_ tab: BrowserTab, from s: BrowserSession, to target: BrowserSession) {
+        guard TabTransfer.canSend(tab.url), TabTransfer.canSend(from: s.id, to: target.id, incognito: false) else { return }
+        let id = send(.open(tab.url), to: target)
+        transfers.started(command: id, closing: .init(socketPath: s.socketPath, tabId: tab.id))
+        // The extension brings its window forward; the browser comes with it.
+        NSRunningApplication(processIdentifier: pid_t(target.browserPid))?.activate()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { [weak self] in self?.transfers.gaveUp(command: id) }
+    }
+
+    private func answered(command: String, ok: Bool) {
+        guard let source = transfers.answered(command: command, ok: ok) else { return }
+        hub?.send(.close(source.tabId), to: source.socketPath)
+    }
+
     /// Puts this app's copy of the Tabs extension where browsers load it from,
     /// when this app's is newer or none is there yet (see `ExtensionCopy`).
     func refreshExtension() {
@@ -159,24 +248,11 @@ final class TabsModel: ObservableObject {
                   Date().timeIntervalSince(profileLookups[instance] ?? .distantPast)
                     > ProfileLocator.lookAgain(found: profiles[instance] != nil,
                                                lookingFor: Date().timeIntervalSince(profileFirstLookups[instance] ?? Date())),
-                  let app = NSRunningApplication(processIdentifier: pid_t(s.browserPid)),
-                  let browser = app.bundleIdentifier.flatMap({ Browser.known(bundleId: $0) }),
-                  let folder = browser.dataFolder else { continue }
+                  let place = Self.profileFolder(of: s) else { continue }
             profileLookups[instance] = Date()
             if profileFirstLookups[instance] == nil { profileFirstLookups[instance] = Date() }
-            let root = FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library/Application Support").appendingPathComponent(folder)
             DispatchQueue.global(qos: .utility).async {
-                guard let dir = ProfileLocator.directory(instance: instance, dataFolder: root) else { return }
-                let state = FileManager.default.contents(atPath: root.appendingPathComponent("Local State").path)
-                let name = state.flatMap { ProfileCatalog.parse(localStateJSON: $0, browser: browser.bundleId)
-                    .profiles.first { $0.directory == dir }?.name } ?? dir
-                let ref = ProfileRef(browser: browser.bundleId, directory: dir)
-                // A custom color theme's own color first (it is what the frame
-                // shows), else the frame color Chrome records for the profile.
-                let prefs = FileManager.default.contents(atPath: root.appendingPathComponent(dir).appendingPathComponent("Preferences").path)
-                let color = prefs.flatMap { ProfileCatalog.themeColor(preferencesJSON: $0) }
-                    ?? state.flatMap { ProfileCatalog.frameColor(localStateJSON: $0, directory: dir) }
+                guard let (ref, name, color) = Self.readProfile(instance: instance, place.browser, place.root) else { return }
                 DispatchQueue.main.async {
                     // Publish only a change: a re-read that finds the same
                     // profile must not redraw everything watching it.

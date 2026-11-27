@@ -479,6 +479,15 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     run: (c) => core('tabs.navigate', c.options),
   })
   .command('new-window', { description: 'Move a tab to a new window', options: tabId, run: (c) => core('tabs.new-window', c.options) })
+  .command('send', {
+    description: 'Send a tab to another browser profile or browser: it opens there, then closes here (the sidebar\'s Send to Another Profile)',
+    options: z.object({
+      tab: z.number().int().describe('Tab id from tabs list'),
+      browser: z.string().optional().describe('Only when two browsers have a tab with this id'),
+      to: z.string().describe('The profile as tabs list names it ("Work (Google Chrome)"), or a profile or browser name'),
+    }),
+    run: (c) => core('tabs.send', c.options),
+  })
   .command('close-others', {
     description: "Close the window's other tabs (saved links' tabs stay open)",
     options: tabId,

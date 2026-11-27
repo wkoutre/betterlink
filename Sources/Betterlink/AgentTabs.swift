@@ -10,7 +10,7 @@ import TabSyncCore
 extension AgentCommand {
     static let tabCommands = [
         "tabs.list", "tabs.open", "tabs.close", "tabs.activate", "tabs.move", "tabs.mute",
-        "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below",
+        "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below", "tabs.send",
         "tabs.extension", "tabs.helper.list", "tabs.helper.set",
         "sidebar.settings.get", "sidebar.settings.set",
     ]
@@ -21,14 +21,16 @@ extension AgentCommand {
         if command == "tabs.extension" { return tabsExtension() }
         if command == "tabs.helper.list" { return AgentResponseJSON.success(["browsers": tabHelpers()]) }
         if command == "tabs.helper.set" { return setTabHelper(input) }
-        let hub = SyncHub(onChange: { _ in })
+        let acks = Acks()
+        let hub = SyncHub(onLine: { _, m in if m.type == "ack", let id = m.id { acks.record(id, ok: m.ok == true, error: m.error) } },
+                          onChange: { _ in })
         hub.start()
         let sessions = waitForSessions(hub)
         guard !sessions.isEmpty else {
             return AgentResponseJSON.failure("No browser with the betterlink Tabs extension is connected. Open Chrome (or another attached browser) with the extension on.")
         }
         do {
-            let out = try tabCommand(command, input, hub, sessions)
+            let out = try tabCommand(command, input, hub, sessions, acks)
             // Give the host a moment to take the command before this process exits.
             if command != "tabs.list" { Thread.sleep(forTimeInterval: 0.3) }
             return AgentResponseJSON.success(out)
@@ -40,6 +42,32 @@ extension AgentCommand {
     }
 
     struct TabError: Error { let message: String }
+
+    /// The browsers' answers to this run's commands, by command id.
+    final class Acks: @unchecked Sendable {
+        private let lock = NSLock()
+        private var answers: [String: (ok: Bool, error: String?)] = [:]
+        func record(_ id: String, ok: Bool, error: String?) { lock.withLock { answers[id] = (ok, error) } }
+        /// Waits for `id`'s answer, at most `seconds`.
+        func wait(_ id: String, seconds: Double) -> (ok: Bool, error: String?)? {
+            let deadline = Date().addingTimeInterval(seconds)
+            while Date() < deadline {
+                if let a = lock.withLock({ answers[id] }) { return a }
+                Thread.sleep(forTimeInterval: 0.05)
+            }
+            return nil
+        }
+    }
+
+    /// What `tabs list` and `tabs send` call each connected browser profile,
+    /// by session id: the sidebar's names, numbered the same way when two read
+    /// the same (see `TabTransfer.labels`).
+    static func profileLabels(_ sessions: [BrowserSession]) -> [String: String] {
+        TabTransfer.labels(sessions.map { s in
+            guard let name = TabsModel.profileName(of: s), !name.isEmpty else { return (id: s.id, base: s.browser) }
+            return (id: s.id, base: "\(name) (\(s.browser))")
+        })
+    }
 
     /// Where browsers load the Tabs extension from on this Mac, after making
     /// sure this app's copy is there (the Sidebar page's Show in Finder).
@@ -132,9 +160,11 @@ extension AgentCommand {
         return last
     }
 
-    static func describe(_ s: BrowserSession) -> [String: Any] {
+    static func describe(_ s: BrowserSession, label: String) -> [String: Any] {
         [
             "browser": s.browser,
+            "label": label,
+            "profile": TabsModel.profileName(of: s) ?? NSNull(),
             "extension": s.extensionVersion ?? NSNull(),
             "windows": s.store.orderedWindows.map { w in
                 [
@@ -194,7 +224,8 @@ extension AgentCommand {
         return Agent.sparedTabs(tabs.map { (id: $0.id, url: $0.url) }, library: lib, remembered: remembered)
     }
 
-    private static func tabCommand(_ command: String, _ input: [String: Any], _ hub: SyncHub, _ sessions: [BrowserSession]) throws -> [String: Any] {
+    private static func tabCommand(_ command: String, _ input: [String: Any], _ hub: SyncHub, _ sessions: [BrowserSession],
+                                   _ acks: Acks) throws -> [String: Any] {
         if let b = input["browser"], !(b is NSNull), !(b is String) { throw TabError(message: "browser must be text: a name or bundle id.") }
         func tab() throws -> (Int, BrowserSession, Int) {
             guard let id = try int(input, "tab") else { throw TabError(message: "Give tab: a tab id (tabs list).") }
@@ -203,7 +234,8 @@ extension AgentCommand {
         }
         switch command {
         case "tabs.list":
-            return ["browsers": sessions.map(describe)]
+            let labels = profileLabels(sessions)
+            return ["browsers": sessions.map { describe($0, label: labels[$0.id] ?? $0.browser) }]
         case "tabs.open":
             let url = try webURL(input)
             let windowId = try int(input, "window")
@@ -280,6 +312,50 @@ extension AgentCommand {
             try need(s, .newWindow)
             hub.send(.newWindow(with: id), to: s.socketPath)
             return ["movedToNewWindow": id]
+        case "tabs.send":
+            // The sidebar's Send to Another Profile: open the page in the other
+            // profile, and close the tab here only once that browser says it opened.
+            let (id, s, w) = try tab()
+            guard let to = input["to"] as? String, !to.isEmpty else {
+                throw TabError(message: "Give to: the browser profile to send it to, as tabs list names it (\"Work (Google Chrome)\"), or a profile or browser name.")
+            }
+            let incognito = s.store.orderedWindows.first { $0.window.id == w }?.window.incognito ?? false
+            guard !incognito else { throw TabError(message: "Tab \(id) is in a private window; betterlink never sends a private page to another profile.") }
+            guard let page = s.store.orderedWindows.flatMap(\.tabs).first(where: { $0.id == id }), TabTransfer.canSend(page.url) else {
+                throw TabError(message: "Tab \(id) shows a browser page or nothing; only web pages and files can be sent.")
+            }
+            let others = sessions.filter { TabTransfer.canSend(from: s.id, to: $0.id, incognito: false) }
+            let named = profileLabels(sessions)
+            let labels = others.map { ($0, named[$0.id] ?? $0.browser) }
+            let wanted = to.lowercased()
+            var hits = labels.filter { $0.1.lowercased() == wanted }
+            if hits.isEmpty {
+                hits = labels.filter { hit in
+                    let other = hit.0
+                    return TabsModel.profileName(of: other)?.lowercased() == wanted || other.browser.lowercased() == wanted
+                        || Browser.known.first(where: { $0.name == other.browser })?.bundleId.lowercased() == wanted
+                }
+            }
+            let names = labels.map(\.1).joined(separator: ", ")
+            guard !hits.isEmpty else {
+                throw TabError(message: others.isEmpty ? "No other browser profile is open with the Tabs extension."
+                                                       : "No open browser profile \"\(to)\". Open now: \(names).")
+            }
+            guard hits.count == 1, let hit = hits.first else {
+                throw TabError(message: "\"\(to)\" names more than one open profile: \(hits.map(\.1).joined(separator: ", ")). Give the whole name.")
+            }
+            let (target, label) = hit
+            let open = Command.open(page.url)
+            hub.send(open, to: target.socketPath)
+            guard let answer = acks.wait(open.id, seconds: 5) else {
+                throw TabError(message: "\(label) didn't answer, so tab \(id) stays open here.")
+            }
+            guard answer.ok else {
+                throw TabError(message: "\(label) couldn't open the page (\(answer.error ?? "no reason given")), so tab \(id) stays open here.")
+            }
+            hub.send(.close(id), to: s.socketPath)
+            NSRunningApplication(processIdentifier: pid_t(target.browserPid))?.activate()
+            return ["sent": id, "url": page.url, "to": label]
         case "tabs.close-others", "tabs.close-below":
             let (id, s, w) = try tab()
             guard let window = s.store.orderedWindows.first(where: { $0.window.id == w }) else { return ["closed": []] }
