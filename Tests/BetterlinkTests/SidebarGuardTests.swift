@@ -94,6 +94,11 @@ struct BrowserBehaviour: CustomStringConvertible {
     var enhancedUI = false
     /// Its flag can't be set off (the set is refused).
     var enhancedStuck = false
+    /// Each Accessibility call to the window (a read or a set) holds the
+    /// caller this long while the browser lays itself out (Nick's 0.3.34
+    /// recording on macOS 27: Brave's edge moved in 5 or 6 jumps per slide,
+    /// up to 42 ms apart). 0: answered at once.
+    var blocksCalls: Double = 0
 
     /// Sizes it is given end up taken (late, once dropped, or after a tiling app, included).
     var sizesStick: Bool { !positionOnly && revertReads == 0 }
@@ -367,6 +372,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func position() -> CGPoint? {
+        if behaviour.blocksCalls > 0 { wait(behaviour.blocksCalls) }
         if hung() { lastReadFailed = true; return nil }
         let p = readPosition()
         lastReadFailed = p == nil
@@ -381,6 +387,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func size() -> CGSize? {
+        if behaviour.blocksCalls > 0 { wait(behaviour.blocksCalls) }
         if hung() { lastReadFailed = true; return nil }
         let s = readSize()
         lastReadFailed = s == nil
@@ -438,6 +445,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func setPosition(_ p: CGPoint) {
+        if behaviour.blocksCalls > 0 { wait(behaviour.blocksCalls) }
         defer { holdCaller(); holdPaired(position: true) }
         setCalls += 1
         sent.append((now(), nil, p))
@@ -449,6 +457,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func setSize(_ s: CGSize) {
+        if behaviour.blocksCalls > 0 { wait(behaviour.blocksCalls) }
         defer { holdCaller(); holdPaired(position: false) }
         setCalls += 1
         sent.append((now(), s, nil))
@@ -3065,6 +3074,127 @@ struct GuardCase: CustomStringConvertible {
             #expect(!lines.contains { $0.hasPrefix("glide:") }, "\(side): glided with VoiceOver on")
             #expect(lines.filter { $0.contains("left alone, VoiceOver on") }.count == 2, "\(side): \(lines.filter { $0.contains("enhanced UI") })")
         }
+    }
+
+    // MARK: The slide-over design
+
+    /// The slide-over design (Nick's 0.3.34 recording on macOS 27: Brave can't
+    /// repaint its page at 60 frames a second under a resize per frame; its
+    /// page went blank below the toolbar for about 5 frames and its edge moved
+    /// in 5 or 6 jumps). A show slides the panel in over the browser's near
+    /// edge while the browser stays where it is; once the panel covers the
+    /// sidebar's whole width, the browser gets one size and position, under
+    /// the panel. A hide first gives the browser its frame back in one size
+    /// and position, under the panel, and then slides the panel out. For a
+    /// browser whose sets land at once, each show and hide, either side, a
+    /// window filling the screen and one free on it, flag off and on:
+    ///
+    /// - exactly one size, and on the left one position (the right needs none);
+    /// - a show's sent only once the panel covers the sidebar's whole width,
+    ///   the browser where it was until then; a hide's sent before the panel
+    ///   begins to uncover;
+    /// - the far edge never inside where it ends, at any tick;
+    /// - the panel's reveal moving at every tick of the slide, one way.
+    @Test func aShowAndAHideSlideOverTheBrowser() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for side in SidebarSide.allCases {
+            for start in [screen.visibleFrame, CGRect(x: 300, y: 0, width: 1200, height: 1259)] {
+                for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+                    let rig = SidebarRig(displays: [screen], frame: start, side: side, width: 280, behaviour: b)
+                    var problems: [String] = []
+                    for k in 0..<4 {
+                        let showing = k % 2 == 0
+                        let step = "\(side) \(start) \(b): \(showing ? "show" : "hide") \(k / 2 + 1)"
+                        rig.toggle()
+                        problems += slidOver(rig, from: start, showing: showing, step)
+                    }
+                    #expect(problems.isEmpty, "\(problems.prefix(8).joined(separator: "\n"))")
+                }
+            }
+        }
+    }
+
+    /// The panel's reveal moves at every display tick of a slide, even while
+    /// the browser's Accessibility calls each hold the caller 30 ms (Nick's
+    /// recording: the panel's reveal moved in about 4 steps per slide, up to
+    /// 108 pt behind the browser's edge, while betterlink's calls to Brave
+    /// blocked the main thread). No more than a tick between two of its
+    /// changes from the press until the slide is over, either side.
+    @Test func thePanelsRevealMovesEveryTickWhileTheBrowsersCallsBlock() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for side in SidebarSide.allCases {
+            var b = BrowserBehaviour()
+            b.blocksCalls = 0.03
+            let rig = SidebarRig(displays: [screen], frame: screen.visibleFrame, side: side, width: 280, behaviour: b)
+            var problems: [String] = []
+            for k in 0..<4 {
+                let showing = k % 2 == 0
+                rig.toggle()
+                let step = "\(side): \(showing ? "show" : "hide") \(k / 2 + 1)"
+                // From the press until the reveal reaches its end (the whole width shown, or none).
+                let shows = rig.panelShows.filter(\.ordered)
+                guard let first = shows.first else { problems.append("\(step): the panel never showed"); continue }
+                let end = shows.firstIndex { showing ? $0.shown >= rig.sidebarWidth - 0.5 : $0.shown <= 0.5 } ?? shows.count - 1
+                var last = first.t
+                for x in shows[...end].dropFirst() {
+                    if x.t - last > 1.0 / 120 + 1e-6 {
+                        problems.append(String(format: "%@: the reveal held still %.0f ms (at %.0f of %.0f pt)", step, (x.t - last) * 1000,
+                                               Double(x.shown), Double(rig.sidebarWidth)))
+                        break
+                    }
+                    last = x.t
+                }
+            }
+            #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
+        }
+    }
+
+    /// One show or hide of the slide-over design, as `aShowAndAHideSlideOverTheBrowser` says.
+    private func slidOver(_ rig: SidebarRig, from start: CGRect, showing: Bool, _ step: String) -> [String] {
+        var problems: [String] = []
+        let side = rig.side, width = rig.sidebarWidth
+        let opened = SidebarGeometry.opened(start, width: width, side: side)
+        guard let press = rig.pressedAt.first else { return ["\(step): no press"] }
+        let sent = Array(rig.fake.sent.dropFirst(press.calls))
+        let sizes = sent.filter { $0.size != nil }.count, positions = sent.filter { $0.position != nil }.count
+        if sizes != 1 || positions != (side == .left ? 1 : 0) {
+            problems.append("\(step): sent \(sizes) sizes and \(positions) positions, wanted 1 and \(side == .left ? 1 : 0)")
+        }
+        let s = rig.samples
+        let covered = s.first { $0.shown >= width - 0.5 }
+        if showing {
+            // Until the panel covers the sidebar's whole width the browser is where it was, and nothing is sent.
+            if let c = covered, let t = sent.first?.t, t < c.t - 1e-9 {
+                problems.append(String(format: "%@: a set sent %.0f ms before the panel covered the sidebar's width", step, (c.t - t) * 1000))
+            }
+            if covered == nil { problems.append("\(step): the panel never covered the sidebar's width") }
+            if let x = s.first(where: { $0.shown < width - 0.5 && !GuardFrames.same($0.browser, start) }) {
+                problems.append(String(format: "%@: the browser at %@ %.0f ms in, before the panel covered it", step, "\(x.browser)", (x.t - press.t) * 1000))
+            }
+        } else if let uncover = s.firstIndex(where: { $0.shown < width - 0.5 }), let t = sent.last?.t, t > s[uncover].t + 1e-9 {
+            problems.append(String(format: "%@: a set sent %.0f ms after the panel began to uncover", step, (t - s[uncover].t) * 1000))
+        }
+        // The far edge (away from the sidebar) is the pair's, at both ends: never inside it.
+        let far = { (r: CGRect) in side == .left ? r.maxX : r.minX }
+        let want = far(start)
+        if let x = s.first(where: { side == .left ? far($0.browser) < want - 0.5 : far($0.browser) > want + 0.5 }) {
+            problems.append(String(format: "%@: the far edge %.0f pt inside where it ends, %.0f ms in (browser %@)", step,
+                                   Double(abs(far(x.browser) - want)), (x.t - press.t) * 1000, "\(x.browser)"))
+        }
+        // The reveal moves every tick, one way, until the end of the slide.
+        let slide = showing ? Array(s.prefix { $0.shown < width - 0.5 }) : Array(s.drop { $0.shown >= width - 0.5 }.prefix { $0.shown > 0.5 })
+        for (a, b) in zip(slide, slide.dropFirst()) where showing ? b.shown <= a.shown : b.shown >= a.shown {
+            problems.append(String(format: "%@: the reveal at %.1f, then %.1f, %.0f ms in", step, Double(a.shown), Double(b.shown), (b.t - press.t) * 1000))
+            break
+        }
+        // Where it ends.
+        let end = showing ? opened : start
+        if rig.open != showing || !GuardFrames.same(rig.fake.frame, end) {
+            problems.append("\(step): ended \(rig.open ? "open" : "closed") at \(rig.fake.frame), wanted \(showing ? "open" : "closed") at \(end)")
+        }
+        return problems
     }
 
     @Test func nicksShowAndHideOnAnEnhancedUIBrowser() {
