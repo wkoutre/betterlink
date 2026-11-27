@@ -63,6 +63,12 @@ public struct WindowGlide: Sendable {
 
     /// Longer than this to show a frame: the browser's sets don't land at once.
     public static let instant = 0.05
+    /// Frames in a row seen still not shown `instant` after their calls
+    /// returned, though each then showed whole: this many, and the sets are
+    /// late (`slow`). One alone is a hiccup (MINI-16 on macOS 27, 1df43a3:
+    /// one set showed 70 ms late, and the glide gave way for good), waited
+    /// for, and the glide goes on.
+    public static let lateFrames = 3
     /// The least a probe asks of the window's width.
     public static let probeStep: CGFloat = 4
 
@@ -98,6 +104,13 @@ public struct WindowGlide: Sendable {
     private var goingOpen: Bool?
     /// The probe didn't show within `instant`.
     private var probeOut = false
+    /// The frame in flight was seen not yet shown (a look at it after its
+    /// calls returned); and how many frames in a row, so seen, showed only
+    /// past `instant` after their calls returned (`lateFrames`).
+    private var pendingSeen = false
+    public private(set) var late = 0
+    /// No call sent yet: the first goes out with the press (`step`).
+    private var sentAny = false
 
     /// `proven`: this window's sets were seen to land at once before. Until
     /// they are, the first frame is a probe: its size alone, and only once
@@ -127,6 +140,14 @@ public struct WindowGlide: Sendable {
         self.open = open
         if expect != nil { foreign = true }
         final = false
+    }
+
+    /// The tick's calls have returned, at `t`: whether a frame shows within
+    /// `instant` is counted from here, not from before them, so a call the
+    /// browser took long to answer (it landed meanwhile) isn't taken for a
+    /// late one.
+    public mutating func sent(at t: Double) {
+        if expect != nil { sentAt = max(sentAt, t) }
     }
 
     private static func near(_ a: CGFloat, _ b: CGFloat, _ by: CGFloat = 1) -> Bool { abs(a - b) < by }
@@ -191,12 +212,18 @@ public struct WindowGlide: Sendable {
                 before = seen
                 foreign = false
                 landedLast = true
-                // Shown, but later than sets that land at once: nothing is in flight now, the rest is the steps'.
-                if now - sentAt > Self.instant { slow = true; done = true; return nil }
+                // Seen not shown yet, and shown whole only past `instant`: late. Several frames in a row, and nothing
+                // is in flight now: the rest is the steps'. One is a hiccup: the glide goes on. (First seen past
+                // `instant` already shown: betterlink's tick came late, not the frame.)
+                late = pendingSeen && now - sentAt > Self.instant ? late + 1 : 0
+                if late >= Self.lateFrames { slow = true; done = true; return nil }
                 if final { done = true; return nil }
             } else if probing {
                 if Self.near(seen.minX, e.minX, 0.5), Self.near(seen.width, e.width, 0.5), Self.near(seen.maxY, e.maxY, 0.5) {
-                    if now - sentAt > Self.instant { slow = true; landedLast = true; done = true; return nil }
+                    // Seen not shown yet, and shown past `instant`: animated or late (one that is seen not shown past
+                    // `instant` gives way below). This motion only: the next probes again. First seen past `instant`
+                    // already shown: betterlink's tick came late, not the probe, and it landed at once.
+                    if pendingSeen, now - sentAt > Self.instant { slow = true; landedLast = true; done = true; return nil }
                     probing = false
                     proven = true
                     expect = nil; asked = nil; took = nil
@@ -204,10 +231,12 @@ public struct WindowGlide: Sendable {
                     landedLast = true
                     if final { done = true; return nil }
                 } else {
+                    pendingSeen = true
                     if now - sentAt > Self.instant { slow = true; probeOut = true; done = true }
                     return nil
                 }
             } else {
+                pendingSeen = true
                 let changed = changedAt > sentAt
                 if changed, now - changedAt >= WindowSteps.still {
                     if now - sentAt > Self.instant { slow = true }
@@ -235,13 +264,32 @@ public struct WindowGlide: Sendable {
             done = true
             return nil
         }
-        let f = end ? (q >= 0.5 ? open : closed) : frame(at: q)
+        var f = end ? (q >= 0.5 ? open : closed) : frame(at: q)
+        let starts = q <= 0 && Self.landed(b, closed) ? true : q >= 1 && Self.landed(b, open) ? false : nil
+        if !sentAny, !end, Self.landed(f, b), let toOpen = starts {
+            // The first frame goes out with the press, as the steps' first call always did (no added latency, Nick):
+            // the slide's next point or two toward where it goes, not a tick or more later once it has moved one.
+            // Only from a slide's very start, where the window is at its end of it.
+            let span = max(abs(open.width - closed.width), abs(open.minX - closed.minX), 1)
+            for lead in [1.5, 2.5] {
+                f = frame(at: toOpen ? min(1, q + lead / Double(span)) : max(0, q - lead / Double(span)))
+                if !Self.landed(f, b) { break }
+            }
+        }
         // Never back along the slide: a frame behind where the window is (the probe went ahead of the slide) waits.
         if let last = lastProgress, q != last { goingOpen = q > last }
         lastProgress = q
         if !end, let o = goingOpen {
             let going = o ? open : closed
-            if abs(f.width - going.width) > abs(b.width - going.width) + 0.5 { return nil }
+            if abs(f.width - going.width) > abs(b.width - going.width) + 0.5 {
+                // Ahead of the slide (the first frame or the probe went out with the press): it waits there, its far
+                // edge where the slide has it (a probe, a size alone, moved it): that position goes now.
+                let far = side == .left ? f.maxX - b.width : f.minX
+                guard !Self.near(b.minX, far, 0.5), Self.near(b.height, f.height, 0.5) else { return nil }
+                final = false
+                resent = false
+                return begin(CGRect(x: far, y: f.maxY - b.height, width: b.width, height: b.height), from: b, now: now)
+            }
         }
         if Self.landed(f, b) {
             // Already where the slide ends: the glide ended where the motion is going.
@@ -254,6 +302,8 @@ public struct WindowGlide: Sendable {
     }
 
     private mutating func begin(_ f: CGRect, from b: CGRect, now: Double) -> Call? {
+        sentAny = true
+        pendingSeen = false
         widening = f.width > b.width + 0.5
         asked = f
         took = nil
@@ -375,14 +425,23 @@ public struct WindowGlide: Sendable {
         if probing, let c = lastCall {
             return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at))
         }
+        // Widening, a size that didn't show at once is late (the window can grow there: a size goes first only
+        // where it can, else the position does) and still on its way, moved or not: the steps take it as their own
+        // call in flight (sent again if dropped), as after a probe. Started afresh, it would land after their calls
+        // and pass for someone else's change (a late browser, a press turning the glide back meanwhile).
+        // Taken over by a press, or asked before the glide turned back, it is the press before's: waited for,
+        // never sent again.
+        if stoppedAtSize, widening, !landedLast {
+            guard let c = lastCall, case .size(let f) = c.call, f.width > c.from.width + 0.5 else { return .none }
+            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at, own: !takenOver && !foreign))
+        }
         guard moved else { return .none }
         let resume = WindowSteps.Resume(from: start, seen: seen, at: sentAt, changed: changedAt)
         if resizedItself { return .holds(resume) }
         if landedLast { return final || (stoppedAtSize && !widening) ? .holds(resume) : .none }
-        // A size the browser didn't show at once. Narrowing: checked as after the steps' own size (its minimum, a
-        // stop short). Widening: the steps start afresh, the position first, as they always did; sent again from
-        // where the window is, the size would grow it the other way, past its screen's edge.
-        if stoppedAtSize { return widening ? .none : .holds(resume) }
+        // A size the browser didn't show at once, narrowing: checked as after the steps' own size (its minimum, a
+        // stop short).
+        if stoppedAtSize { return .holds(resume) }
         guard let c = lastCall else { return .none }
         return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at))
     }

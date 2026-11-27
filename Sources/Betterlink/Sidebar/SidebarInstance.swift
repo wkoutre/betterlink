@@ -262,11 +262,10 @@ final class SidebarInstance: ObservableObject {
     private var glide: WindowGlide?
     private var glideSteps: ((WindowGlide.Handover) -> WindowSteps)?
     private var glideDeadline: Double?
-    /// This window's browser was seen to animate (or answer late) a glide's
-    /// frame: its shows and hides are carried out by `WindowSteps` alone.
-    private var setsSlow = false
     /// A glide's probe, or every call of steps, landed at once: this window's sets do (`WindowGlide.proven`,
-    /// `WindowSteps.landedAtOnce`).
+    /// `WindowSteps.landedAtOnce`). A glide that found them animated or late (`WindowGlide.slow`) gives way
+    /// for its own motion only and clears this: the next motion probes again, and glides if they land at once.
+    /// Never given up for good (MINI-16, 1df43a3: one late set, and every motion after was the two steps).
     private var setsInstant = false
 
     /// The right edge of the displays side by side at `frame`'s height.
@@ -344,7 +343,7 @@ final class SidebarInstance: ObservableObject {
                 // size alone; a window that can only widen toward the sidebar by moving first waits for that.
                 let right = rightEdge(of: onScreenFrame)
                 let growsInPlace = frame.width <= onScreenFrame.width + 0.5 || right.map { onScreenFrame.minX + frame.width <= $0 + 0.5 } ?? false
-                if flagOff, !setsSlow, !reducesMotion(), setsInstant || growsInPlace {
+                if flagOff, !reducesMotion(), setsInstant || growsInPlace {
                     glide = WindowGlide(closed: run.hiddenWindow, open: run.shownWindow, side: keep, right: right, proven: setsInstant)
                     glideSteps = make
                     glideDeadline = deadline
@@ -440,6 +439,7 @@ final class SidebarInstance: ObservableObject {
             let q = slideRun.map { $0.slide.progress(at: now) } ?? 1
             let end = slideRun.map { $0.slide.done(at: now) } ?? true
             var call = g.step(seen: onScreenFrame, now: now, progress: q, end: end, deadline: glideDeadline)
+            let sending = call != nil
             // Every call of a frame in one go, within one display refresh: a size and a position sent
             // together land as one frame. The width read back after a size places the far edge.
             while let c = call {
@@ -454,11 +454,20 @@ final class SidebarInstance: ObservableObject {
                 }
                 call = g.next(width: w, unanswered: unanswered)
             }
+            if sending {
+                // Lateness is counted from when the calls returned: a browser that took long to answer one (its main
+                // thread busy) landed it meanwhile.
+                let back = clock()
+                g.sent(at: back)
+                if back - now > WindowGlide.instant {
+                    DragTrace.log(String(format: "glide: window %d calls took %.0f ms to return", window.number, (back - now) * 1000))
+                }
+            }
             guard g.done else { glide = g; return }
             glide = nil
-            if g.slow { setsSlow = true }
-            if g.proven { setsInstant = true }
-            DragTrace.log("glide: window \(window.number) \(g.interrupted ? "moved by someone else" : g.slow ? "slow: sets animated or late" : g.capped ? "capped" : "done") at \(onScreenFrame)")
+            // Slow: this motion's rest is the steps', and the next probes again. Never for good.
+            if g.slow { setsInstant = false } else if g.proven { setsInstant = true }
+            DragTrace.log("glide: window \(window.number) \(g.interrupted ? "moved by someone else" : g.slow ? "slow: sets animated or late (\(g.late) late frames in a row), this motion only" : g.capped ? "capped" : "done") at \(onScreenFrame)")
             let make = glideSteps
             glideSteps = nil
             if g.interrupted {
@@ -466,7 +475,9 @@ final class SidebarInstance: ObservableObject {
                 takenByOther()
                 return releaseFlagIfIdle()
             }
-            steps = make?(g.handover(seen: onScreenFrame))
+            let h = g.handover(seen: onScreenFrame)
+            DragTrace.log("glide: window \(window.number) hands over: \({ switch h { case .none: "afresh"; case .holds: "as after a size"; case .waits: "waiting for its call" } }())")
+            steps = make?(h)
         }
         guard var s = steps else { return }
         if let call = s.step(seen: onScreenFrame, now: clock()) {

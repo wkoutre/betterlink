@@ -213,8 +213,19 @@ final class FakeBrowser: WindowHandle {
     var animating: Double { behaviour.animation > 0 ? behaviour.animation : FakeApps.shared.flag(pid) ? FakeBrowser.enhancedAnimation : 0 }
     static let enhancedAnimation = 0.25
 
-    /// The frame on screen now (mid-animation: where the animation has got to).
+    /// The frame on screen now: where the window server shows it. Mostly
+    /// the window's own (`real`); a set armed to show late (`showsLate`)
+    /// leaves the frame from before on screen for a while.
     var frame: CGRect {
+        if let l = lag {
+            if now() < l.until { return l.shown }
+            lag = nil
+        }
+        return real
+    }
+
+    /// The window's frame (mid-animation: where the animation has got to).
+    private var real: CGRect {
         guard let a = anim else { return base }
         var e = now() - a.start - behaviour.animationDelay
         // Held partway: still for `animationHold`, then on.
@@ -236,7 +247,7 @@ final class FakeBrowser: WindowHandle {
     /// The rig's clock, for animations.
     var now: () -> Double = { 0 }
     /// What a read gives: the target of an animation at once.
-    private var readFrame: CGRect { anim?.to ?? frame }
+    private var readFrame: CGRect { anim?.to ?? real }
     /// What it does with what it is asked; a test may change it once a sidebar is open.
     var behaviour: BrowserBehaviour
     var onScreen = true
@@ -291,7 +302,7 @@ final class FakeBrowser: WindowHandle {
         // A call to a browser that isn't answering gets no answer in time (Accessibility's
         // cannotComplete), though the browser does it later.
         if inStall { missed = true }
-        if inStall, beforeStall == nil { beforeStall = frame }
+        if inStall, beforeStall == nil { beforeStall = real }
         if !inStall, beforeStall != nil { beforeStall = nil; catchUp() }
         return inStall
     }
@@ -376,7 +387,44 @@ final class FakeBrowser: WindowHandle {
     /// Each of them, when, in Accessibility's coordinates: a call sent again is seen.
     private(set) var sent: [(t: Double, size: CGSize?, position: CGPoint?)] = []
 
+    /// One set, live, that showed late: the window server kept the frame
+    /// from before on screen `by` seconds after it (MINI-16 on macOS 27,
+    /// 1df43a3: one late set mid-glide), reads giving the new frame. Armed for
+    /// the `n`-th set call from now that changes the window.
+    func showsLate(call n: Int, by d: Double) { lagAt = setCalls + n; lagArmed = d }
+    private var lag: (shown: CGRect, until: Double)?
+    private var lagAt = 0
+    private var lagArmed = 0.0
+    /// One set call, live, that held the caller: the browser took `by`
+    /// seconds to answer it (its main thread busy), and its change landed
+    /// at once. Armed for the `n`-th set call from now.
+    func holdsCaller(call n: Int, by d: Double) { holdAt = setCalls + n; holdFor = d }
+    private var holdAt = 0
+    private var holdFor = 0.0
+    /// A position sent right after a size (a left-side glide's pair) that
+    /// holds the caller now and then: every `every`-th such position waits
+    /// `by` seconds for the browser, busy with the size, and lands at once,
+    /// both calls shown together. Live a left glide gave way as slow after a
+    /// few motions, flag on and off, a right one never (MINI-16, macOS 27).
+    var pairedPositionHolds: (every: Int, by: Double)?
+    private var pairedPositions = 0
+    private var lastSizeAt: Double?
+    private func holdPaired(position: Bool) {
+        if !position { lastSizeAt = now(); return }
+        guard let h = pairedPositionHolds, let at = lastSizeAt, now() - at < 1e-9 else { return }
+        pairedPositions += 1
+        if pairedPositions % h.every == 0 { wait(h.by) }
+    }
+
+    private func holdCaller() {
+        guard holdFor > 0, setCalls == holdAt else { return }
+        let d = holdFor
+        holdFor = 0
+        wait(d)
+    }
+
     func setPosition(_ p: CGPoint) {
+        defer { holdCaller(); holdPaired(position: true) }
         setCalls += 1
         sent.append((now(), nil, p))
         if hung() || fullScreen { return }
@@ -387,6 +435,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func setSize(_ s: CGSize) {
+        defer { holdCaller(); holdPaired(position: false) }
         setCalls += 1
         sent.append((now(), s, nil))
         if hung() || fullScreen { return }
@@ -424,7 +473,8 @@ final class FakeBrowser: WindowHandle {
     func isFullScreen() -> Bool? { fullScreen }
 
     func enterFullScreen(_ display: CGRect) {
-        beforeFullScreen = frame
+        beforeFullScreen = real
+        lag = nil
         anim = nil
         base = display
         fullScreen = true
@@ -442,7 +492,7 @@ final class FakeBrowser: WindowHandle {
     /// minimum, then a tiling app's one put-back. True when the frame changed.
     @discardableResult
     func answer() -> Bool {
-        let was = frame
+        let was = real
         if let p = pendingSize { pendingSize = nil; take(p.size) }
         beforeStall = nil
         let todo = queued
@@ -451,15 +501,15 @@ final class FakeBrowser: WindowHandle {
             if let s = q.size { if behaviour.timing == .atOnce { take(s) } else { apply(s) } }
             if let p = q.position { move(to: p) }
         }
-        if behaviour.widensBack, frame.width < behaviour.minWidth - 0.5 {
-            set(CGRect(x: frame.minX, y: frame.minY, width: behaviour.minWidth, height: frame.height))
+        if behaviour.widensBack, real.width < behaviour.minWidth - 0.5 {
+            set(CGRect(x: real.minX, y: real.minY, width: behaviour.minWidth, height: real.height))
         }
-        if let home = tilerHome, frame != home, history.contains(where: { !$0.byPerson }) {
+        if let home = tilerHome, real != home, history.contains(where: { !$0.byPerson }) {
             tilerHome = nil
             set(home)
             tilerPut = home
         }
-        return frame != was
+        return real != was
     }
 
     /// Where a tiling app put the window back, since the rig last asked
@@ -475,19 +525,20 @@ final class FakeBrowser: WindowHandle {
         reportReads = 0
         tilerHome = nil
         anim = nil
+        lag = nil
         base = f
         history.append((f, true))
     }
 
     private func move(to p: CGPoint) {
-        let f = frame
+        let f = real
         set(CGRect(x: p.x, y: height - p.y - f.height, width: f.width, height: f.height))
     }
 
     /// The top left stays; the size is limited to what fits on the display
     /// the window is on now, and to the browser's minimum.
     private func apply(_ s: CGSize) {
-        let frame = self.frame
+        let frame = real
         // The displays side by side at its height count as one screen.
         let span = screenSpan(at: frame)
         let d = CGRect(x: span?.lowerBound ?? frame.minX, y: (Displays.all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area } ?? Displays.all[0]).frame.minY,
@@ -504,7 +555,12 @@ final class FakeBrowser: WindowHandle {
     /// Where it goes: at once, or (macOS 27) animated from where it is now,
     /// cutting short the animation in flight there.
     private func set(_ f: CGRect) {
-        let at = frame
+        let at = real
+        if lagArmed > 0, setCalls >= lagAt, f != at {
+            // The window server shows this change, and what follows it meanwhile, only after a while.
+            lag = (frame, now() + lagArmed)
+            lagArmed = 0
+        }
         if anim != nil { base = at; anim = nil; history.append((at, false)) }
         guard f != at else { return }
         if animating > 0 {
@@ -1413,7 +1469,8 @@ struct RuleCheck {
         guard let first = s.first else { return }
         let left = rig.side == .left
         let far = { (r: CGRect) in left ? r.maxX : r.minX }
-        let want = far(first.browser)
+        // Where it was before the press (the first sample already has what went out with the press): the pair's far edge.
+        let want = far(pair)
         // A window's first glide probes its sets with the size alone (`WindowGlide.probeStep`), for a tick or two.
         let probe = s.filter { abs(far($0.browser) - want) > Self.farEdgeTolerance }
         let probed = !probe.isEmpty && probe.allSatisfy { abs(far($0.browser) - want) <= WindowGlide.probeStep + 1 }
@@ -1422,6 +1479,11 @@ struct RuleCheck {
             problems.append(String(format: "%@: the browser's far edge at %.0f, %.0f pt from where it was, %.0f ms in (browser %@)", step,
                                    Double(far(x.browser)), Double(far(x.browser) - want), (x.t - first.t) * 1000, "\(x.browser)"))
             return
+        }
+        // No added latency (Nick): the first set goes out with the press, as the steps' first call always did,
+        // not a tick or more later once the slide has moved a point.
+        if let p = rig.pressedAt.first, p.calls < rig.fake.sent.count, rig.fake.sent[p.calls].t > p.t + 1e-9 {
+            problems.append(String(format: "%@: the first set went out %.1f ms after the press", step, (rig.fake.sent[p.calls].t - p.t) * 1000))
         }
         let moving = Set(s.map { Int(($0.browser.width * 2).rounded()) }).count
         if moving < Self.smoothFrames { problems.append("\(step): the browser moved in \(moving) frames, fewer than \(Self.smoothFrames)") }
@@ -1890,6 +1952,7 @@ struct GuardCase: CustomStringConvertible {
         if Self.verbose {
             print("SidebarGuard case: \(self)\n  \(check.problems.joined(separator: "\n  "))")
             for h in rig.fake.history { print("  \(h.byPerson ? "person" : "app/browser") \(h.frame)") }
+            for c in rig.fake.sent { print(String(format: "  sent at %.1f ms: ", c.t * 1000) + "\(c.size.map { "size \($0)" } ?? "")\(c.position.map { "position \($0)" } ?? "")") }
         }
         return check.problems
     }
@@ -2843,6 +2906,67 @@ struct GuardCase: CustomStringConvertible {
     /// the motion and back after, the browser's far edge never moves, the
     /// browser moves with the slide frame by frame, the sidebar shows just
     /// as far as the browser has made room, and the pair is the frame it was.
+    /// One late set never ends the glide for good (MINI-16 on macOS 27,
+    /// 1df43a3: one set of show 3 showed 70 ms late, the glide gave way, and
+    /// every show and hide after was the old two steps, the far edge moving
+    /// 280 pt). Late on screen, or a call that held betterlink up: within a
+    /// glide one such frame is waited for and the glide goes on; a probe
+    /// that shows late falls back for that motion only, and the next glides.
+    @Test func oneLateSetNeverEndsTheGlide() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        enum Late: CaseIterable { case onScreen, holdsCaller }
+        for side in SidebarSide.allCases {
+            for b in [BrowserBehaviour(enhancedUI: true), BrowserBehaviour()] {
+                for late in Late.allCases {
+                    // Which motion has the late set, and which of its calls: the first motion's first is its probe.
+                    for (motion, call) in [(0, 1), (2, 1), (2, 3), (3, 4)] {
+                        let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b)
+                        var check = RuleCheck(rig, displays: [screen])
+                        for k in 0..<6 {
+                            if k == motion {
+                                switch late {
+                                case .onScreen: rig.fake.showsLate(call: call, by: 0.07)
+                                case .holdsCaller: rig.fake.holdsCaller(call: call, by: 0.07)
+                                }
+                            }
+                            rig.toggle()
+                            // A probe shown late falls back for its motion; every other motion glides.
+                            if k == motion, motion == 0 { continue }
+                            check.oneSmoothMotion(pair: full, "\(side) \(b), \(late) late set \(call) of motion \(motion + 1): motion \(k + 1)")
+                        }
+                        #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+                    }
+                }
+            }
+        }
+    }
+
+    /// 40 shows and hides of a left sidebar, on a browser whose sets land at
+    /// once (its flag off, or on and set off), every one a glide: a left
+    /// glide sends a size and a position each frame, and the position now
+    /// and then waits for the browser, busy with the size (MINI-16 on macOS
+    /// 27, 1df43a3: four left glides, then `slow` and the two steps for
+    /// good; right glides, one call a frame, 40 of 40). A frame shows when
+    /// its calls have returned: it isn't late.
+    @Test func fortyLeftGlidesWithPairedSets() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
+                             visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1290)
+        for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+            let rig = SidebarRig(displays: [screen], frame: full, side: .left, width: 280, behaviour: b)
+            rig.fake.pairedPositionHolds = (every: 12, by: 0.055)
+            var check = RuleCheck(rig, displays: [screen])
+            for k in 0..<40 {
+                rig.toggle()
+                check.oneSmoothMotion(pair: full, "\(b): \(k % 2 == 0 ? "show" : "hide") \(k / 2 + 1)")
+            }
+            check.flagRestored("\(b)")
+            #expect(check.problems.isEmpty, "\(check.problems.prefix(6).joined(separator: "\n"))")
+        }
+    }
+
     @Test func nicksShowAndHideOnAnEnhancedUIBrowser() {
         let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1329),
                              visibleFrame: CGRect(x: 0, y: 4, width: 2056, height: 1329 - 39 - 4), scale: 2)
