@@ -66,6 +66,13 @@ else
   echo "rig2.patch applied (Chrome for Testing profile folder $REL)"
 fi
 
+# The patched folder must really lead to the rig profile from ~/Library/Application Support, or the sidebar cannot read Chrome for Testing's profile.
+mkdir -p "$RUN/udd"
+got=$(cd "$HOME/Library/Application Support/$REL" 2>/dev/null && pwd -P); want=$(cd "$RUN/udd" && pwd -P)
+rm -rf "$RUN"
+[ -n "$got" ] && [ "$got" = "$want" ] || die "dataFolder '$REL' does not resolve to $want from $HOME/Library/Application Support (it resolved to '${got:-nothing}'). Does ~/Library/Application Support exist?"
+echo "dataFolder check: ~/Library/Application Support/$REL -> $got"
+
 echo "make build in $RIGDIR (log: $W/build.log) ..."
 ( cd "$RIGDIR" && make build ) > "$W/build.log" 2>&1; rc=$?
 if [ $rc != 0 ]; then tail -25 "$W/build.log"; die "make build failed (rc $rc); full log $W/build.log"; fi
