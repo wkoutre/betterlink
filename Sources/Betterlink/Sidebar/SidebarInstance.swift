@@ -867,9 +867,10 @@ final class SidebarInstance: ObservableObject {
             open(from: closedUnderWay ?? onScreenFrame, slide: false)
             return layout()
         }
-        // Resized by the person so that the sidebar would be further off the screen than it was (Window › Fill, a
-        // tiling app, a zoom): the browser's new frame is the pair's, and the sidebar slides back on in it
-        // (`SidebarGeometry.refitsAfterResize`). Any other resize of theirs stands.
+        // Placed anew (both horizontal edges moved, or the whole visible frame: Window › Fill, a tiling app, a zoom)
+        // so that the sidebar would be further off the screen than it was: the browser's new frame is the pair's,
+        // and the sidebar slides back on in it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a
+        // corner, and any other resize of theirs, stands.
         if let was = restFrame, SidebarGeometry.refitsAfterResize(from: was, to: t.frame, width: CGFloat(width), side: placedSide,
                                                                   visible: Displays.all.map(\.visibleFrame)) {
             DragTrace.log("refit: window \(window.number) resized from \(was) to \(t.frame), its sidebar pushed off the screen: opens again in it")

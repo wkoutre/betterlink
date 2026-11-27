@@ -913,7 +913,7 @@ final class SidebarRig {
                 case .press:
                     press()
                 case .person(let l, let r, let dy):
-                    // After the motion is over: a resize of the open pair at rest, weighed as any (`refitsAfterResize`).
+                    // After the motion is over: a resize of the open pair at rest, weighed as any (`placedPushingTheSidebarOff`).
                     personAtRest = !instance.sliding && open
                     personFrom = fake.frame
                     personWidth = sidebarWidth
@@ -1118,6 +1118,24 @@ final class SidebarRig {
     }
 }
 
+/// Whether the guard expects a resize of the open pair at rest to fit the
+/// pair again, from the rule itself and not from the app's
+/// `SidebarGeometry.refitsAfterResize`: only a placement (both of the
+/// browser's horizontal edges moved, or the browser on a display's whole
+/// visible frame: Fill, a zoom, tiling) that would leave the sidebar beside it
+/// further off the displays' visible frames than it was. A drag of one edge or
+/// of a corner, and a move, stand (rule 3), wherever they leave the sidebar.
+@MainActor
+func placedPushingTheSidebarOff(from was: CGRect, to now: CGRect, width: CGFloat, side: SidebarSide, _ displays: [Display]) -> Bool {
+    let resized = abs(now.width - was.width) >= 2 || abs(now.height - was.height) >= 2
+    let leftMoved = abs(now.minX - was.minX) >= 2, rightMoved = abs(now.maxX - was.maxX) >= 2
+    let onAWholeVisibleFrame = displays.contains { GuardFrames.same($0.visibleFrame, now) }
+    guard resized, (leftMoved && rightMoved) || onAWholeVisibleFrame else { return false }
+    let visible = displays.map { Display(frame: $0.visibleFrame, visibleFrame: $0.visibleFrame, scale: $0.scale) }
+    func sidebar(beside b: CGRect) -> CGRect { CGRect(x: side == .left ? b.minX - width : b.maxX, y: b.minY, width: width, height: b.height) }
+    return offScreen(sidebar(beside: now), visible) > offScreen(sidebar(beside: was), visible) + 1
+}
+
 /// How far a frame runs past the displays beside it, in points (its
 /// horizontal span not over any display at its height).
 @MainActor
@@ -1232,14 +1250,18 @@ struct RuleCheck {
         noFurtherOff(than: offFrom ?? start, step)
     }
 
-    /// After the person resized the browser while its sidebar was open: the
+    /// After the person placed the browser somewhere new while its sidebar was
+    /// open (both horizontal edges moved, or the whole visible frame): the
     /// sidebar is never left further off the displays than it was (bug 3:
     /// Fill put the browser on the whole visible frame, and the sidebar was
     /// left off the screen). `before`: the browser's frame before, and the
     /// sidebar's width then.
     mutating func sidebarStaysOnScreen(before: CGRect, width: CGFloat, put: CGRect, _ step: String) {
-        // A move (the size within 2 pt) is the person's and stands (rule 3), wherever it puts the sidebar.
-        guard rig.open, abs(put.width - before.width) >= 2 || abs(put.height - before.height) >= 2 else { return }
+        // A move (the size within 2 pt), or a drag of one horizontal edge or a corner, is the person's and stands
+        // (rule 3), wherever it leaves the sidebar.
+        let placed = (abs(put.minX - before.minX) >= 2 && abs(put.maxX - before.maxX) >= 2)
+            || displays.contains { GuardFrames.same($0.visibleFrame, put) }
+        guard rig.open, abs(put.width - before.width) >= 2 || abs(put.height - before.height) >= 2, placed else { return }
         let was = SidebarGeometry.strip(beside: before, width: width, side: rig.side)
         let now = SidebarGeometry.strip(beside: rig.fake.frame, width: rig.sidebarWidth, side: rig.side)
         let ds = displays.map(\.frame)
@@ -1798,7 +1820,7 @@ struct GuardCase: CustomStringConvertible {
                 check.oneSmoothMotion(pair: start, show)
             }
             if let put = rig.personPut, rig.personAtRest,
-               SidebarGeometry.refitsAfterResize(from: rig.personFrom, to: put, width: rig.personWidth, side: side, visible: displays.map(\.visibleFrame)) {
+               placedPushingTheSidebarOff(from: rig.personFrom, to: put, width: rig.personWidth, side: side, displays) {
                 check.shown(from: put, mustOpen: canOpen(from: put), offFrom: put, "\(show), resized by the person once it was open")
             } else if let put = rig.personPut {
                 check.personDid(put, "\(show), moved or resized by the person while it was carried out")
@@ -1867,9 +1889,10 @@ struct GuardCase: CustomStringConvertible {
                         f.size.width = max(200, behaviour.minWidth, f.width - l + r)
                         let w = rig.sidebarWidth
                         rig.personSets(f)
-                        // Over where the sidebar was, or pushing it off the screen: the pair fits again in the
-                        // person's frame (rules 2 and 3); else their frame stands.
-                        if SidebarGeometry.refitsAfterResize(from: before, to: f, width: w, side: side, visible: displays.map(\.visibleFrame)) {
+                        // Placed anew (both horizontal edges moved) pushing the sidebar off the screen: the pair
+                        // fits again in the person's frame (rules 2 and 3); a drag of one edge, or any other
+                        // resize, stands as they left it (rule 3).
+                        if placedPushingTheSidebarOff(from: before, to: f, width: w, side: side, displays) {
                             check.shown(from: f, mustOpen: canOpen(from: f), offFrom: f, step)
                         } else {
                             check.personDid(f, step)
@@ -3084,6 +3107,73 @@ struct GuardCase: CustomStringConvertible {
             check.personDid(f, "\(side): the edge dragged 100 over the sidebar")
             #expect(rig.open, "\(side): closed after the resize")
             #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+        }
+    }
+
+    /// The review of 9354d68: with the pair against the screen's edge, a drag
+    /// of the browser's edge on the sidebar's side takes the sidebar partly
+    /// off the screen, and the pair was fitted again, 180 pt narrower than
+    /// the person left the browser. A drag of one horizontal edge, or of a
+    /// corner, is the person's and stands, wherever it leaves the sidebar
+    /// (rule 3). Only a placement (both horizontal edges moved, or the whole
+    /// visible frame) fits the pair again.
+    private func personDrags(side: SidebarSide, _ what: String, from want: CGRect, to put: (CGRect) -> CGRect) {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let rig = SidebarRig(displays: [screen], frame: screen.visibleFrame, side: side, width: 280, behaviour: BrowserBehaviour())
+        rig.toggle()
+        let b = rig.fake.frame
+        #expect(rig.open && GuardFrames.same(b, want), "\(side): opened \(rig.open) at \(b), wanted \(want)")
+        let f = put(b)
+        rig.personSets(f)
+        var check = RuleCheck(rig, displays: [screen])
+        check.personDid(f, "\(side): \(what)")
+        #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(side): \(what): open \(rig.open), sidebar \(rig.sidebarWidth)")
+        #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+    }
+
+    @Test func aRightEdgeDraggedPastTheScreenStands() {
+        personDrags(side: .right, "the right edge dragged 100 to the right", from: CGRect(x: 0, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: $0.minX, y: $0.minY, width: $0.width + 100, height: $0.height)
+        }
+    }
+
+    @Test func aLeftEdgeDraggedPastTheScreenStands() {
+        personDrags(side: .left, "the left edge dragged 100 to the left", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: $0.minX - 100, y: $0.minY, width: $0.width + 100, height: $0.height)
+        }
+    }
+
+    @Test func aCornerDragStands() {
+        personDrags(side: .right, "the bottom right corner dragged 100 right and 200 up", from: CGRect(x: 0, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: $0.minX, y: $0.minY + 200, width: $0.width + 100, height: $0.height - 200)
+        }
+        personDrags(side: .left, "the top left corner dragged 100 left and 200 down", from: CGRect(x: 280, y: 0, width: 1776, height: 1259)) {
+            CGRect(x: $0.minX - 100, y: $0.minY, width: $0.width + 100, height: $0.height - 200)
+        }
+    }
+
+    /// macOS tiling (Window › Move & Resize, or dragging to the screen's edge)
+    /// to the left half or the top left quarter with the sidebar on the left:
+    /// both horizontal edges move and the sidebar would be off the screen, so
+    /// the pair fits again in the tile.
+    @Test func tilingToTheLeftHalfFitsThePairAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        for tile in [CGRect(x: 0, y: 0, width: 1028, height: 1259), CGRect(x: 0, y: 630, width: 1028, height: 629)] {
+            for start in [screen.visibleFrame, CGRect(x: 400, y: 0, width: 1256, height: 1259)] {
+                let rig = SidebarRig(displays: [screen], frame: start, side: .left, width: 280, behaviour: BrowserBehaviour())
+                rig.toggle()
+                #expect(rig.open, "from \(start): didn't open")
+                let before = rig.fake.frame
+                rig.personSets(tile)
+                let step = "from \(start), tiled to \(tile)"
+                var check = RuleCheck(rig, displays: [screen])
+                check.shown(from: tile, mustOpen: true, step)
+                check.sidebarStaysOnScreen(before: before, width: 280, put: tile, step)
+                #expect(rig.open && abs(rig.sidebarWidth - 280) < 2, "\(step): open \(rig.open), sidebar \(rig.sidebarWidth)")
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
         }
     }
 

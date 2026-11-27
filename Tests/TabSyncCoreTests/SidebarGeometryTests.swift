@@ -211,4 +211,44 @@ struct SidebarGeometryTests {
         #expect(!SidebarGeometry.refitsAfterResize(from: pairLeft, to: CGRect(x: 0, y: 0, width: 1600, height: 800), width: 280, side: .left,
                                                    visible: two))
     }
+
+    /// A drag of one of the browser's horizontal edges, or of a corner, is
+    /// the person's and stands even when it takes the sidebar beside it off
+    /// the screen (rule 3: nothing puts them back). Only a placement, both
+    /// horizontal edges moved (Fill, a zoom, tiling to a half or a quarter),
+    /// or the window put on a display's whole visible frame, refits the pair.
+    @Test func aDragOfOneEdgeStandsAndAPlacementRefits() {
+        let visible = [CGRect(x: 0, y: 0, width: 2056, height: 1259)]
+        let right = CGRect(x: 0, y: 0, width: 1776, height: 1259) // sidebar 1776...2056
+        let left = CGRect(x: 280, y: 0, width: 1776, height: 1259) // sidebar 0...280
+        // The sidebar-side edge dragged 100 past where the screen ends for the sidebar: stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 0, y: 0, width: 1876, height: 1259), width: 280, side: .right,
+                                                   visible: visible))
+        #expect(!SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 180, y: 0, width: 1876, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // A corner: one horizontal edge and a vertical one: stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 0, y: 200, width: 1876, height: 1059), width: 280, side: .right,
+                                                   visible: visible))
+        #expect(!SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 180, y: 0, width: 1876, height: 1059), width: 280, side: .left,
+                                                   visible: visible))
+        // The far edge alone, whatever the sidebar: stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 280, y: 0, width: 1500, height: 1259), width: 280, side: .left,
+                                                   visible: visible))
+        // Tiled to the left half, or the top left quarter, with the sidebar on the left: both edges moved, refit.
+        #expect(SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 0, y: 0, width: 1028, height: 1259), width: 280, side: .left,
+                                                  visible: visible))
+        #expect(SidebarGeometry.refitsAfterResize(from: left, to: CGRect(x: 0, y: 630, width: 1028, height: 629), width: 280, side: .left,
+                                                  visible: visible))
+        // Tiled to the right half with the sidebar on the right: refit.
+        #expect(SidebarGeometry.refitsAfterResize(from: right, to: CGRect(x: 1028, y: 0, width: 1028, height: 1259), width: 280, side: .right,
+                                                  visible: visible))
+        // Both edges moved but the sidebar still on the screen: stands.
+        #expect(!SidebarGeometry.refitsAfterResize(from: CGRect(x: 600, y: 0, width: 800, height: 1259), to: CGRect(x: 500, y: 0, width: 1100, height: 1259),
+                                                   width: 280, side: .left, visible: visible))
+        // Filled from a pair that filled the screen already: one edge moves, but the window is on the whole visible frame.
+        #expect(SidebarGeometry.refitsAfterResize(from: right, to: visible[0], width: 280, side: .right, visible: visible))
+        #expect(SidebarGeometry.refitsAfterResize(from: left, to: visible[0], width: 280, side: .left, visible: visible))
+        // A move alone stands, wherever it puts the sidebar.
+        #expect(!SidebarGeometry.refitsAfterResize(from: right, to: right.offsetBy(dx: 300, dy: 0), width: 280, side: .right, visible: visible))
+    }
 }
