@@ -133,9 +133,19 @@ struct TourControlView: View {
                 Button(model.configStatus == .absent ? "Create config.ts" : "Open in Editor") { model.editConfig() }
             }
         case .automaticUpdates:
-            row(updater.isAvailable ? "Check for updates once a day."
-                                    : "This build has no update key, so it doesn't check for updates. Release builds do.") {
-                toggle("Check for updates automatically", $updater.automaticallyChecks).disabled(!updater.isAvailable)
+            if updater.isAvailable {
+                VStack(alignment: .leading, spacing: DS.Space.space2) {
+                    row("Check for updates once an hour.") {
+                        toggle("Check for updates automatically", $updater.automaticallyChecks)
+                    }
+                    row("Install them in the background, restarting betterlink while you're away from the Mac.") {
+                        toggle("Install updates automatically", $updater.installsAutomatically).disabled(!updater.automaticallyChecks)
+                    }
+                }
+            } else {
+                row("This build has no update key, so it doesn't check for updates. Release builds do.") {
+                    toggle("Check for updates automatically", $updater.automaticallyChecks).disabled(true)
+                }
             }
         }
     }

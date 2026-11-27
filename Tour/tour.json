@@ -411,7 +411,7 @@
     {
       "id": "updates",
       "title": "Updates",
-      "summary": "betterlink checks once a day, and asks before installing.",
+      "summary": "betterlink checks every hour and installs updates by itself.",
       "symbol": "arrow.down.circle.fill",
       "tile": "tileNeutral",
       "tier": "more",
@@ -419,14 +419,15 @@
       "steps": [
         {
           "id": "updates",
-          "revision": 1,
+          "revision": 2,
           "title": "betterlink keeps itself up to date",
-          "body": "Once a day it asks GitHub whether a newer version is out, and sends nothing about you or your links. It asks before installing. After an update, What's New shows only the steps that are new since you last looked.",
+          "body": "Every hour it asks GitHub whether a newer version is out, and sends nothing about you or your links. A new version downloads in the background and installs the next time you leave the Mac alone for two minutes, which restarts betterlink. Turn off installing to be asked first.",
+          "changed": "Updates now arrive by themselves: betterlink checks every hour instead of once a day, and installs while you are away from the Mac instead of asking.",
           "control": "automaticUpdates",
-          "cli": "betterlink updates set --automatic on",
+          "cli": "betterlink updates set --automatic on --install on",
           "covers": {
             "commands": ["updates"],
-            "settings": ["Pages.updater.automaticallyChecks"]
+            "settings": ["Pages.updater.automaticallyChecks", "Pages.updater.installsAutomatically"]
           }
         },
         {

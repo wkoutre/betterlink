@@ -33,7 +33,7 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.3.28</string>
+	<string>0.3.30</string>
 	<key>CFBundleURLTypes</key>
 	<array>
 		<dict>
@@ -49,13 +49,19 @@
 		</dict>
 	</array>
 	<key>CFBundleVersion</key>
-	<string>0.3.28</string>
+	<string>0.3.30</string>
 	<key>SUFeedURL</key>
 	<string>https://github.com/wkoutre/betterlink/releases/latest/download/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>BEZ1No4VLDV2s/9l+WAD2/ySua6vCPjasEXPsMCnj20=</string>
 	<key>SUEnableAutomaticChecks</key>
 	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+	<key>SUAllowsAutomaticUpdates</key>
+	<true/>
+	<key>SUScheduledCheckInterval</key>
+	<integer>3600</integer>
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>

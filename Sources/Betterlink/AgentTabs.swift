@@ -175,7 +175,7 @@ extension AgentCommand {
                 [
                     "id": w.window.id, "focused": w.window.focused, "incognito": w.window.incognito ?? false,
                     "tabs": w.tabs.enumerated().map { i, t in
-                        ["id": t.id, "position": i + 1, "title": t.title, "url": t.url, "active": t.active, "muted": t.muted] as [String: Any]
+                        ["id": t.id, "position": i + 1, "title": t.title, "url": t.url, "active": t.active, "audible": t.audible, "muted": t.muted] as [String: Any]
                     },
                 ] as [String: Any]
             },
