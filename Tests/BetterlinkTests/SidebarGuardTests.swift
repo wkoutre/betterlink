@@ -252,7 +252,14 @@ final class FakeBrowser: WindowHandle {
     var behaviour: BrowserBehaviour
     var onScreen = true
     /// Every frame it has had, in order, and whether the person put it there.
-    private(set) var history: [(frame: CGRect, byPerson: Bool)]
+    private(set) var history: [(frame: CGRect, byPerson: Bool)] {
+        didSet { while historyTimes.count < history.count { historyTimes.append(now()) } }
+    }
+    /// When each frame of `history` was set, on the rig's clock; and those
+    /// that were on screen when they were recorded (an animation cut short
+    /// where it had got to), whatever was set at the same moment after them.
+    private(set) var historyTimes: [Double] = []
+    private(set) var historyShown: Set<Int> = []
     private var queued: [(size: CGSize?, position: CGPoint?)] = []
     private var queuedAt = 0.0
 
@@ -580,7 +587,7 @@ final class FakeBrowser: WindowHandle {
             lag = (frame, now() + lagArmed)
             lagArmed = 0
         }
-        if anim != nil { base = at; anim = nil; history.append((at, false)) }
+        if anim != nil { base = at; anim = nil; history.append((at, false)); historyShown.insert(history.count - 1) }
         guard f != at else { return }
         if animating > 0 {
             animations += 1
@@ -1224,7 +1231,14 @@ struct RuleCheck {
     private mutating func noFurtherOff(than before: CGRect, _ step: String) {
         let allowed = offScreen(before, displays) + 2
         let b = rig.fake.behaviour
-        let frames = rig.fake.history[mark...].filter { !$0.byPerson }.map(\.frame)
+        // Of the frames set at one moment (a glide's calls of one tick, sent back to back), the window server shows
+        // the last: one set after another of the same instant, before any tick, is no moment on screen. A left
+        // show's size and position go back to back, and the width read after them puts the far edge back in the
+        // same tick when the size wasn't taken as asked (`WindowGlide.pairs`): the window is never seen pushed.
+        let h = rig.fake.history, ts = rig.fake.historyTimes
+        let frames = (mark..<h.count).filter { i in
+            !h[i].byPerson && (i + 1 == h.count || i + 1 >= ts.count || ts[i + 1] > ts[i] + 1e-9 || rig.fake.historyShown.contains(i))
+        }.map { h[$0].frame }
         // Replays (a busy or stalled browser doing late what it was asked, in a burst; a late one
         // doing a size after betterlink stopped waiting for it, after calls sent since) and a browser
         // widening itself are checked at rest.

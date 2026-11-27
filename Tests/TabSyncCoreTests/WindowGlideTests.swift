@@ -15,6 +15,8 @@ import Testing
         var frames: [CGRect] = []
         var callsPerTick: [Int] = []
         var calls: [WindowSteps.Call] = []
+        /// Whether the window was read back after each call.
+        var reads: [Bool] = []
         var glide: WindowGlide
         var window: CGRect
     }
@@ -41,9 +43,11 @@ import Testing
                 n += 1
                 r.calls.append(call)
                 if lateBy > 0 || animation > 0 { queue.append((t + max(lateBy, animation), call)) } else { apply(call, to: &r.window) }
+                // Read back only where the glide asks (`readsBack`), as the app does.
                 var w: CGFloat?
-                if case .size = call, lateBy == 0, animation == 0 { w = r.window.width }
-                if case .size = call, animation > 0 { w = r.window.width } // read back before the animation shows it
+                let reads = r.glide.readsBack
+                r.reads.append(reads)
+                if reads, lateBy == 0 { w = r.window.width } // animated: read back before the animation shows it
                 c = r.glide.next(width: w)
             }
             r.callsPerTick.append(n)
@@ -62,6 +66,27 @@ import Testing
         #expect(r.callsPerTick.allSatisfy { $0 <= 2 })
         #expect(Set(r.frames.map(\.width)).count >= 20)
         guard case .size = r.calls[0], case .position = r.calls[1] else { Issue.record("\(r.calls.prefix(2))"); return }
+        // After the first frame (read between, as every glide's first: a browser at its minimum, late or dropping
+        // sizes shows it there), nothing read between a size and the position sent with it: a read there let the
+        // window server show the size alone for a refresh (live on macOS 26 and 27, after PR 105). The width is
+        // read after the two.
+        #expect(r.reads[0])
+        for (i, c) in r.calls.enumerated() where i > 0 {
+            if case .size = c, i + 1 < r.calls.count, case .position = r.calls[i + 1] { #expect(!r.reads[i], "read between the pair at call \(i)") }
+        }
+        #expect(r.reads.contains(true))
+    }
+
+    /// A browser that stops at its minimum partway through a left show, its
+    /// size and position sent back to back: the width read after them puts
+    /// the far edge back in the same tick, at the width taken, and the rest
+    /// of the glide reads between (`aMinimumKeepsTheFarEdgeAndHandsOver`
+    /// from a window already at its minimum).
+    @Test func aMinimumReachedMidShowKeepsTheFarEdgeEveryTick() {
+        let r = run(WindowGlide(closed: closed, open: leftOpen, side: .left, right: 2056, proven: true), from: closed, showing: true, least: 1900)
+        #expect(r.window.width == 1900 && r.window.maxX == 2056, "\(r.window)")
+        #expect(r.frames.allSatisfy { abs($0.maxX - 2056) < 0.5 }, "\(r.frames.map(\.maxX))")
+        guard case .holds = r.glide.handover(seen: r.window) else { Issue.record("\(r.glide.handover(seen: r.window))"); return }
     }
 
     @Test func aShowOnTheRightSendsSizesAlone() {

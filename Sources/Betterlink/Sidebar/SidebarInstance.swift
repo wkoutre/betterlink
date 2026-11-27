@@ -452,11 +452,15 @@ final class SidebarInstance: ObservableObject {
                 holdFlag()
                 AXWindow.send(c, to: window.handle)
                 var w: CGFloat?, unanswered = false
-                // Read back at once. A read that got no answer in time (the browser busy) is no width: the window
-                // server says what the size did.
-                if case .size = c {
+                // Read back at once, where the glide asks (`readsBack`): never between a size and the position sent
+                // with it, which let the window server show the size alone for a refresh. A read that got no answer
+                // in time (the browser busy) is no width: the window server says what the size did. A pair's size
+                // the browser didn't answer: its position isn't sent.
+                if g.readsBack {
                     let read = window.handle.size()
                     if let read, !window.handle.missed { w = read.width } else { unanswered = true }
+                } else if case .size = c, window.handle.missed {
+                    unanswered = true
                 }
                 call = g.next(width: w, unanswered: unanswered)
             }

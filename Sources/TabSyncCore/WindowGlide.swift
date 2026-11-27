@@ -17,7 +17,18 @@ import CoreGraphics
 ///   whole points, its far edge where `closed` and `open` have it.
 /// - Narrowing: the size, the width it took read back at once (a browser at
 ///   its minimum takes less), then the position that puts its far edge back
-///   at that width. Widening: the same, size first, where the window can
+///   at that width. On the left, once a frame of this glide (or its probe)
+///   landed at once as asked, and no size has been taken otherwise or gone
+///   unanswered (`pairs`), the size and the position for the width asked go
+///   back to back, nothing read between, and the width is read after both:
+///   a read between them let the window server show the new width a refresh
+///   before the new position, the far edge in by up to 120 pt for a frame
+///   (live on macOS 26 and 27, after PR 105). A width read after them that
+///   isn't the one asked puts the far edge back at once, in the same tick:
+///   at the width taken (its minimum), or, a size that changed nothing (at
+///   its minimum already, or dropped), the window back where it was and the
+///   frame asked again with the read between; and the rest of the glide
+///   reads between. Widening: the same, size first, where the window can
 ///   grow from where it is without passing its screens' right edge (`right`);
 ///   else the position first (a window can't grow past its screen's edge),
 ///   then the size, then the position once more if it took less. Calls that
@@ -72,7 +83,7 @@ public struct WindowGlide: Sendable {
     /// The least a probe asks of the window's width.
     public static let probeStep: CGFloat = 4
 
-    private enum Next { case size, place, positionFirst, fix }
+    private enum Next { case size, place, placeAsked, check, positionFirst, fix }
     private var plan: [Next] = []
     /// The frame these calls are for, where the window was when they began,
     /// and what they give as far as is known (the width read back).
@@ -111,6 +122,17 @@ public struct WindowGlide: Sendable {
     public private(set) var late = 0
     /// No call sent yet: the first goes out with the press (`step`).
     private var sentAny = false
+    /// A frame of this glide (or its probe) landed at once as asked, its
+    /// width read back as asked, and no size of it has been taken otherwise
+    /// or gone unanswered: a left narrowing frame goes out as a size and its
+    /// position back to back (`begin`). The first frame of every glide reads between
+    /// (a browser at its minimum, late, busy or dropping sizes shows it
+    /// there, where a position already sent would push the window past its
+    /// far edge); once a size isn't taken as asked, or isn't answered, the
+    /// rest of the glide reads between too (`noPairs`).
+    private var pairs = false
+    private var noPairs = false
+    private mutating func stopPairs() { pairs = false; noPairs = true }
 
     /// `proven`: this window's sets were seen to land at once before. Until
     /// they are, the first frame is a probe: its size alone, and only once
@@ -126,6 +148,15 @@ public struct WindowGlide: Sendable {
         self.side = side
         self.right = right
         self.proven = proven
+    }
+
+    /// Whether the caller reads the window's width back now, after the call
+    /// it just sent: after a size, unless its position goes with it at once
+    /// (a pair: nothing is read between the two); and after a pair's position.
+    public var readsBack: Bool {
+        guard let c = lastCall?.call else { return false }
+        if case .size = c { return plan.first != .placeAsked }
+        return plan.first == .check
     }
 
     /// The window's sets were seen to land at once (by now, or before).
@@ -208,6 +239,8 @@ public struct WindowGlide: Sendable {
                 return nil
             }
             if !probing, Self.landed(seen, e) {
+                // Landed as asked, at once, the width read back as asked: the next left narrowing frame may pair.
+                if !noPairs, !pendingSeen, let w = took, let a = asked, Self.near(w, a.width, 0.5), Self.near(seen.width, a.width, 0.5) { pairs = true }
                 expect = nil; asked = nil; took = nil; unread = false
                 before = seen
                 foreign = false
@@ -226,6 +259,8 @@ public struct WindowGlide: Sendable {
                     if pendingSeen, now - sentAt > Self.instant { slow = true; landedLast = true; done = true; return nil }
                     probing = false
                     proven = true
+                    // Its size taken as asked, at once: the next left narrowing frame may pair.
+                    if !noPairs { pairs = true }
                     expect = nil; asked = nil; took = nil
                     before = seen
                     landedLast = true
@@ -325,6 +360,8 @@ public struct WindowGlide: Sendable {
         }
         if Self.near(f.width, b.width) && Self.near(f.height, b.height) {
             plan = [.place]
+        } else if side == .left, f.width < b.width, pairs {
+            plan = [.size, .placeAsked, .check]
         } else if f.width < b.width || right.map({ b.minX + f.width <= $0 + 0.5 }) ?? false {
             plan = [.size, .place]
         } else {
@@ -343,7 +380,16 @@ public struct WindowGlide: Sendable {
     /// frame waited for whole: given way with its position and size both on
     /// their way, a burst of the two would pass for someone else's change.
     public mutating func next(width: CGFloat?, unanswered: Bool = false) -> Call? {
+        if unanswered, plan.first == .check {
+            // A pair out, and the read after it got no answer (the browser busy now): both are on their way. The
+            // size is taken as asked and the frame waited for whole, as widening (`step`).
+            plan = []
+            stopPairs()
+            expect = asked
+            return nil
+        }
         if unanswered, !widening, asked != nil {
+            stopPairs()
             plan = []
             slow = true
             probeOut = true
@@ -364,6 +410,29 @@ public struct WindowGlide: Sendable {
             case .size:
                 if Self.near(f.width, b.width) && Self.near(f.height, b.height) { continue }
                 return .size(f)
+            case .placeAsked:
+                // A pair's position: at the width asked, the size just sent and nothing read since.
+                expect = f
+                if Self.near(f.minX, b.minX, 0.5) && Self.near(f.maxY, b.maxY, 0.5) { continue }
+                return .position(f)
+            case .check:
+                // The width read after the pair. Taken as asked: the frame is out whole.
+                guard let w = took, !Self.near(w, f.width, 0.5) else { continue }
+                stopPairs()
+                if Self.near(w, b.width, 0.5) {
+                    // A size that changed nothing (its minimum already, dropped, or dropped by the position that
+                    // followed it): the window back where it was, and the frame asked again, its width read between.
+                    let back = CGRect(x: b.minX, y: f.maxY - b.height, width: b.width, height: b.height)
+                    plan = [.size, .place]
+                    took = nil
+                    expect = back
+                    if Self.near(back.minX, f.minX, 0.5) { continue }
+                    return .position(back)
+                }
+                // Took part of it (its minimum): the far edge back where the frame has it, at the width taken.
+                let at = CGRect(x: f.maxX - w, y: f.maxY - f.height, width: w, height: f.height)
+                expect = at
+                return .position(at)
             case .positionFirst:
                 // Where it grows from, at the width it has.
                 let at = CGRect(x: f.minX, y: f.maxY - b.height, width: b.width, height: b.height)
@@ -376,9 +445,11 @@ public struct WindowGlide: Sendable {
                     expect = CGRect(x: n == .fix ? f.minX : b.minX, y: f.maxY - f.height, width: f.width, height: f.height)
                     plan = []
                     unread = true
+                    stopPairs()
                     return nil
                 }
                 let w = took ?? f.width
+                if !Self.near(w, f.width, 0.5) { stopPairs() }
                 let x = side == .left ? f.maxX - w : f.minX
                 let at = CGRect(x: x, y: f.maxY - f.height, width: w, height: f.height)
                 expect = at
