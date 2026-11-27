@@ -260,15 +260,20 @@ enum AgentCommand {
             "folder": SyncDefaults.folder(in: d)?.path ?? NSNull(),
             "global": selection.global,
             // The other Macs in the folder, with when each last synced.
-            "macs": SyncDefaults.folder(in: d).map { root in
-                let me = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"] ?? d.string(forKey: "sync.device")
-                return SyncFolder(root).peers(except: me).map { $0.describe(now: Date()) }
-            } ?? [],
+            "macs": otherMacs(d),
             "profiles": selection.profiles.sorted { $0.key.uuidString < $1.key.uuidString }.map { entry -> [String: Any] in
                 ["id": entry.key.uuidString, "name": names[entry.key] ?? NSNull(),
                  "favorites": entry.value.favorites, "folders": entry.value.folders, "appearance": entry.value.appearance]
             },
         ]
+    }
+
+    /// The other Macs in the sync folder, with when each last synced; none when Sync is off.
+    private static func otherMacs(_ d: UserDefaults) -> [[String: Any]] {
+        guard let root = SyncDefaults.folder(in: d) else { return [] }
+        let me: String? = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"] ?? d.string(forKey: "sync.device")
+        let now = Date()
+        return SyncFolder(root).peers(except: me).map { $0.describe(now: now) }
     }
 
     private static func setSyncSettings(_ input: [String: Any], folder: SettingsFolder) -> Data {

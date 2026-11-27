@@ -88,4 +88,24 @@ struct SyncPeersTests {
         try b.pull(now: t(3))
         #expect(b.localNotes.load().unresolvedRules == nil)
     }
+
+    /// N2: a Mac whose sync is held still says when, once a day, and nothing else.
+    @Test func aHeldMacStillSaysItIsThere() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync), b = try mac("B", sync: sync)
+        _ = try RuleStore(folder: a.settings).update {
+            for i in 1...6 { $0.rules.append(Rule(kind: .domain, pattern: "r\(i).com", browser: "b", profile: "P")) }
+        }
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        let before = try #require(SyncFolder(sync).readAll(except: "A").files.first { $0.device == "B" })
+        _ = try RuleStore(folder: b.settings).update { $0.rules.removeAll() }
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(3)) }
+        #expect(SyncFolder(sync).peers(except: "A").first?.synced == t(2))   // not yet a day
+        #expect(throws: SyncSession.Held.self) { try b.pull(now: t(SyncSession.heartbeat + 10)) }
+        let after = try #require(SyncFolder(sync).readAll(except: "A").files.first { $0.device == "B" })
+        #expect(after.written == t(SyncSession.heartbeat + 10))
+        #expect(after.state == before.state && after.applied == before.applied)
+        try a.pull(now: t(SyncSession.heartbeat + 20))
+        #expect(try RuleStore(folder: a.settings).load().rules.count == 6)
+    }
 }

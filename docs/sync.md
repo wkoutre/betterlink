@@ -75,7 +75,7 @@ Sync never deletes much without a person choosing it, and what it removes or rep
 
 ## Other Macs
 
-Sync settings names each other Mac whose file it can read, and when that Mac last wrote it: "Nick's Mac mini, synced 3:12 PM", "synced yesterday at 9:05 AM", or the date for older. The time is the `written` field inside the file, not the file's date, which a cloud app sets when it downloads it. Since every Mac rewrites its file at least once a day while it runs, a file unchanged for 7 days or more is flagged: "hasn't synced in 9 days; it may be off or signed out of the sync folder". The status line above it stays. `betterlink sync get` lists the same under `macs`, with `stale` and `warning`.
+Sync settings names each other Mac whose file it can read, and when that Mac last wrote it: "Nick's Mac mini, synced 3:12 PM", "synced yesterday at 9:05 AM", or the date for older. The time is the `written` field inside the file, not the file's date, which a cloud app sets when it downloads it. Since every Mac rewrites its file at least once a day while it runs (a Mac whose sync is held rewrites only that time, never new state), a file unchanged for 7 days or more is flagged: "hasn't synced in 9 days; it may be off or signed out of the sync folder". The status line above it stays. `betterlink sync get` lists the same under `macs`, with `stale` and `warning`.
 
 ## config.ts
 

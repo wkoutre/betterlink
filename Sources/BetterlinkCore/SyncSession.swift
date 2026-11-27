@@ -247,6 +247,13 @@ public final class SyncSession {
             if let was = notes.held, was.ids == hold.ids, was.fresh == hold.fresh { hold = was }
             else { let h = hold; try localNotes.update { $0.held = h } }
             held = hold
+            // Held, it still tells the other Macs it is there: the file it
+            // last wrote, unchanged but for when, once a day. Never new state.
+            if let w = written, state == w, applied == (writtenApplied ?? [:]),
+               let at = writtenAt, now.timeIntervalSince(at) >= Self.heartbeat {
+                try folder.write(SyncDeviceFile(device: device, name: name, written: now, state: w, applied: writtenApplied))
+                writtenAt = now
+            }
             throw Held(hold: hold)
         }
         if joining || fresh {

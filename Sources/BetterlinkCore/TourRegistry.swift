@@ -210,7 +210,7 @@ public enum TourRegistry {
             TourStep(id: "sync-folder", revision: 2,
                      title: "Sync your setup between Macs",
                      body: "Pick a folder that Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes its own file there and reads the others', so edits made on two Macs both land. Permissions, and which browser profile shows which Sidebar Profile, stay on each Mac.",
-                     changed: "Sync now asks before one Mac deletes many synced items at once, and Sync settings lists what sync removed here with Restore (betterlink sync history).", symbol: "arrow.triangle.2.circlepath",
+                     changed: "Sync asks before mass deletes. Sync settings lists what it removed, with Restore, and the other Macs; Link Rules marks rules whose profile isn't here.", symbol: "arrow.triangle.2.circlepath",
                      status: .syncFolder, control: .chooseSyncFolder, requires: nil,
                      cli: "betterlink sync set --folder ~/Dropbox/betterlink", cliWhy: nil),
         ]),
