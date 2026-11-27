@@ -126,6 +126,7 @@ final class SidebarInstance: ObservableObject {
         edgeTimer?.invalidate()
         edgeTimer = nil
         restoring = nil
+        refitWait = nil
         if closed { slideRun = nil; steps = nil; glide = nil; glideSteps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
         releaseFlag()
         panelTokens.forEach(NotificationCenter.default.removeObserver)
@@ -177,6 +178,7 @@ final class SidebarInstance: ObservableObject {
     /// The shortcut and the menu item: hide the sidebar, the browser taking the
     /// pair's frame, or show it in the browser's frame.
     func toggle() {
+        refitWait = nil
         DragTrace.log("toggle: window \(window.number) hidden \(hidden) -> \(!hidden)")
         if hidden { slideIn() } else { slideOut() }
     }
@@ -260,7 +262,7 @@ final class SidebarInstance: ObservableObject {
     var opensWithoutSlide: Bool { opening != nil && slideRun == nil }
 
     /// The panel sliding, or the browser being moved.
-    var sliding: Bool { slideRun != nil || steps != nil || glide != nil }
+    var sliding: Bool { slideRun != nil || steps != nil || glide != nil || refitWait != nil }
 
     /// The browser moved with the slide, frame by frame, its far edge kept
     /// (`WindowGlide`), while its sets land at once; then the steps that end
@@ -322,12 +324,19 @@ final class SidebarInstance: ObservableObject {
                       deadline: Double? = nil, glides: Bool = false, then: @escaping () -> Void = {}) {
         // Opening (only an open has `widest`): what this window's browser was seen to stop at.
         let stops = widest == nil ? nil : self.stops
-        let make = { (h: WindowGlide.Handover) -> WindowSteps in
+        let plain = { (h: WindowGlide.Handover) -> WindowSteps in
             switch h {
             case .none: WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
             case .holds(let r): WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops, resuming: r)
             case .waits(let w): WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops, after: w)
             }
+        }
+        let slack = systemSlack
+        // A refit's: the system settling the window by a point or two meanwhile is no one's move (`systemSlack`).
+        let make = { (h: WindowGlide.Handover) -> WindowSteps in
+            var s = plain(h)
+            s.slack = slack
+            return s
         }
         if glides, let keep, let run = slideRun {
             if var g = glide {
@@ -351,6 +360,7 @@ final class SidebarInstance: ObservableObject {
                 let growsInPlace = frame.width <= onScreenFrame.width + 0.5 || right.map { onScreenFrame.minX + frame.width <= $0 + 0.5 } ?? false
                 if flagOff, !reducesMotion(), setsInstant || growsInPlace {
                     glide = WindowGlide(closed: run.hiddenWindow, open: run.shownWindow, side: keep, right: right, proven: setsInstant)
+                    glide?.slack = slack
                     glideSteps = make
                     glideDeadline = deadline
                     afterSteps = then
@@ -366,6 +376,7 @@ final class SidebarInstance: ObservableObject {
         steps = WindowSteps(target: frame, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops,
                             after: earlier)
         steps?.patience = patience
+        steps?.slack = slack
         afterSteps = then
         stepWindow()
         runTicker()
@@ -382,6 +393,7 @@ final class SidebarInstance: ObservableObject {
     /// `settling`: every size held still before it counts (`WindowSteps.settles`).
     private func resend(_ frame: CGRect, watching: Bool, settling: Bool = false, then: @escaping () -> Void = {}) {
         steps = WindowSteps(target: frame, keep: nil, resends: true, watches: watching, settles: settling)
+        steps?.slack = systemSlack
         afterSteps = then
         stepWindow()
         runTicker()
@@ -407,6 +419,7 @@ final class SidebarInstance: ObservableObject {
     /// One tick: the browser's next call once its last is on screen, then the
     /// panel's slide.
     func stepSlide() {
+        stepRefitWait()
         stepWindow()
         stepPanel()
         if resizing != nil { follow() } // mid-drag the panel follows the window's real edge, tick by tick
@@ -500,7 +513,7 @@ final class SidebarInstance: ObservableObject {
         let then = afterSteps
         afterSteps = nil
         if s.interrupted { takenByOther() } else { then?() }
-        if steps == nil, glide == nil { restFrame = hidden ? nil : onScreenFrame }
+        if steps == nil, glide == nil { restFrame = hidden ? nil : onScreenFrame; systemSlack = 0 }
         releaseFlagIfIdle()
     }
 
@@ -872,16 +885,60 @@ final class SidebarInstance: ObservableObject {
         // further off the screen than it was: the browser's new frame is the pair's, and the sidebar slides back on in
         // it (`SidebarGeometry.refitsAfterResize`). A drag of one edge or a corner short of that, and any other resize
         // of theirs, stands.
+        // Not at once: macOS's tiling can settle the window a point after it reports it at rest (MINI-16 on macOS 27
+        // at 6ebd0da: 1027, then 1028, after the refit had begun, which took it for the person's move). The refit
+        // starts once the window server's frame has held still for `refitQuiet`, or at `refitWaitCap` whatever it
+        // does (`stepRefitWait`).
         if let was = restFrame, SidebarGeometry.refitsAfterResize(from: was, to: t.frame, width: CGFloat(width), side: placedSide,
                                                                   visible: Displays.all.map(\.visibleFrame)) {
-            DragTrace.log("refit: window \(window.number) resized from \(was) to \(t.frame), its sidebar pushed off the screen: opens again in it")
-            restFrame = nil
-            unpair()
-            open(from: t.frame, slide: isShown && panel?.isVisible == true)
+            let now = clock()
+            refitWait = RefitWait(was: was, frame: onScreenFrame, since: now, began: now)
+            runTicker()
             return layout()
         }
         restFrame = t.frame
         remember()
+        layout()
+    }
+
+    /// A refit decided at rest, waiting for the window server's frame to hold
+    /// still: `was` the frame before the person's change, `frame` where the
+    /// window is, unchanged `since`, the wait `began`.
+    private struct RefitWait { var was: CGRect; var frame: CGRect; var since: Double; var began: Double }
+    private var refitWait: RefitWait?
+    /// How long the frame must hold still before a refit starts, and the
+    /// longest a refit waits for that (the bound it adds after the window
+    /// tracker's rest, itself 150 ms after the last move).
+    static let refitQuiet = 0.05
+    static let refitWaitCap = 0.15
+    /// Set for a refit's motion, cleared once nothing moves the window: how
+    /// far the system may move the window on its own meanwhile without it
+    /// counting as someone else's change (`WindowSteps.slack`): 2 pt, as
+    /// frames within 2 pt are the same (`SidebarGeometry.same`). A bigger
+    /// change, or any change once the refit is over, is the person's and stands.
+    private var systemSlack: CGFloat = 0
+
+    /// A tick of a refit's wait: the frame on screen held still for
+    /// `refitQuiet`, or `refitWaitCap` passed: the refit starts from where the
+    /// window is, if it still pushes the sidebar off the screen.
+    private func stepRefitWait() {
+        guard var w = refitWait else { return }
+        let now = clock()
+        let seen = onScreenFrame
+        if seen != w.frame { w.frame = seen; w.since = now }
+        guard now - w.since >= Self.refitQuiet || now - w.began >= Self.refitWaitCap else { refitWait = w; return }
+        refitWait = nil
+        guard !hidden, paired, SidebarGeometry.refitsAfterResize(from: w.was, to: w.frame, width: CGFloat(width), side: placedSide,
+                                                                 visible: Displays.all.map(\.visibleFrame)) else {
+            restFrame = w.frame
+            return
+        }
+        DragTrace.log(String(format: "refit: window %d resized from %@ to %@, its sidebar pushed off the screen: opens again in it (held still %.0f ms after %.0f ms)",
+                             window.number, "\(w.was)", "\(w.frame)", (now - w.since) * 1000, (now - w.began) * 1000))
+        restFrame = nil
+        unpair()
+        systemSlack = 2
+        open(from: w.frame, slide: isShown && panel?.isVisible == true)
         layout()
     }
 
