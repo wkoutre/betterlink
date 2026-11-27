@@ -21,7 +21,6 @@ final class SidebarPanel: NSPanel {
             let caller = Thread.callStackSymbols.dropFirst().prefix(4).map { $0.split(separator: " ", omittingEmptySubsequences: true).dropFirst(3).prefix(1).joined() }
             DragTrace.log("orderOut alpha \(alphaValue) from \(caller.joined(separator: " < "))")
         }
-        alphaValue = 0
         away()
     }
 
@@ -48,8 +47,7 @@ final class SidebarPanel: NSPanel {
         Self.watch?(self)
     }
 
-    /// Off the screen at once, its alpha and mask as they are (`reenter`
-    /// keeps them; `hideNow` clears it first).
+    /// Off the screen at once.
     private func away() {
         headlessVisible = false
         if !Self.headless { super.orderOut(nil) }
@@ -236,19 +234,12 @@ final class SidebarPanel: NSPanel {
         order(at: place)
     }
 
-    /// Hides at once, at the end of a slide: clear first (alpha 0), then
-    /// ordered out, and left clear and masked as it was until it is ordered
-    /// in again (`showNow`, `fadeIn`). The order-out and the panel's mask
-    /// reach the window server by two routes (the window's ordering, the
-    /// layers' commit), so a mask lifted or an alpha raised right after the
-    /// order-out could be drawn before the order-out lands (live on macOS
-    /// 27, MINI-16 at 5c5adae: the whole 312 px panel for one frame after
-    /// the slide had shown none of it, 1 of 20 hides).
+    /// Hides at once, at the end of a slide.
     func hideNow() {
         fadeTimer?.invalidate(); fadeTimer = nil
-        fade = Fade(shown: false)
-        alphaValue = 0
         away()
+        fade = Fade(shown: false)
+        alphaValue = 1
     }
 
     /// Shows the panel with a short fade (none with Reduce Motion).
@@ -286,8 +277,8 @@ final class SidebarPanel: NSPanel {
         fadeTimer?.invalidate(); fadeTimer = nil
         if fade.phase == .hidden {
             DragTrace.log("fade done: orderOut")
-            alphaValue = 0
             away()
+            alphaValue = 1
         }
     }
 }
