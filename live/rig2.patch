@@ -1,0 +1,12 @@
+diff --git a/Sources/BetterlinkCore/Profiles.swift b/Sources/BetterlinkCore/Profiles.swift
+index dc9e204..6f7503b 100644
+--- a/Sources/BetterlinkCore/Profiles.swift
++++ b/Sources/BetterlinkCore/Profiles.swift
+@@ -70,6 +70,7 @@ public struct Browser: Equatable, Hashable, Sendable, Identifiable {
+         Browser(name: "Firefox", bundleId: "org.mozilla.firefox", family: .firefox, dataFolder: "Firefox"),
+         Browser(name: "Firefox Developer Edition", bundleId: "org.mozilla.firefoxdeveloperedition", family: .firefox, dataFolder: "Firefox"),
+         Browser(name: "Zen", bundleId: "app.zen-browser.zen", family: .firefox, dataFolder: "zen"),
++        Browser(name: "Google Chrome for Testing", bundleId: "com.google.chrome.for.testing", family: .chromium, dataFolder: "@UDD_REL@"),
+         Browser(name: "Safari", bundleId: "com.apple.Safari", family: .plain, dataFolder: nil),
+         Browser(name: "Arc", bundleId: "company.thebrowser.Browser", family: .plain, dataFolder: nil),
+     ]
