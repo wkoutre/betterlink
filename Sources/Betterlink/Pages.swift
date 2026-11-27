@@ -612,16 +612,26 @@ struct GeneralPage: View {
             }
             DSSection("Updates") {
                 Toggle("Check for updates automatically", isOn: $updater.automaticallyChecks)
+                Toggle("Install updates automatically", isOn: $updater.installsAutomatically)
+                    .disabled(!updater.isAvailable || !updater.automaticallyChecks)
                 Text(updater.isAvailable
-                     ? "Once a day betterlink asks GitHub whether a newer version is out. It sends nothing about you or your links. Every update is checked against betterlink's signing key before it installs."
+                     ? "Once an hour betterlink asks GitHub whether a newer version is out. It sends nothing about you or your links. Every update is checked against betterlink's signing key before it installs. Installing automatically downloads it in the background and restarts betterlink the next time you leave the Mac alone for two minutes; otherwise it asks first, from the menu bar menu."
                      : "This build has no update key, so it doesn't check for updates. Release builds do.")
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Text("Version \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "?")")
                         .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textSecondary)
+                    if let ready = updater.readyVersion {
+                        Text("· \(ready) is ready")
+                            .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textSecondary)
+                    }
                     Spacer()
-                    Button("Check Now") { updater.checkNow() }.disabled(!updater.isAvailable)
+                    if updater.readyVersion != nil {
+                        Button("Restart to Update") { updater.restartToUpdate() }
+                    } else {
+                        Button("Check Now") { updater.checkNow() }.disabled(!updater.isAvailable)
+                    }
                 }
             }
             DSSection("Log") {

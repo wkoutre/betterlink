@@ -157,19 +157,34 @@ enum AgentCommand {
                 "note": "This Mac only. With the icon hidden, open betterlink from Spotlight or Finder to see its window.",
             ])
         case "updates.get":
+            let d = UpdateChecks.defaults()
             return AgentResponseJSON.success([
-                "automatic": UpdateChecks.isAutomatic(in: UpdateChecks.defaults()),
+                "automatic": UpdateChecks.isAutomatic(in: d),
+                "install": UpdateChecks.installsAutomatically(in: d),
+                "checkEverySeconds": Int(UpdateChecks.checkInterval),
                 "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
                 "updaterInThisBuild": UpdateChecks.updaterCanRun(info: Bundle.main.infoDictionary ?? [:]),
             ])
         case "updates.set":
-            guard let n = input["automatic"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else {
-                return AgentResponseJSON.failure("Give automatic: true or false.")
+            func flag(_ key: String) -> Bool?? {
+                guard let v = input[key] else { return .some(nil) }
+                guard let n = v as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { return nil }
+                return .some(n.boolValue)
+            }
+            guard let automatic = flag("automatic"), let install = flag("install") else {
+                return AgentResponseJSON.failure("Give automatic and install as true or false.")
+            }
+            if automatic == nil && install == nil {
+                return AgentResponseJSON.failure("Give automatic (true or false), install (true or false), or both.")
             }
             let d = UpdateChecks.defaults()
-            UpdateChecks.setAutomatic(n.boolValue, in: d)
+            if let automatic { UpdateChecks.setAutomatic(automatic, in: d) }
+            if let install { UpdateChecks.setInstallsAutomatically(install, in: d) }
             d.synchronize()
-            return AgentResponseJSON.success(["automatic": n.boolValue])
+            return AgentResponseJSON.success([
+                "automatic": UpdateChecks.isAutomatic(in: d),
+                "install": UpdateChecks.installsAutomatically(in: d),
+            ])
         case "toast.get":
             let d = MenuBarIcon.defaults()
             return AgentResponseJSON.success(["shown": LinkToast.isShown(in: d), "position": LinkToast.position(in: d).rawValue])

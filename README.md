@@ -48,7 +48,7 @@ The same settings are under **Permissions** in the window:
 
 ### Updates
 
-betterlink updates itself with [Sparkle](https://sparkle-project.org). Once a day it fetches `appcast.xml` from the latest GitHub release, a plain request that carries nothing about you or your links. When a newer version is out it asks before installing, and it installs only an update signed with betterlink's update key. **General › Updates** turns the daily check off and has **Check Now**; `betterlink updates set --automatic off` does the same. Only release builds check; a build from source (`make install`) never does.
+betterlink updates itself with [Sparkle](https://sparkle-project.org). Once an hour it fetches `appcast.xml` from the latest GitHub release, a plain request that carries nothing about you or your links. When a newer version is out it downloads it in the background, checks it against betterlink's update key, and installs it the next time you leave the Mac alone for two minutes (or when betterlink quits), which restarts betterlink in about a second. The menu bar menu shows **Restart to Update** while one waits. **General › Updates** turns the hourly check or the automatic install off (then it asks first) and has **Check Now**; `betterlink updates set --automatic off` and `--install off` do the same. Only release builds check; a build from source (`make install`) never does.
 
 betterlink runs in the background with no Dock icon. Closing its window (⌘W or the red button) keeps it running. Its menu bar icon opens the window and lists recent links; **General › Menu bar** hides the icon. With the icon hidden, open betterlink from Spotlight or Finder to get the window back.
 

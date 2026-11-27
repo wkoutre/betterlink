@@ -259,12 +259,21 @@ const toast = Cli.create('toast', {
     }),
   })
 
-const updates = Cli.create('updates', { description: 'Automatic update checks (this Mac only)' })
-  .command('get', { description: 'Show the version and whether betterlink checks for updates by itself', run: () => core('updates.get') })
+const updates = Cli.create('updates', { description: 'Automatic updates (this Mac only)' })
+  .command('get', {
+    description: 'Show the version, whether betterlink checks for updates by itself, and whether it installs them',
+    run: () => core('updates.get'),
+  })
   .command('set', {
-    description: 'Turn the daily update check on or off',
-    options: z.object({ automatic: onOff('check GitHub for a newer betterlink once a day') }),
-    run: (c) => core('updates.set', { automatic: isOn(c.options.automatic) }),
+    description: 'Turn the hourly update check, or installing updates without asking, on or off',
+    options: z.object({
+      automatic: onOff('check GitHub for a newer betterlink once an hour').optional(),
+      install: onOff('download updates in the background and install them while the Mac is idle, instead of asking first').optional(),
+    }),
+    run: (c) => core('updates.set', {
+      automatic: c.options.automatic === undefined ? undefined : isOn(c.options.automatic),
+      install: c.options.install === undefined ? undefined : isOn(c.options.install),
+    }),
   })
 
 // The sidebar's saved things (sidebar.json): Sidebar Profiles, Favorites,

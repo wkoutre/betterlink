@@ -285,6 +285,20 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(JSON.parse(json)).toEqual({ automatic: false })
   })
 
+  test('updates set --install off sends only install: false', () => {
+    const d = home()
+    const fake = join(d, 'fake-app')
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s %s' "$2" "$3" > '${join(d, 'sent.txt')}'\necho '{"version":1,"ok":true}'\n`)
+    chmodSync(fake, 0o755)
+    const r = spawnSync('bun', [bin, 'updates', 'set', '--install', 'off', '--json'], {
+      encoding: 'utf8', env: { ...process.env, BETTERLINK_HOME: d, BETTERLINK_APP_BINARY: fake },
+    })
+    expect(r.status).toBe(0)
+    const [command, json] = readFileSync(join(d, 'sent.txt'), 'utf8').split(' ')
+    expect(command).toBe('updates.set')
+    expect(JSON.parse(json)).toEqual({ install: false })
+  })
+
   test('folder reset asks for the standard folder', () => {
     const d = home()
     const fake = join(d, 'fake-app')
