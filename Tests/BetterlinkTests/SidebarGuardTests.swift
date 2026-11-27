@@ -3520,8 +3520,9 @@ struct GuardCase: CustomStringConvertible {
         }
     }
 
-    /// A browser that takes a position at once and a size late (Chromium
-    /// often does): a left hide's set ends with a position that, landing
+    /// A browser that takes a position at once and a size late (Chromium's
+    /// lands 0 to 31 ms after, measured with the flag held off; a busy one
+    /// later): a left hide's set ends with a position that, landing
     /// before the size sent ahead of it, would bring the far edge in by the
     /// sidebar's width until the size lands (the guard at seed 20261126, case
     /// 567: 293 pt in for 321 ms). The position goes once the size has
@@ -3550,8 +3551,9 @@ struct GuardCase: CustomStringConvertible {
         #expect(problems.isEmpty, "\(problems.joined(separator: "\n"))")
     }
 
-    /// A browser that takes a position at once and a size late (Chromium
-    /// often does, by 175 to 320 ms): a show's or a hide's one set lands its
+    /// A browser that takes a position at once and a size late (Chromium's
+    /// lands 0 to 31 ms after, measured with the flag held off; a busy one
+    /// later): a show's or a hide's one set lands its
     /// position first, its size later. Pressed again meanwhile, the new press
     /// takes over that set and waits for its size, which may still land,
     /// before it sends anything (the guard at seed 20261126: cases 337, 567,

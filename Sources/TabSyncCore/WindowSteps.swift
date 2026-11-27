@@ -489,7 +489,7 @@ public struct WindowSteps: Sendable {
             let atStop = capped && !foreign && Self.narrows(s.call, s.from) && !s.moved
                 && { if let f = Self.size(of: s.call), let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
             // A whole frame taken over from the press before, half of it landed and the other half not started (a
-            // browser that takes a position at once and a size late, as Chromium often does): not started either,
+            // browser that takes a position at once and a size late; Chromium's lands 0 to 31 ms after, docs/tabs.md): not started either,
             // and waited for as such, since its other half may still land (the guard at seed 20261126: the new
             // press's calls went out while the size was on its way, and it landed on top of them).
             // Not one seen cut short (its place cut where it began by its size, under an animation), whose other

@@ -405,7 +405,8 @@ final class SidebarInstance: ObservableObject {
             if flagOff, !setsSlow, kept, let first = calls.first {
                 // A set that ends with a position after a size (a left hide): the position goes once the size has
                 // landed (`WindowSteps.follows`), since a browser that takes a position at once and a size late
-                // (Chromium often does) would show the position first, the far edge in by the sidebar's width.
+                // would show the position first, the far edge in by the sidebar's width (Chromium's size lands 0 to
+                // 31 ms after its position with the flag held off, measured: docs/tabs.md, Motion; a busy one, later).
                 let sizes = calls.contains { if case .size = $0 { true } else { false } }
                 let follows = calls.count > 1 && sizes && { if case .position = calls.last { true } else { false } }()
                 let now = follows ? Array(calls.dropLast()) : calls
