@@ -353,6 +353,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func position() -> CGPoint? {
+        readBetween()
         if hung() { lastReadFailed = true; return nil }
         let p = readPosition()
         lastReadFailed = p == nil
@@ -367,6 +368,7 @@ final class FakeBrowser: WindowHandle {
     }
 
     func size() -> CGSize? {
+        readBetween()
         if hung() { lastReadFailed = true; return nil }
         let s = readSize()
         lastReadFailed = s == nil
@@ -415,6 +417,17 @@ final class FakeBrowser: WindowHandle {
         pairedPositions += 1
         if pairedPositions % h.every == 0 { wait(h.by) }
     }
+
+    /// Live (26.5.2 and 27, b2d39b4): a read of the window between two sets
+    /// sent together let the window server show the first set alone for a
+    /// refresh, the second a refresh later (a left show's size, its read
+    /// back, then its position: the far edge 30 to 80 pt in for a frame).
+    /// Sets back to back showed together. On: the second set after such a
+    /// read shows a tick (1/120 s) late.
+    var readSplitsPair = false
+    private var lastSetTime: Double?
+    private var readSinceSet = false
+    private func readBetween() { if let t = lastSetTime, now() - t < 1e-9 { readSinceSet = true } }
 
     private func holdCaller() {
         guard holdFor > 0, setCalls == holdAt else { return }
@@ -556,6 +569,10 @@ final class FakeBrowser: WindowHandle {
     /// cutting short the animation in flight there.
     private func set(_ f: CGRect) {
         let at = real
+        if readSplitsPair, readSinceSet, let t = lastSetTime, now() - t < 1e-9, f != at, lag == nil {
+            lag = (frame, now() + 1.0 / 120)
+        }
+        if readSplitsPair { readSinceSet = false; lastSetTime = now() }
         if lagArmed > 0, setCalls >= lagAt, f != at {
             // The window server shows this change, and what follows it meanwhile, only after a while.
             lag = (frame, now() + lagArmed)
@@ -627,7 +644,11 @@ final class SidebarRig {
         }
         flagBefore = FakeApps.shared.flag(pid)
         instance = SidebarInstance(window: window, sidebar: controller, hidden: hidden, width: width)
-        instance.clock = { [unowned self] in self.time }
+        instance.clock = { [unowned self] in
+            // A live clock moves on between two reads (`creep`); the rig's stands still unless set.
+            self.time += self.creep
+            return self.time
+        }
         // Quitting waits on the rig's clock, as everything else does.
         instance.pause = { [unowned self] in self.time += $0 }
         fake.now = { [unowned self] in self.time }
@@ -664,6 +685,9 @@ final class SidebarRig {
 
     /// Its browser's enhanced UI when the rig was made: what it must be again after every motion.
     let flagBefore: Bool
+
+    /// How far the clock moves on at each read of it by the app: 0, or live-like.
+    var creep = 0.0
 
     /// The notes shown since the rig was made: why the sidebar didn't open, and over which frame.
     static var notices: [(SidebarNotice, CGRect)] = []
@@ -1482,7 +1506,7 @@ struct RuleCheck {
         }
         // No added latency (Nick): the first set goes out with the press, as the steps' first call always did,
         // not a tick or more later once the slide has moved a point.
-        if let p = rig.pressedAt.first, p.calls < rig.fake.sent.count, rig.fake.sent[p.calls].t > p.t + 1e-9 {
+        if let p = rig.pressedAt.first, p.calls < rig.fake.sent.count, rig.fake.sent[p.calls].t > p.t + 0.001 {
             problems.append(String(format: "%@: the first set went out %.1f ms after the press", step, (rig.fake.sent[p.calls].t - p.t) * 1000))
         }
         let moving = Set(s.map { Int(($0.browser.width * 2).rounded()) }).count
@@ -2957,6 +2981,50 @@ struct GuardCase: CustomStringConvertible {
             }
             check.flagRestored("\(b)")
             #expect(check.problems.isEmpty, "\(check.problems.prefix(6).joined(separator: "\n"))")
+        }
+    }
+
+    /// A show and a hide on the left on a browser whose window server shows a
+    /// pair's second set a refresh late when the window was read between
+    /// the two (live at b2d39b4, Chrome for Testing on 26.5.2 and 27: one
+    /// frame of a left show 30 to 80 pt in, `readSplitsPair`). The far edge
+    /// holds at every tick: the pair goes out back to back.
+    @Test func aLeftShowsPairShowsTogether() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1049), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 1920, height: 1049)
+        for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+            let rig = SidebarRig(displays: [screen], frame: full, side: .left, width: 280, behaviour: b)
+            rig.fake.readSplitsPair = true
+            var check = RuleCheck(rig, displays: [screen])
+            for k in 0..<6 {
+                rig.toggle()
+                check.oneSmoothMotion(pair: full, "\(b): \(k % 2 == 0 ? "show" : "hide") \(k / 2 + 1)")
+            }
+            #expect(check.problems.isEmpty, "\(check.problems.prefix(6).joined(separator: "\n"))")
+        }
+    }
+
+    /// The first set of a show or hide goes out with the press on a clock that
+    /// moves on between two reads, as a live one does (at b2d39b4 the first
+    /// frame still waited for the slide's first whole point live, 93 to 95 ms
+    /// after the press against main's 64 on macOS 27: the rig's clock stood
+    /// still, so the slide's progress at the first step was exactly 0).
+    @Test func theFirstSetGoesOutWithThePressOnALiveClock() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 1920, height: 1080),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 1920, height: 1049), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 1920, height: 1049)
+        for side in SidebarSide.allCases {
+            for b in [BrowserBehaviour(), BrowserBehaviour(enhancedUI: true)] {
+                let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b)
+                rig.creep = 0.0001
+                var check = RuleCheck(rig, displays: [screen])
+                for k in 0..<4 {
+                    rig.toggle()
+                    check.oneSmoothMotion(pair: full, "\(side) \(b): \(k % 2 == 0 ? "show" : "hide") \(k / 2 + 1)")
+                }
+                #expect(check.problems.isEmpty, "\(check.problems.prefix(6).joined(separator: "\n"))")
+            }
         }
     }
 

@@ -177,6 +177,8 @@ final class SidebarInstance: ObservableObject {
     /// The shortcut and the menu item: hide the sidebar, the browser taking the
     /// pair's frame, or show it in the browser's frame.
     func toggle() {
+        pressedAt = CACurrentMediaTime()
+        DragTrace.log(String(format: "timing: window %d toggle entered at %.1f ms", window.number, pressedAt! * 1000))
         DragTrace.log("toggle: window \(window.number) hidden \(hidden) -> \(!hidden)")
         if hidden { slideIn() } else { slideOut() }
     }
@@ -226,7 +228,25 @@ final class SidebarInstance: ObservableObject {
     private func holdFlag() {
         guard !holdsFlag else { return }
         holdsFlag = true
+        let began = CACurrentMediaTime()
         flagOff = EnhancedUI.shared.hold(window.target.pid, by: self).off
+        let end = CACurrentMediaTime()
+        DragTrace.log(String(format: "timing: window %d flag held (off %@) from %.1f to %.1f ms, %.1f ms%@", window.number, flagOff ? "yes" : "no",
+                             began * 1000, end * 1000, (end - began) * 1000, pressedAt.map { String(format: ", %.1f ms after the press", (end - $0) * 1000) } ?? ""))
+    }
+
+    /// When the shortcut was last pressed (real time, for the trace's timing lines): the first set after it is timed.
+    private var pressedAt: CFTimeInterval?
+
+    /// Sends one call to the browser; the first after a press is timed in the trace.
+    private func send(_ c: WindowSteps.Call) {
+        guard let p = pressedAt else { return AXWindow.send(c, to: window.handle) }
+        pressedAt = nil
+        let issued = CACurrentMediaTime()
+        AXWindow.send(c, to: window.handle)
+        let back = CACurrentMediaTime()
+        DragTrace.log(String(format: "timing: window %d first set (%@) issued at %.1f ms, %.1f ms after the press, returned %.1f ms later", window.number,
+                             { if case .size = c { "size" } else { "position" } }(), issued * 1000, (issued - p) * 1000, (back - issued) * 1000))
     }
 
     /// The motion is over: the flag goes back to what it was. `wait`: how
@@ -438,17 +458,18 @@ final class SidebarInstance: ObservableObject {
             let now = clock()
             let q = slideRun.map { $0.slide.progress(at: now) } ?? 1
             let end = slideRun.map { $0.slide.done(at: now) } ?? true
-            var call = g.step(seen: onScreenFrame, now: now, progress: q, end: end, deadline: glideDeadline)
+            let toward = slideRun.flatMap { r -> Bool? in r.slide.phase == .showing ? true : r.slide.phase == .hiding ? false : nil }
+            var call = g.step(seen: onScreenFrame, now: now, progress: q, end: end, deadline: glideDeadline, toward: toward)
             let sending = call != nil
             // Every call of a frame in one go, within one display refresh: a size and a position sent
             // together land as one frame. The width read back after a size places the far edge.
             while let c = call {
                 holdFlag()
-                AXWindow.send(c, to: window.handle)
+                send(c)
                 var w: CGFloat?, unanswered = false
                 // Read back at once. A read that got no answer in time (the browser busy) is no width: the window
                 // server says what the size did.
-                if case .size = c {
+                if case .size = c, g.needsWidth {
                     let read = window.handle.size()
                     if let read, !window.handle.missed { w = read.width } else { unanswered = true }
                 }
@@ -482,7 +503,7 @@ final class SidebarInstance: ObservableObject {
         guard var s = steps else { return }
         if let call = s.step(seen: onScreenFrame, now: clock()) {
             holdFlag()
-            AXWindow.send(call, to: window.handle)
+            send(call)
         }
         guard s.done else { steps = s; return }
         DragTrace.log("steps: window \(window.number) to \(s.target) done at \(onScreenFrame)\(s.capped ? ", capped" : "")\(s.interrupted ? ", interrupted" : "")\(s.stoppedShort ? ", stopped short" : "")")
@@ -638,7 +659,12 @@ final class SidebarInstance: ObservableObject {
         if slide {
             let outer = side == .left ? panel.frame.minX : panel.frame.maxX
             panel.reveal = outer
+            let ordering = CACurrentMediaTime()
             panel.showNow(at: place(panel))
+            if let p = pressedAt {
+                DragTrace.log(String(format: "timing: window %d panel ordered in from %.1f ms after the press, %.1f ms", window.number, (ordering - p) * 1000,
+                                     (CACurrentMediaTime() - ordering) * 1000))
+            }
             isShown = true
             var run = SlideRun(slide: SidebarSlide(shown: false), side: side, outer: outer, hiddenWindow: frame, shownWindow: browser)
             run.slide.show(at: clock(), reduceMotion: reducesMotion())

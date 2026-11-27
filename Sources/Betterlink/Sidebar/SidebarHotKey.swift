@@ -1,3 +1,4 @@
+import QuartzCore
 import BetterlinkCore
 import Carbon.HIToolbox
 import Foundation
@@ -52,7 +53,12 @@ final class SidebarHotKey {
                 let hk = Unmanaged<SidebarHotKey>.fromOpaque(refcon).takeUnretainedValue()
                 // Another of betterlink's shortcuts: leave it to its own handler.
                 guard read == noErr, pressed.id == hk.number else { return OSStatus(eventNotHandledErr) }
-                MainActor.assumeIsolated { hk.onPress?() }
+                // The key's own time and when it reached betterlink, on the clock the motion's timing lines use.
+                let keyTime = event.map { GetEventTime($0) } ?? 0
+                MainActor.assumeIsolated {
+                    DragTrace.log(String(format: "timing: hotkey event at %.1f ms, received at %.1f ms", keyTime * 1000, CACurrentMediaTime() * 1000))
+                    hk.onPress?()
+                }
                 return noErr
             }, 1, &spec, me, &handler)
             if installed != noErr {

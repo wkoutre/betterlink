@@ -15,6 +15,8 @@ import Testing
         var frames: [CGRect] = []
         var callsPerTick: [Int] = []
         var calls: [WindowSteps.Call] = []
+        /// Whether the window was read after each call.
+        var reads: [Bool] = []
         var glide: WindowGlide
         var window: CGRect
     }
@@ -35,15 +37,20 @@ import Testing
             // What was sent late lands now (or, animated, the last one lands whole after `animation`).
             for q in queue where t >= q.at { apply(q.call, to: &r.window) }
             queue.removeAll { t >= $0.at }
-            var c = r.glide.step(seen: r.window, now: t, progress: slide.progress(at: t), end: slide.done(at: t), deadline: 3)
+            var c = r.glide.step(seen: r.window, now: t, progress: slide.progress(at: t), end: slide.done(at: t), deadline: 3, toward: showing)
             var n = 0
             while let call = c {
                 n += 1
                 r.calls.append(call)
+                r.reads.append(false)
                 if lateBy > 0 || animation > 0 { queue.append((t + max(lateBy, animation), call)) } else { apply(call, to: &r.window) }
                 var w: CGFloat?
                 if case .size = call, lateBy == 0, animation == 0 { w = r.window.width }
                 if case .size = call, animation > 0 { w = r.window.width } // read back before the animation shows it
+                // Read back only where the glide asks for it (`needsWidth`): a read between a pair's two sets lets the
+                // window server show the first alone for a refresh (live on 26.5.2 and 27 at b2d39b4).
+                if !r.glide.needsWidth { w = nil }
+                if w != nil { r.reads[r.reads.count - 1] = true }
                 c = r.glide.next(width: w)
             }
             r.callsPerTick.append(n)
@@ -58,10 +65,13 @@ import Testing
         #expect(r.glide.done && !r.glide.interrupted && !r.glide.slow)
         #expect(r.window == leftOpen)
         #expect(r.frames.allSatisfy { abs($0.maxX - 2056) < 0.5 }, "\(r.frames.map(\.maxX))")
-        // A size and a position each tick, never more; and many frames, as the slide.
+        // A position and a size each tick, never more, nothing read between them; and many frames, as the slide.
+        // The position first, as a hide's: live, a size, its read back, then the position showed the size alone for
+        // a refresh about one show in two (the far edge 30 to 80 pt in), a position then a size seldom (b2d39b4).
         #expect(r.callsPerTick.allSatisfy { $0 <= 2 })
         #expect(Set(r.frames.map(\.width)).count >= 20)
-        guard case .size = r.calls[0], case .position = r.calls[1] else { Issue.record("\(r.calls.prefix(2))"); return }
+        guard case .position = r.calls[0], case .size = r.calls[1] else { Issue.record("\(r.calls.prefix(2))"); return }
+        #expect(!r.reads[0], "the window read between the position and the size")
     }
 
     @Test func aShowOnTheRightSendsSizesAlone() {
@@ -145,5 +155,24 @@ import Testing
         w.origin.y += 40 // the person drags it down
         #expect(g.step(seen: w, now: t, progress: slide.progress(at: t), end: false, deadline: 3) == nil)
         #expect(g.done && g.interrupted)
+    }
+
+    /// The first frame goes out with the press however far the clock has
+    /// moved since the slide began (live the first step's progress is never
+    /// exactly 0: at b2d39b4 the first frame still waited for the slide's
+    /// first point, 110 to 124 ms after the press against main's 85 to 107).
+    @Test func theFirstFrameGoesOutWithThePressOnALiveClock() {
+        for (side, open) in [(SidebarSide.left, leftOpen), (.right, rightOpen)] {
+            for showing in [true, false] {
+                for proven in [true, false] {
+                    var g = WindowGlide(closed: closed, open: open, side: side, right: 2056, proven: proven)
+                    var slide = SidebarSlide(shown: !showing)
+                    if showing { slide.show(at: 0, reduceMotion: false) } else { slide.hide(at: 0, reduceMotion: false) }
+                    let t = 0.003
+                    let c = g.step(seen: showing ? closed : open, now: t, progress: slide.progress(at: t), end: false, deadline: 3, toward: showing)
+                    #expect(c != nil, "\(side) \(showing ? "show" : "hide") proven \(proven): nothing sent \(Int(t * 1000)) ms in")
+                }
+            }
+        }
     }
 }

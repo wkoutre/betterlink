@@ -72,7 +72,7 @@ public struct WindowGlide: Sendable {
     /// The least a probe asks of the window's width.
     public static let probeStep: CGFloat = 4
 
-    private enum Next { case size, place, positionFirst, fix }
+    private enum Next { case size, place, placeAsked, positionFirst, fix }
     private var plan: [Next] = []
     /// The frame these calls are for, where the window was when they began,
     /// and what they give as far as is known (the width read back).
@@ -111,6 +111,11 @@ public struct WindowGlide: Sendable {
     public private(set) var late = 0
     /// No call sent yet: the first goes out with the press (`step`).
     private var sentAny = false
+    /// This glide's last frame landed at once exactly as asked, its width read back as asked: a left narrowing
+    /// frame may then go out as a size and the position for it back to back, read after (`begin`). Any other
+    /// frame, and the rest of the motion reads between them.
+    private var clean = false
+    private var cleanSpoilt = false
 
     /// `proven`: this window's sets were seen to land at once before. Until
     /// they are, the first frame is a probe: its size alone, and only once
@@ -141,6 +146,14 @@ public struct WindowGlide: Sendable {
         if expect != nil { foreign = true }
         final = false
     }
+
+    /// The call just returned is a size whose width read back places the
+    /// next call (`next(width:)`): read it now. Never between a position and
+    /// the size after it: a read between two sets let the window server
+    /// show the first alone for a refresh (live at b2d39b4).
+    public var needsWidth: Bool { plan.first == .place || plan.first == .fix }
+    /// Whether the last call of this frame was a size (the width read after it is the size's).
+    private var sizeLast: Bool { if case .size? = lastCall?.call { true } else { false } }
 
     /// The tick's calls have returned, at `t`: whether a frame shows within
     /// `instant` is counted from here, not from before them, so a call the
@@ -181,7 +194,7 @@ public struct WindowGlide: Sendable {
 
     /// The first call of this tick, given the window on screen (`seen`), the
     /// slide's progress `q` (1 open) and whether the slide is over (`end`).
-    public mutating func step(seen: CGRect, now: Double, progress q: Double, end: Bool, deadline: Double?) -> Call? {
+    public mutating func step(seen: CGRect, now: Double, progress q: Double, end: Bool, deadline: Double?, toward goingToOpen: Bool? = nil) -> Call? {
         if done { return nil }
         if start == nil { start = seen; before = seen; last = seen; changedAt = now }
         if seen != last {
@@ -208,6 +221,8 @@ public struct WindowGlide: Sendable {
                 return nil
             }
             if !probing, Self.landed(seen, e) {
+                if pendingSeen || unread || (took.map { w in asked.map { !Self.near(w, $0.width, 0.5) } ?? false } ?? false) { cleanSpoilt = true }
+                clean = !cleanSpoilt
                 expect = nil; asked = nil; took = nil; unread = false
                 before = seen
                 foreign = false
@@ -265,7 +280,14 @@ public struct WindowGlide: Sendable {
             return nil
         }
         var f = end ? (q >= 0.5 ? open : closed) : frame(at: q)
-        let starts = q <= 0 && Self.landed(b, closed) ? true : q >= 1 && Self.landed(b, open) ? false : nil
+        // Which way the slide goes (`toward`, from the slide itself: live the clock has moved on by the first step,
+        // so its progress is never exactly 0 or 1); without it, a slide at its very start.
+        let starts: Bool?
+        if let o = goingToOpen {
+            starts = o ? (Self.landed(b, closed) ? true : nil) : (Self.landed(b, open) ? false : nil)
+        } else {
+            starts = q <= 0 && Self.landed(b, closed) ? true : q >= 1 && Self.landed(b, open) ? false : nil
+        }
         if !sentAny, !end, Self.landed(f, b), let toOpen = starts {
             // The first frame goes out with the press, as the steps' first call always did (no added latency, Nick):
             // the slide's next point or two toward where it goes, not a tick or more later once it has moved one.
@@ -325,6 +347,13 @@ public struct WindowGlide: Sendable {
         }
         if Self.near(f.width, b.width) && Self.near(f.height, b.height) {
             plan = [.place]
+        } else if side == .left, f.width < b.width, clean {
+            // Narrowing on the left, the window moves too: the size, then at once the position for the width asked,
+            // nothing read between; the width read after both, and the position fixed if it took another (its
+            // minimum). Live, a size, its read back, then the position showed the size alone for a refresh about
+            // one show in two, the far edge 30 to 80 pt in; a hide's two sets back to back seldom did (b2d39b4,
+            // 26.5.2 and 27).
+            plan = [.size, .placeAsked, .fix]
         } else if f.width < b.width || right.map({ b.minX + f.width <= $0 + 0.5 }) ?? false {
             plan = [.size, .place]
         } else {
@@ -364,12 +393,18 @@ public struct WindowGlide: Sendable {
             case .size:
                 if Self.near(f.width, b.width) && Self.near(f.height, b.height) { continue }
                 return .size(f)
+            case .placeAsked:
+                // At the width asked, the size just sent: its far edge where the frame has it.
+                expect = f
+                if Self.near(f.minX, b.minX, 0.5) && Self.near(f.maxY, b.maxY, 0.5) { continue }
+                return .position(f)
             case .positionFirst:
                 // Where it grows from, at the width it has.
                 let at = CGRect(x: f.minX, y: f.maxY - b.height, width: b.width, height: b.height)
                 if Self.near(at.minX, b.minX) && Self.near(at.maxY, b.maxY) { continue }
                 return .position(at)
             case .place, .fix:
+                if let w = took, !Self.near(w, f.width, 0.5) { cleanSpoilt = true; clean = false }
                 // A size the read says changed nothing: the browser is at its minimum, or late, or the read is
                 // behind the window. Nothing more of this frame: the window server decides (`step`).
                 if let w = took, !Self.near(f.width, b.width), Self.near(w, b.width, 0.5) {
