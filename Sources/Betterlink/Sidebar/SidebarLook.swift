@@ -46,6 +46,10 @@ enum SidebarLook: Equatable {
 
         func tab(for link: SavedLink) -> BrowserTab? { links.tab(for: link.id).flatMap { byId[$0] } }
 
+        /// The saved links whose tab is the window's active one: what a closed
+        /// folder still shows (`SidebarRows.peek`).
+        var activeLinks: Set<UUID> { Set(links.tabs.compactMap { byId[$0.value]?.active == true ? $0.key : nil }) }
+
         /// This match with its saved links resolved against the window's tabs.
         func resolving(_ p: SidebarProfile?) -> Match {
             var m = self

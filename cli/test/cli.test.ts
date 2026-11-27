@@ -86,6 +86,25 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     for (const c of ['sidebar icon set', 'sidebar icon clear']) expect(llms).toContain(`betterlink ${c}`)
   })
 
+  test('opens and closes one folder, or every folder with --all', () => {
+    const d = home()
+    const docs = run(d, 'sidebar', 'add-folder', '--name', 'Docs').json.id as string
+    expect(run(d, 'sidebar', 'add-folder', '--name', 'Inner', '--to', docs).code).toBe(0)
+    expect(run(d, 'sidebar', 'add-folder', '--name', 'Work').code).toBe(0)
+    const open = () => {
+      const items = run(d, 'sidebar', 'list').json[0].items
+      return [items[0].expanded, items[0].items[0].expanded, items[1].expanded]
+    }
+    expect(run(d, 'sidebar', 'expand', docs, '--open', 'off').code).toBe(0)
+    expect(open()).toEqual([false, true, true])
+    expect(run(d, 'sidebar', 'expand', '--all', '--open', 'off').code).toBe(0)
+    expect(open()).toEqual([false, false, false])
+    expect(run(d, 'sidebar', 'expand', '--all', '--open', 'on').code).toBe(0)
+    expect(open()).toEqual([true, true, true])
+    expect(run(d, 'sidebar', 'expand', docs, '--all', '--open', 'off').code).not.toBe(0)
+    expect(run(d, 'sidebar', 'expand', '--open', 'off').code).not.toBe(0)
+  })
+
   // The app carries the Tabs extension and puts it in one folder (under
   // BETTERLINK_HOME here, so this never touches the one a browser loads).
   test('says where the Tabs extension is, after putting it there', () => {

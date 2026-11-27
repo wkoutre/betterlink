@@ -20,13 +20,34 @@ import Testing
 
     @Test func favoritesThenItemsThenTabs() {
         let (p, f) = profile(expanded: true)
-        #expect(SidebarRows.visible(p, open: [], tabs: [7, 8])
+        #expect(SidebarRows.visible(p, active: [], tabs: [7, 8])
             == [.favorite(fav.id), .folder(f), .link(a.id), .link(b.id), .tab(7), .tab(8)])
+        // Open, a folder shows everything whichever tab is active.
+        #expect(SidebarRows.visible(p, active: [b.id], tabs: [])
+            == [.favorite(fav.id), .folder(f), .link(a.id), .link(b.id)])
     }
 
-    @Test func aClosedFolderListsOnlyItsOpenLinks() {
+    /// Like Dia: closed, a folder shows only the tab you are on, when that tab
+    /// is inside it, and folds away entirely when it isn't.
+    @Test func aClosedFolderShowsOnlyTheActiveTab() {
         let (p, f) = profile(expanded: false)
-        #expect(SidebarRows.visible(p, open: [b.id], tabs: []) == [.favorite(fav.id), .folder(f), .link(b.id)])
+        #expect(SidebarRows.visible(p, active: [b.id], tabs: []) == [.favorite(fav.id), .folder(f), .link(b.id)])
+        // The active tab is a Favorite, or a loose tab: nothing peeks out.
+        #expect(SidebarRows.visible(p, active: [fav.id], tabs: [7]) == [.favorite(fav.id), .folder(f), .tab(7)])
+        #expect(SidebarRows.visible(p, active: [], tabs: []) == [.favorite(fav.id), .folder(f)])
+    }
+
+    @Test func aClosedFolderShowsTheActiveTabFromAFolderInsideIt() {
+        var p = SidebarProfile(name: "P")
+        let outer = p.addFolder("Outer")
+        let inner = p.addFolder("Inner", in: outer)
+        p.addLink(a, in: inner)
+        p.addLink(b, in: outer)
+        p.toggleExpanded(outer)
+        #expect(SidebarRows.visible(p, active: [a.id], tabs: []) == [.folder(outer), .link(a.id)])
+        guard case .folder(let f)? = SidebarProfile.find(outer, in: p.items) else { Issue.record("no folder"); return }
+        #expect(SidebarRows.peek(f, active: [a.id]).map(\.id) == [a.id])
+        #expect(SidebarRows.peek(f, active: []).isEmpty)
     }
 
     @Test func movingStopsAtTheEnds() {

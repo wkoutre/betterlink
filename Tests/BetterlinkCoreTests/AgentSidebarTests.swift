@@ -111,6 +111,29 @@ struct AgentSidebarTests {
         #expect(!still.expanded)
     }
 
+    @Test func everyFolderOpensOrClosesAtOnce() throws {
+        let f = try folder()
+        let a = try #require((call("sidebar.folders.add", ["name": "A"], in: f).data as? [String: Any])?["id"] as? String)
+        _ = call("sidebar.folders.add", ["name": "Inner", "to": a], in: f)
+        _ = call("sidebar.folders.add", ["name": "B"], in: f)
+        func open() throws -> [Bool] {
+            func walk(_ items: [SidebarItem]) -> [Bool] {
+                items.flatMap { item -> [Bool] in
+                    if case .folder(let x) = item { return [x.expanded] + walk(x.items) }
+                    return []
+                }
+            }
+            return walk(try lib(f).profiles[0].items)
+        }
+        #expect(call("sidebar.items.expand", ["all": true, "expanded": false], in: f).ok)
+        #expect(try open() == [false, false, false])
+        #expect(call("sidebar.items.expand", ["all": true, "expanded": true], in: f).ok)
+        #expect(try open() == [true, true, true])
+        #expect(!call("sidebar.items.expand", ["all": true, "id": a, "expanded": false], in: f).ok) // one or the other
+        #expect(!call("sidebar.items.expand", ["all": true], in: f).ok) // which way
+        #expect(try open() == [true, true, true])
+    }
+
     // MARK: Folder icons
 
     @Test func aFolderGetsAnEmojiOrASymbolAndLosesIt() throws {

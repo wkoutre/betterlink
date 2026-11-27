@@ -11,21 +11,28 @@ public enum SidebarRowID: Hashable, Sendable {
 /// The order the arrow keys move through the sidebar's rows. Pure, so it is
 /// unit tested; the view draws the cursor and runs the actions.
 public enum SidebarRows {
-    /// The rows on screen, top to bottom: the Favorites, the saved items (a
-    /// closed folder still lists its open links), then the window's own tabs.
-    public static func visible(_ p: SidebarProfile, open: Set<UUID>, tabs: [Int]) -> [SidebarRowID] {
+    /// The rows on screen, top to bottom: the Favorites, the saved items, then
+    /// the window's own tabs. `active`: the saved links whose tab is the
+    /// window's active tab, the only rows a closed folder still shows.
+    public static func visible(_ p: SidebarProfile, active: Set<UUID>, tabs: [Int]) -> [SidebarRowID] {
         func walk(_ items: [SidebarItem]) -> [SidebarRowID] {
             items.flatMap { item -> [SidebarRowID] in
                 switch item {
                 case .link(let l): return [.link(l.id)]
                 case .folder(let f):
-                    let inside = f.expanded ? walk(f.items)
-                        : SidebarProfile.links(in: f.items).filter { open.contains($0.id) }.map { .link($0.id) }
+                    let inside = f.expanded ? walk(f.items) : peek(f, active: active).map { .link($0.id) }
                     return [.folder(f.id)] + inside
                 }
             }
         }
         return p.favorites.map { .favorite($0.id) } + walk(p.items) + tabs.map { .tab($0) }
+    }
+
+    /// What a closed folder still shows, as Dia does: the link, at any depth
+    /// inside it, whose tab is the one you are on. Its other open links fold
+    /// away with it; a folder without the active tab folds away entirely.
+    public static func peek(_ f: SidebarFolder, active: Set<UUID>) -> [SavedLink] {
+        f.expanded ? [] : SidebarProfile.links(in: f.items).filter { active.contains($0.id) }
     }
 
     /// The row `step` rows away, stopping at the ends. With no cursor yet:
