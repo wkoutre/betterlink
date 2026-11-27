@@ -83,46 +83,6 @@ jobs:
       # and commit the result.
       - run: git diff --exit-code -- Package.resolved
 
-  # TEMPORARY (dropped before merge): proves release.yml's parallel parts on this PR.
-  release-parts-check:
-    strategy:
-      matrix:
-        part: [app, cli, guard-1, guard-2]
-    name: release-parts-check (${{ matrix.part }})
-    runs-on: macos-latest
-    timeout-minutes: 45
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: 1.4.4
-          no-cache: true
-      - run: ./scripts/check-bun.sh # the build of Bun we pinned, by checksum
-      - name: make test / make test-cli, this part
-        shell: bash
-        env:
-          PART: ${{ matrix.part }}
-          GUARD: everyCaseKeepsTheFourRules
-          GUARD_PARTS: 2 # the guard-N parts in the matrix above
-        # SWIFT_TEST_FLAGS here replaces the Makefile's, which only a Mac with
-        # the Command Line Tools and no Xcode needs; the runner has Xcode.
-        run: |
-          case "$PART" in
-            app) make test SWIFT_TEST_FLAGS="--skip $GUARD" ;;
-            cli) make test-cli ;;
-            guard-*)
-              k=${PART#guard-}
-              BETTERLINK_GUARD_SHARD="$k/$GUARD_PARTS" make test SWIFT_TEST_FLAGS="--filter $GUARD" | tee "$RUNNER_TEMP/guard.log"
-              # A filter that matched nothing would pass with no cases run.
-              grep -q "SidebarGuard: part $k of $GUARD_PARTS, [1-9][0-9]* of " "$RUNNER_TEMP/guard.log" ||
-                { echo "::error::The sidebar guard didn't run its part $k of $GUARD_PARTS."; exit 1; } ;;
-            *) echo "::error::Unknown part $PART"; exit 1 ;;
-          esac
-
   # Dependabot intake. Runs only on Dependabot's own PRs, after swift-test
   # passed. It waits for every other check on the PR (zizmor, outside apps),
   # then squash-merges the bump if the policy below allows it, or leaves one
