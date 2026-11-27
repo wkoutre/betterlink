@@ -327,7 +327,7 @@ enum AgentCommand {
         if off == true {
             SyncDefaults.setFolder(nil, in: d)
             // Off: no rule is unresolved any more (rules list reads this).
-            try? SyncLocalStore(folder: folder).update { $0.unresolvedRules = nil }
+            try? SyncLocalStore(folder: folder).update { $0.unresolvedRules = nil; $0.missingProfiles = nil }
         }
         if target != nil || off == true {
             // A hold and its answer were about the old folder.

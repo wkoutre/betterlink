@@ -167,6 +167,9 @@ public enum SyncModel {
     /// What a merge changed on this Mac that wasn't its own choice, for the Log.
     public struct Notes: Equatable, Sendable {
         public var unresolvedRules: [UUID] = []
+        /// For each of those, the profile it was made for on another Mac
+        /// (its name there, else its account or folder), to show beside it.
+        public var missingProfiles: [UUID: String] = [:]
         public var orphansMovedToTop: [UUID] = []
         public var cyclesBroken: [UUID] = []
     }
@@ -221,7 +224,12 @@ public enum SyncModel {
             rules.rules = live("rule:").compactMap { id, f in
                 guard let u = uuid(id), let kind = f["kind"]?.value.string.flatMap(Rule.Kind.init(rawValue:)),
                       let pattern = f["pattern"]?.value.string, f["browser"]?.value.string != nil else { return nil }
-                if place(id) == nil { notes.unresolvedRules.append(u) }
+                if place(id) == nil {
+                    notes.unresolvedRules.append(u)
+                    let wanted = [state.value(id, TargetKeys.rule.name)?.string, state.value(id, TargetKeys.rule.account)?.string,
+                                  state.value(id, TargetKeys.rule.directory)?.string].compactMap { $0 }.first { !$0.isEmpty }
+                    if let wanted { notes.missingProfiles[u] = wanted }
+                }
                 let ref = applied[id]!
                 return Rule(id: u, kind: kind, pattern: pattern, browser: ref.browser, profile: ref.directory)
             }
