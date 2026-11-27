@@ -459,7 +459,20 @@ final class SidebarRig {
             SidebarRig.notices.append((notice, frame))
             SidebarRig.noticeTimes.append(self.time)
         }
+        SidebarPanel.watch = { [weak self] p in
+            guard let self, self.instance.panel == nil || p === self.instance.panel else { return }
+            self.panelShows.append((self.time, self.gone ? 0 : self.shown(of: p), self.gone ? 0 : self.over(of: p), !self.gone && p.isVisible))
+        }
     }
+
+    /// Each change to what shows of the panel (its outline, or whether it is
+    /// ordered in) since the last press: when, and how much of the sidebar
+    /// showed then. The window server draws whatever the panel last had, so
+    /// a moment of a full panel between two ticks is seen here though no
+    /// tick's sample has it.
+    private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool)] = []
+    /// Where the last press came in `panelShows`.
+    private(set) var lastPressShows = 0
 
     /// The notes shown since the rig was made: why the sidebar didn't open, and over which frame.
     static var notices: [(SidebarNotice, CGRect)] = []
@@ -554,8 +567,10 @@ final class SidebarRig {
     private(set) var personPut: CGRect?
 
     /// How much of the sidebar shows now.
-    var shownWidth: CGFloat {
-        guard let p = instance.panel, p.isVisible else { return 0 }
+    var shownWidth: CGFloat { instance.panel.map(shown(of:)) ?? 0 }
+
+    private func shown(of p: SidebarPanel) -> CGFloat {
+        guard p.isVisible else { return 0 }
         let outer = side == .left ? p.frame.minX : p.frame.maxX
         let seam = p.reveal ?? (side == .left ? outer + sidebarWidth : outer - sidebarWidth)
         return max(0, side == .left ? seam - outer : outer - seam)
@@ -565,8 +580,10 @@ final class SidebarRig {
     /// the strip from its outer edge to the seam (`reveal`, or the whole
     /// sidebar), against the browser's frame on screen. Its corner fills
     /// over the window's rounded corners (`reach`) are not its body.
-    var panelOver: CGFloat {
-        guard !gone, let p = instance.panel, p.isVisible else { return 0 }
+    var panelOver: CGFloat { gone ? 0 : instance.panel.map(over(of:)) ?? 0 }
+
+    private func over(of p: SidebarPanel) -> CGFloat {
+        guard p.isVisible else { return 0 }
         let b = fake.frame
         let left = p.attachedSide == .left
         let lo = left ? p.frame.minX : max(p.reveal ?? p.frame.minX, p.frame.minX + p.reach)
@@ -580,6 +597,7 @@ final class SidebarRig {
 
     private func press() {
         pressedAt.append((time, fake.sent.count, true))
+        lastPressShows = panelShows.count
         SidebarController.shared.toggle(instance)
         presses += 1
         askedOpen = !instance.hidden
@@ -592,6 +610,7 @@ final class SidebarRig {
             press()
         case .follow, .width:
             pressedAt.append((time, fake.sent.count, { if case .follow = start { true } else { false } }()))
+            lastPressShows = panelShows.count
             if case .width(let w) = start { instance.setWidth(w) } else { instance.settle(window.target) }
             presses += 1
             askedOpen = !instance.hidden
@@ -612,6 +631,7 @@ final class SidebarRig {
         personPut = nil
         tilerPut = nil
         samples = []
+        panelShows = []
         press()
         sample()
         var frames = 0
@@ -676,6 +696,7 @@ final class SidebarRig {
         tilerPut = nil
         quitTook = nil
         samples = []
+        panelShows = []
         let pressed = time
         begin(start)
         sample()
@@ -1129,6 +1150,38 @@ struct RuleCheck {
         }
     }
 
+    /// Nothing of a sidebar that is closing is drawn over its browser, and
+    /// once ordered out it doesn't come back (Nick, 0.3.27: at the end of a
+    /// hide the whole panel flashed over the browser for an instant; live on
+    /// 3d5c1e4, 743 ms after the press, 220 ms after the slide had hidden it,
+    /// for 70 ms until it was ordered out). From the last press, when it
+    /// asked for the sidebar closed, and from a refusal's note: every change
+    /// to what shows of the panel is checked, not only each tick, since the
+    /// window server draws whatever the panel has between two ticks. While it
+    /// closes the panel may show only up to the browser's real edge, as a
+    /// slow browser leaves it (`SidebarSlide.seam`).
+    mutating func nothingShowsOnceClosed(_ step: String) {
+        guard !rig.gone, !rig.open else { return }
+        let shows = rig.panelShows
+        let pressed = rig.pressedAt.last?.t ?? 0
+        let note = SidebarRig.noticeTimes.last { $0 >= (rig.pressedAt.first?.t ?? 0) - 1e-9 }
+        let from = !rig.askedOpen ? pressed : note
+        guard let from else { return }
+        let first = !rig.askedOpen ? rig.lastPressShows : (shows.firstIndex { $0.t >= from - 1e-9 } ?? shows.count)
+        var out: Double?
+        for x in shows[first...] {
+            if x.over > 1 {
+                problems.append(String(format: "%@: %.0f pt of the sidebar drawn over the browser %.0f ms into closing", step, Double(x.over), (x.t - from) * 1000))
+                return
+            }
+            if !x.ordered { if out == nil { out = x.t }; continue }
+            if let out, x.shown > 0.5 {
+                problems.append(String(format: "%@: %.0f pt of the sidebar showed again %.0f ms after it was ordered out", step, Double(x.shown), (x.t - out) * 1000))
+                return
+            }
+        }
+    }
+
     /// A change of the person's to a closed window stands: the window is
     /// where they put it, the sidebar still closed, and no note more than
     /// `notes` (review N1).
@@ -1394,6 +1447,7 @@ struct GuardCase: CustomStringConvertible {
             check.timely(show)
             check.noCallSentAgain(show)
             check.panelNeverOver(show)
+            check.nothingShowsOnceClosed(show)
             if rig.gone {
                 // Quit or turned off while it was carried out: the window has the frame it started in
                 // (unless its browser wasn't answering then: see `goneUnanswered`).
@@ -1453,6 +1507,7 @@ struct GuardCase: CustomStringConvertible {
                         check.timely(step)
                         check.noCallSentAgain(step)
                         check.panelNeverOver(step)
+                        check.nothingShowsOnceClosed(step)
                         if rig.askedOpen {
                             check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: before, step)
                             if p == nil { check.refusedPromptly(from: pair, step) }
@@ -1490,6 +1545,7 @@ struct GuardCase: CustomStringConvertible {
                 check.timely(hide)
                 check.noCallSentAgain(hide)
                 check.panelNeverOver(hide)
+                check.nothingShowsOnceClosed(hide)
                 if rig.gone {
                     check.quitBound(hide)
                     if !rig.goneUnanswered {
@@ -2300,6 +2356,36 @@ struct GuardCase: CustomStringConvertible {
             for r in rigs { r.instance.close(closed: false) }
             #expect(clock - began <= GuardTiming.quit + 0.02, "\(side), 12 windows: turning off waited \(Int((clock - began) * 1000)) ms")
             for (r, f) in zip(rigs, before) { #expect(GuardFrames.same(r.fake.frame, f), "\(side): a hung window moved to \(r.fake.frame)") }
+        }
+    }
+
+    /// Nick on 0.3.27 (and live on 3d5c1e4: Chrome for Testing filling the
+    /// screen, the sidebar on the left at 280): around the moment the
+    /// browser stops at the end of a hide, the whole sidebar flashed over it
+    /// for an instant. Once a hide's slide has hidden the panel, nothing of
+    /// it shows until the next show; nor after a refusal's note.
+    @Test func aHideNeverShowsThePanelAgain() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        for side in SidebarSide.allCases {
+            for b in [BrowserBehaviour(), BrowserBehaviour(animation: 0.25), BrowserBehaviour(timing: .late, lateBy: 0.3)] {
+                let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: b)
+                rig.toggle()
+                #expect(rig.open, "\(side) \(b): didn't open")
+                rig.toggle()
+                var check = RuleCheck(rig, displays: [screen])
+                check.nothingShowsOnceClosed("\(side) \(b): hide")
+                #expect(!rig.open && GuardFrames.same(rig.fake.frame, full), "\(side) \(b): open \(rig.open), at \(rig.fake.frame)")
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
+            // Refused (Brave at 615 pt beside the screen's right edge): nothing shows after the note.
+            let rig = SidebarRig(displays: [screen], frame: CGRect(x: 1256, y: 0, width: 800, height: 1259), side: side, width: 280,
+                                 behaviour: BrowserBehaviour(minWidth: 615))
+            rig.toggle()
+            var check = RuleCheck(rig, displays: [screen])
+            check.nothingShowsOnceClosed("\(side): refused")
+            #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
         }
     }
 

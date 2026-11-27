@@ -361,11 +361,15 @@ final class SidebarInstance: ObservableObject {
         layout()
     }
 
-    /// The panel gone at once, mid-slide too.
+    /// The panel gone at once, mid-slide too. Ordered out first, and only
+    /// then its mask lifted for the next show: the mask change is committed
+    /// at once (`SidebarPanel.reshape`), so lifted first it drew the whole
+    /// panel over the browser until the order-out (Nick on 0.3.27; live on
+    /// 3d5c1e4, a 280 pt flash 220 ms after the slide had hidden the panel).
     private func closePanelNow() {
         slideRun = nil
-        panel?.reveal = nil
         panel?.hideNow()
+        panel?.reveal = nil
         isShown = false
     }
 
@@ -458,6 +462,12 @@ final class SidebarInstance: ObservableObject {
         let o = Opening(frame: frame, asked: browser, ends: cap)
         opening = o
         paired = true
+        // A panel on screen already (a new width's open): masked to where the browser really is before it
+        // is put beside the frame asked, so it never shows over the browser for a moment (`revealOpening`).
+        if !slide, let shown = self.panel, shown.isVisible {
+            let real = onScreenFrame
+            shown.reveal = side == .left ? real.minX : real.maxX
+        }
         let panel = placePanel(placement(beside: browser))
         if slide {
             let outer = side == .left ? panel.frame.minX : panel.frame.maxX
@@ -480,11 +490,17 @@ final class SidebarInstance: ObservableObject {
         let now = clock()
         let inner = SidebarSlide.innerEdge(outerEdge: run.outer, width: CGFloat(width), side: run.side, progress: run.slide.progress(at: now))
         var seam = inner
-        if run.hiddenWindow != run.shownWindow, let real = AXWindow.shownFrame(of: window.handle) {
+        if let real = AXWindow.shownFrame(of: window.handle) {
             let edge = run.side == .left ? real.minX : real.maxX
-            run.worstGap = max(run.worstGap, abs(edge - inner))
-            seam = SidebarSlide.seam(windowEdge: edge, innerEdge: inner,
-                                     hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
+            if run.hiddenWindow != run.shownWindow {
+                run.worstGap = max(run.worstGap, abs(edge - inner))
+                seam = SidebarSlide.seam(windowEdge: edge, innerEdge: inner,
+                                         hiddenEdge: run.side == .left ? run.hiddenWindow.minX : run.hiddenWindow.maxX, side: run.side)
+            } else {
+                // The browser isn't moved by this slide (a hide pressed while an open's browser hasn't moved
+                // yet): the panel slides alone, never over the browser.
+                seam = run.side == .left ? min(inner, edge) : max(inner, edge)
+            }
         }
         panel.reveal = seam
         run.frames += 1
@@ -503,13 +519,13 @@ final class SidebarInstance: ObservableObject {
         DragTrace.log(String(format: "slide %@: %d frames in %.0f ms, worst seam gap %.1f pt, window asked %@ got %@ (%@)",
                              out ? "out" : "in", run.frames, ms, run.worstGap,
                              "\(asked)", "\(got)", SidebarGeometry.same(asked, got) ? "as asked" : "not as asked"))
-        panel?.reveal = nil
         if out {
-            // Closed first, then the mask lifted: the whole panel never flashes.
+            // Ordered out first, then the mask lifted: the whole panel never flashes (`closePanelNow`).
             panel?.hideNow()
             isShown = false
             unpair()
         }
+        panel?.reveal = nil
         layout()
     }
 

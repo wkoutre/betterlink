@@ -30,6 +30,11 @@ final class SidebarPanel: NSPanel {
     static var headless = false
     private var headlessVisible = false
 
+    /// Tests: told each time what shows of the panel may have changed (its
+    /// outline, or whether it is ordered in), so the guard can check that
+    /// nothing of a hidden panel ever shows again (SidebarGuardTests).
+    static var watch: ((SidebarPanel) -> Void)?
+
     override var isVisible: Bool { Self.headless ? headlessVisible : super.isVisible }
 
     override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
@@ -39,12 +44,14 @@ final class SidebarPanel: NSPanel {
     override func order(_ place: NSWindow.OrderingMode, relativeTo otherWin: Int) {
         guard Self.headless else { return super.order(place, relativeTo: otherWin) }
         headlessVisible = place != .out
+        Self.watch?(self)
     }
 
     /// Off the screen at once.
     private func away() {
         headlessVisible = false
         if !Self.headless { super.orderOut(nil) }
+        Self.watch?(self)
     }
 
     private let effect = NSVisualEffectView()
@@ -150,6 +157,7 @@ final class SidebarPanel: NSPanel {
         shape.frame = b
         shape.path = path
         CATransaction.commit()
+        Self.watch?(self)
     }
 
     /// Window corners already worked out, by radius and scale.
