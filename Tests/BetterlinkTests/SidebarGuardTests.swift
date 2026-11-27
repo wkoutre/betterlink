@@ -83,6 +83,14 @@ struct BrowserBehaviour: CustomStringConvertible {
     /// (1 s unless lowered, `limitWaiting`) and gets no answer; the window
     /// server still shows the window.
     var hangs = false
+    /// Its app's AXEnhancedUserInterface is on when the case begins (Nick's
+    /// Chrome and Brave on macOS 27.2.1): while it is on, macOS animates
+    /// every set over about 250 ms (ease-out, the first change 16 to 31 ms
+    /// in), and a later set cuts the one in flight short where it has got
+    /// to; off, every set lands at once (`FakeApps`).
+    var enhancedUI = false
+    /// Its flag can't be set off (the set is refused).
+    var enhancedStuck = false
 
     /// Sizes it is given end up taken (late, once dropped, or after a tiling app, included).
     var sizesStick: Bool { !positionOnly && revertReads == 0 }
@@ -98,6 +106,7 @@ struct BrowserBehaviour: CustomStringConvertible {
         if sizeLag > 0 { s.append("macOS 27: a size lands \(sizeLag) reads later, dropped by anything sent meanwhile") }
         if stall > 0 { s.append("stops answering for \(stall) calls in every \(stall + every)\(staleReads ? ", reading stale" : "")") }
         if hangs { s.append("hung: every call waits out its time") }
+        if enhancedUI { s.append("enhanced UI on\(enhancedStuck ? ", can't be set off" : "")") }
         return s.joined(separator: ", ")
     }
 
@@ -124,8 +133,59 @@ struct BrowserBehaviour: CustomStringConvertible {
         if r.bool(0.15) { b.dropsSizeCall = r.int(1...8) }
         if r.bool(0.15) { b.tiler = true }
         if b.timing == .atOnce, r.bool(0.25) { b.stall = r.int(2...12); b.every = r.int(1...8); b.staleReads = r.bool() }
+        if r.bool(0.4) { b.enhancedUI = true; b.enhancedStuck = r.bool(0.15) }
         return b
     }
+}
+
+/// The browsers' apps as betterlink's `EnhancedUI` sees them: each app's
+/// AXEnhancedUserInterface by pid, every read and set of it, and the
+/// process's start time. A hung browser's calls wait out their time and get
+/// no answer, as its windows' do.
+@MainActor
+final class FakeApps: EnhancedUIApp {
+    static let shared = FakeApps()
+    var flags: [pid_t: Bool] = [:]
+    var stuck: Set<pid_t> = []
+    var launches: [pid_t: Date] = [:]
+    /// Every call, in order: a read (nil) or the value set.
+    private(set) var calls: [(pid: pid_t, set: Bool?)] = []
+    private(set) var missed = false
+    /// The fake browsers of each app, for whether it hangs and on whose clock it waits.
+    private var browsers: [pid_t: [Weak]] = [:]
+    private struct Weak { weak var fake: FakeBrowser? }
+
+    func register(_ fake: FakeBrowser, pid: pid_t) { browsers[pid, default: []].append(Weak(fake: fake)) }
+    func flag(_ pid: pid_t) -> Bool { flags[pid] ?? false }
+
+    /// Forgets the apps of the cases before (their fake browsers are gone with their rigs).
+    /// Several rigs that are windows of one browser: the first resets, the others pass `freshApps: false`.
+    func reset() {
+        flags = [:]; stuck = []; calls = []; launches = [:]
+        browsers = [:]
+    }
+
+    private func hung(_ pid: pid_t, _ wait: Double) -> Bool {
+        guard let f = browsers[pid]?.compactMap(\.fake).first(where: { $0.behaviour.hangs }) else { missed = false; return false }
+        f.wait(min(1, wait))
+        missed = true
+        return true
+    }
+
+    func read(_ pid: pid_t, wait: Double) -> Bool? {
+        calls.append((pid, nil))
+        return hung(pid, wait) ? nil : flags[pid] ?? false
+    }
+
+    func set(_ pid: pid_t, _ on: Bool, wait: Double) -> Bool {
+        calls.append((pid, on))
+        if hung(pid, wait) { return false }
+        if !on, stuck.contains(pid) { return false }
+        flags[pid] = on
+        return true
+    }
+
+    func launched(_ pid: pid_t) -> Date? { launches[pid] ?? Date(timeIntervalSince1970: 1_000_000) }
 }
 
 /// A browser window as macOS and a browser treat the sidebar's requests:
@@ -134,6 +194,13 @@ struct BrowserBehaviour: CustomStringConvertible {
 /// that moment. A move is not limited.
 @MainActor
 final class FakeBrowser: WindowHandle {
+    /// Its app's pid (`FakeApps`).
+    var pid: pid_t = 0
+    /// What a set animates over now: macOS 27's animation (`animation`), or,
+    /// while its app's enhanced UI is on, the system's 250 ms.
+    var animating: Double { behaviour.animation > 0 ? behaviour.animation : FakeApps.shared.flag(pid) ? FakeBrowser.enhancedAnimation : 0 }
+    static let enhancedAnimation = 0.25
+
     /// The frame on screen now (mid-animation: where the animation has got to).
     var frame: CGRect {
         guard let a = anim else { return base }
@@ -143,7 +210,7 @@ final class FakeBrowser: WindowHandle {
             let at = behaviour.holdAt * behaviour.animation
             if e > at { e = e < at + behaviour.animationHold ? at : e - behaviour.animationHold }
         }
-        let u = behaviour.animation > 0 ? e / behaviour.animation : 1
+        let u = a.length > 0 ? e / a.length : 1
         if u >= 1 { base = a.to; anim = nil; return base }
         if u <= 0 { return a.from } // not started
         let f = CGFloat(u < 0.5 ? 4 * u * u * u : 1 - pow(-2 * u + 2, 3) / 2)
@@ -151,7 +218,7 @@ final class FakeBrowser: WindowHandle {
                       width: a.from.width + (a.to.width - a.from.width) * f, height: a.from.height + (a.to.height - a.from.height) * f)
     }
     private var base: CGRect
-    private var anim: (from: CGRect, to: CGRect, start: Double, holds: Bool)?
+    private var anim: (from: CGRect, to: CGRect, start: Double, holds: Bool, length: Double)?
     /// Animations started, for holding every other one.
     private var animations = 0
     /// The rig's clock, for animations.
@@ -406,9 +473,9 @@ final class FakeBrowser: WindowHandle {
         let at = frame
         if anim != nil { base = at; anim = nil; history.append((at, false)) }
         guard f != at else { return }
-        if behaviour.animation > 0 {
+        if animating > 0 {
             animations += 1
-            anim = (at, f, now(), animations % 2 == 1)
+            anim = (at, f, now(), animations % 2 == 1, animating)
         } else {
             base = f
         }
@@ -433,8 +500,13 @@ final class SidebarRig {
 
     /// `hidden`: false for a window followed with its sidebar on, which
     /// opens when it is first followed (`follow(during:)`), not by a press.
+    /// The pid every rig's browser has unless a test gives it another: several
+    /// rigs are then windows of one browser.
+    nonisolated static let browserPid: pid_t = 50_001
+    let pid: pid_t
+
     init(displays: [Display], frame: CGRect, side: SidebarSide, width: Double, behaviour: BrowserBehaviour, reduceMotion: Bool = false,
-         hidden: Bool = true) {
+         hidden: Bool = true, pid: pid_t = SidebarRig.browserPid, freshApps: Bool = true) {
         Displays.source = { displays }
         SidebarPanel.headless = true
         _ = NSApplication.shared
@@ -446,6 +518,21 @@ final class SidebarRig {
         Self.nextNumber += 1
         window = TrackedWindow(element: AXUIElementCreateApplication(getpid()), number: Self.nextNumber, watcher: watcher, handle: fake)
         window.read()
+        self.pid = pid
+        window.target.pid = pid
+        fake.pid = pid
+        if freshApps {
+            FakeApps.shared.reset()
+            EnhancedUI.shared.forgetHolds()
+            try? FileManager.default.removeItem(at: EnhancedUI.shared.journal)
+        }
+        EnhancedUI.shared.app = FakeApps.shared
+        FakeApps.shared.register(fake, pid: pid)
+        if FakeApps.shared.flags[pid] == nil || freshApps {
+            FakeApps.shared.flags[pid] = behaviour.enhancedUI
+            if behaviour.enhancedStuck { FakeApps.shared.stuck.insert(pid) }
+        }
+        flagBefore = FakeApps.shared.flag(pid)
         instance = SidebarInstance(window: window, sidebar: controller, hidden: hidden, width: width)
         instance.clock = { [unowned self] in self.time }
         // Quitting waits on the rig's clock, as everything else does.
@@ -471,8 +558,13 @@ final class SidebarRig {
     /// a moment of a full panel between two ticks is seen here though no
     /// tick's sample has it.
     private(set) var panelShows: [(t: Double, shown: CGFloat, over: CGFloat, ordered: Bool)] = []
+    /// The app calls (`FakeApps`) before the last press.
+    private(set) var appCallsBefore = 0
     /// Where the last press came in `panelShows`.
     private(set) var lastPressShows = 0
+
+    /// Its browser's enhanced UI when the rig was made: what it must be again after every motion.
+    let flagBefore: Bool
 
     /// The notes shown since the rig was made: why the sidebar didn't open, and over which frame.
     static var notices: [(SidebarNotice, CGRect)] = []
@@ -632,6 +724,7 @@ final class SidebarRig {
         tilerPut = nil
         samples = []
         panelShows = []
+        appCallsBefore = FakeApps.shared.calls.count
         press()
         sample()
         var frames = 0
@@ -697,6 +790,7 @@ final class SidebarRig {
         quitTook = nil
         samples = []
         panelShows = []
+        appCallsBefore = FakeApps.shared.calls.count
         let pressed = time
         begin(start)
         sample()
@@ -727,7 +821,8 @@ final class SidebarRig {
                     goneAt = (time, fake.sent.count)
                     if case .turnOff = next.what { instance.close(closed: false) } else { instance.giveSpaceBack() }
                     if case .quitHung = next.what { quitTook = time - began }
-                    goneUnanswered = fake.missed
+                    // Hung, its flag's read misses first, and its windows are sent nothing.
+                    goneUnanswered = fake.missed || fake.behaviour.hangs
                     gone = true
                     askedOpen = false
                     lastEvent = time
@@ -755,6 +850,7 @@ final class SidebarRig {
         let b = fake.behaviour
         let calls = Double(fake.setCalls - callsBefore)
         var each = b.animation + b.animationDelay + b.animationHold + Double(b.sizeLag) / 30
+        if b.animation == 0, b.enhancedUI, b.enhancedStuck { each += FakeBrowser.enhancedAnimation }
         if b.timing != .atOnce { each += b.lateBy }
         if b.stall > 0 { each += Double(b.stall) / 60 }
         var waits = 0.0
@@ -1182,6 +1278,36 @@ struct RuleCheck {
         }
     }
 
+    /// The browser's enhanced UI is what it was before, once the app has
+    /// stopped moving the window (`EnhancedUI`): set off right before the
+    /// first set of a motion and back right after its last, never toggled per
+    /// frame, never set at all when it was off, and nothing holds it. A
+    /// browser hung when betterlink quit doesn't answer its flag's call: then
+    /// its flip is still recorded, for the next launch to set back.
+    mutating func flagRestored(_ step: String) {
+        let apps = FakeApps.shared, pid = rig.pid
+        let calls = apps.calls[min(rig.appCallsBefore, apps.calls.count)...]
+        if let other = calls.first(where: { $0.pid != pid }) { problems.append("\(step): the enhanced UI of pid \(other.pid) touched, not this browser's") }
+        if !rig.flagBefore, calls.contains(where: { $0.set != nil }) { problems.append("\(step): the enhanced UI was off, and was set: \(calls.map(\.set))") }
+        // Off, back, off, back: never off twice without back between, never back without off.
+        var off = false
+        for c in calls {
+            guard let v = c.set else { continue }
+            if v == off { off = !v } else if !v || apps.stuck.contains(pid) { continue } else {
+                problems.append("\(step): the enhanced UI set \(v) twice in a row: \(calls.compactMap(\.set))"); break
+            }
+        }
+        let offs = calls.filter { $0.set == false }.count
+        if offs > 4 * max(1, rig.presses) { problems.append("\(step): the enhanced UI set off \(offs) times for \(rig.presses) press(es)") }
+        if EnhancedUI.shared.isHeld(pid), !rig.instance.sliding { problems.append("\(step): the enhanced UI still held with nothing moving") }
+        if apps.flag(pid) != rig.flagBefore {
+            let recorded = EnhancedUI.shared.read().contains { $0.pid == pid && $0.was == rig.flagBefore }
+            if !(rig.goneUnanswered && recorded) {
+                problems.append("\(step): the enhanced UI is \(apps.flag(pid)), was \(rig.flagBefore)\(rig.goneUnanswered ? ", and not recorded for the next launch" : "")")
+            }
+        }
+    }
+
     /// A change of the person's to a closed window stands: the window is
     /// where they put it, the sidebar still closed, and no note more than
     /// `notes` (review N1).
@@ -1448,6 +1574,7 @@ struct GuardCase: CustomStringConvertible {
             check.noCallSentAgain(show)
             check.panelNeverOver(show)
             check.nothingShowsOnceClosed(show)
+            check.flagRestored(show)
             if rig.gone {
                 // Quit or turned off while it was carried out: the window has the frame it started in
                 // (unless its browser wasn't answering then: see `goneUnanswered`).
@@ -1508,6 +1635,7 @@ struct GuardCase: CustomStringConvertible {
                         check.noCallSentAgain(step)
                         check.panelNeverOver(step)
                         check.nothingShowsOnceClosed(step)
+                        check.flagRestored(step)
                         if rig.askedOpen {
                             check.shown(from: pair, mustOpen: canOpen(from: pair), offFrom: before, step)
                             if p == nil { check.refusedPromptly(from: pair, step) }
@@ -1529,6 +1657,7 @@ struct GuardCase: CustomStringConvertible {
                         let pair = rig.pair
                         rig.personDragsEdge(by: delta)
                         check.timely(step)
+                        check.flagRestored(step)
                         check.adjusted(from: pair, step)
                     case .moveSidebar(let dx):
                         rig.personMovesSidebar(by: dx)
@@ -1546,6 +1675,7 @@ struct GuardCase: CustomStringConvertible {
                 check.noCallSentAgain(hide)
                 check.panelNeverOver(hide)
                 check.nothingShowsOnceClosed(hide)
+                check.flagRestored(hide)
                 if rig.gone {
                     check.quitBound(hide)
                     if !rig.goneUnanswered {
@@ -2271,7 +2401,7 @@ struct GuardCase: CustomStringConvertible {
         // Browsers that answer each call 0.5 s late, and browsers that no longer take a size at all.
         for (late, slow) in [(BrowserBehaviour(timing: .late, lateBy: 0.5), false), (BrowserBehaviour(positionOnly: true), true)] {
             for side in SidebarSide.allCases {
-                let rigs = frames.map { SidebarRig(displays: [screen], frame: $0, side: side, width: 280, behaviour: BrowserBehaviour()) }
+                let rigs = frames.enumerated().map { SidebarRig(displays: [screen], frame: $1, side: side, width: 280, behaviour: BrowserBehaviour(), freshApps: $0 == 0) }
                 for r in rigs { r.toggle(); #expect(r.open, "\(side): didn't open") }
                 let pairs = rigs.map { pairFrame(browser: $0.fake.frame, sidebar: $0.sidebarWidth, side: side) }
                 var clock = (rigs.map(\.now).max() ?? 0) + 10
@@ -2303,7 +2433,7 @@ struct GuardCase: CustomStringConvertible {
         let frames = (0..<6).map { CGRect(x: CGFloat($0) * 150, y: 0, width: 1200, height: 1259) }
         for side in SidebarSide.allCases {
             for count in [1, 6] {
-                let rigs = frames.prefix(count).map { SidebarRig(displays: [screen], frame: $0, side: side, width: 280, behaviour: BrowserBehaviour()) }
+                let rigs = frames.prefix(count).enumerated().map { SidebarRig(displays: [screen], frame: $1, side: side, width: 280, behaviour: BrowserBehaviour(), freshApps: $0 == 0) }
                 for r in rigs { r.toggle(); #expect(r.open, "\(side): didn't open") }
                 var clock = (rigs.map(\.now).max() ?? 0) + 10
                 let began = clock
@@ -2340,7 +2470,7 @@ struct GuardCase: CustomStringConvertible {
                              visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
         for side in SidebarSide.allCases {
             let rigs = (0..<12).map { SidebarRig(displays: [screen], frame: CGRect(x: CGFloat($0) * 60, y: 0, width: 1200, height: 1259), side: side,
-                                                 width: 280, behaviour: BrowserBehaviour()) }
+                                                 width: 280, behaviour: BrowserBehaviour(), freshApps: $0 == 0) }
             for r in rigs { r.toggle(); #expect(r.open, "\(side): didn't open") }
             var clock = (rigs.map(\.now).max() ?? 0) + 10
             let began = clock
@@ -2387,6 +2517,77 @@ struct GuardCase: CustomStringConvertible {
             check.nothingShowsOnceClosed("\(side): refused")
             #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
         }
+    }
+
+    /// The browser's enhanced UI (on, as Nick's Chrome and Brave have it)
+    /// is set back to what it was on every path a motion can end by: a show
+    /// and a hide that land, a refusal (no room; no size taken at all, at
+    /// the cap), a press that takes over mid-motion, the person's change
+    /// mid-motion, quitting and turning the sidebar off mid-motion, a hung
+    /// browser at quit (recorded for the next launch, within quitting's
+    /// bound), and the window closing mid-motion.
+    @Test func theFlagIsSetBackOnEveryPath() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let full = CGRect(x: 0, y: 0, width: 2056, height: 1259)
+        let narrow = CGRect(x: 1256, y: 0, width: 800, height: 1259)
+        for side in SidebarSide.allCases {
+            let on = BrowserBehaviour(enhancedUI: true)
+            var paths: [(String, CGRect, BrowserBehaviour, [(at: Double, what: SidebarRig.During)])] = [
+                ("show and hide", full, on, []),
+                ("refused, no room", narrow, BrowserBehaviour(minWidth: 615, enhancedUI: true), []),
+                ("refused at the cap", full, BrowserBehaviour(positionOnly: true, enhancedUI: true), []),
+                ("pressed again mid-show", full, on, [(0.1, .press)]),
+                ("pressed twice mid-show", full, on, [(0.05, .press), (0.12, .press)]),
+                ("moved by the person mid-show", full, on, [(0.1, .person(left: -40, right: -40, dy: -20))]),
+                ("quit mid-show", full, on, [(0.1, .quit)]),
+                ("turned off mid-show", full, on, [(0.1, .turnOff)]),
+            ]
+            paths.append(("quit mid-show, the browser hung", full, on, [(0.1, .quitHung)]))
+            for (what, frame, b, during) in paths {
+                let rig = SidebarRig(displays: [screen], frame: frame, side: side, width: 280, behaviour: b)
+                rig.toggle(during: during)
+                var check = RuleCheck(rig, displays: [screen])
+                check.flagRestored("\(side), \(what)")
+                check.quitBound("\(side), \(what)")
+                if rig.open, !rig.gone {
+                    rig.toggle()
+                    check.flagRestored("\(side), \(what), then hidden")
+                }
+                #expect(check.problems.isEmpty, "\(check.problems.joined(separator: "\n"))")
+            }
+            // The window closes mid-show: its motion is over, and the flag set back.
+            let rig = SidebarRig(displays: [screen], frame: full, side: side, width: 280, behaviour: on)
+            rig.toggle(within: 0.1)
+            #expect(!FakeApps.shared.flag(rig.pid), "\(side): the flag isn't off mid-show")
+            rig.instance.close(closed: true)
+            #expect(FakeApps.shared.flag(rig.pid) && !EnhancedUI.shared.isHeld(rig.pid), "\(side): closed mid-show, flag \(FakeApps.shared.flag(rig.pid))")
+            #expect(EnhancedUI.shared.read().isEmpty, "\(side): still recorded \(EnhancedUI.shared.read())")
+        }
+    }
+
+    /// Only the browser whose window is moved has its enhanced UI touched:
+    /// another browser's, on as well, is never read or set. A flag already
+    /// off is read, never set.
+    @Test func onlyTheMovedBrowsersFlagIsTouched() {
+        let screen = Display(frame: CGRect(x: 0, y: 0, width: 2056, height: 1290),
+                             visibleFrame: CGRect(x: 0, y: 0, width: 2056, height: 1259), scale: 2)
+        let a = SidebarRig(displays: [screen], frame: CGRect(x: 0, y: 0, width: 1028, height: 1259), side: .left, width: 280,
+                           behaviour: BrowserBehaviour(enhancedUI: true), pid: 50_101)
+        let b = SidebarRig(displays: [screen], frame: CGRect(x: 1028, y: 0, width: 1028, height: 1259), side: .left, width: 280,
+                           behaviour: BrowserBehaviour(enhancedUI: true), pid: 50_102, freshApps: false)
+        a.toggle()
+        a.toggle()
+        #expect(!FakeApps.shared.calls.contains { $0.pid == b.pid }, "the other browser's flag touched: \(FakeApps.shared.calls)")
+        #expect(FakeApps.shared.flag(a.pid) && FakeApps.shared.flag(b.pid))
+        #expect(FakeApps.shared.calls.filter { $0.pid == a.pid && $0.set != nil }.map(\.set) == [false, true, false, true],
+                "\(FakeApps.shared.calls.map(\.set))")
+        let off = SidebarRig(displays: [screen], frame: CGRect(x: 0, y: 0, width: 2056, height: 1259), side: .right, width: 280,
+                             behaviour: BrowserBehaviour(), pid: 50_103)
+        off.toggle()
+        off.toggle()
+        #expect(FakeApps.shared.calls.allSatisfy { $0.set == nil }, "a flag that was off was set: \(FakeApps.shared.calls.map(\.set))")
+        #expect(FakeApps.shared.calls.count == 2, "one read per motion: \(FakeApps.shared.calls.count)")
     }
 
     /// PR 72's placements: a window filling the screen or snapped to a half,

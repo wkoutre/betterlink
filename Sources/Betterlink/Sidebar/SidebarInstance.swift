@@ -127,6 +127,7 @@ final class SidebarInstance: ObservableObject {
         edgeTimer = nil
         restoring = nil
         if closed { slideRun = nil; steps = nil; afterSteps = nil; opening = nil; refitting = nil; closing = nil; stopTicker() } else { giveSpaceBack() }
+        releaseFlag()
         panelTokens.forEach(NotificationCenter.default.removeObserver)
         panelTokens = []
         panel?.orderOut(nil)
@@ -213,6 +214,33 @@ final class SidebarInstance: ObservableObject {
     private var stops: CGFloat?
     private var afterSteps: (() -> Void)?
     private var ticker: Timer?
+
+    /// The browser's enhanced user interface held off for this window's
+    /// motion (`EnhancedUI`), from right before its first set until its
+    /// final target has landed; and whether the flag is off now, so its sets
+    /// aren't animated by it.
+    private var holdsFlag = false
+    private(set) var flagOff = false
+
+    /// Holds the flag off, right before a set is sent. Once per motion.
+    private func holdFlag() {
+        guard !holdsFlag else { return }
+        holdsFlag = true
+        flagOff = EnhancedUI.shared.hold(window.target.pid, by: self).off
+    }
+
+    /// The motion is over: the flag goes back to what it was. `wait`: how
+    /// long the call may wait for the browser (quitting has its bound).
+    func releaseFlag(wait: Double = AXWindow.callLimit) {
+        guard holdsFlag else { return }
+        holdsFlag = false
+        EnhancedUI.shared.release(window.target.pid, by: self, wait: wait)
+    }
+
+    /// Released once nothing of this window is moving: no steps, no drag of the edge.
+    private func releaseFlagIfIdle() {
+        if steps == nil, resizing == nil { releaseFlag() }
+    }
 
     /// Reduce Motion, and the clock. Tests set their own and step the slide
     /// and the browser's moves tick by tick (`stepSlide`), as the timer does.
@@ -326,7 +354,10 @@ final class SidebarInstance: ObservableObject {
 
     private func stepWindow() {
         guard var s = steps else { return }
-        if let call = s.step(seen: onScreenFrame, now: clock()) { AXWindow.send(call, to: window.handle) }
+        if let call = s.step(seen: onScreenFrame, now: clock()) {
+            holdFlag()
+            AXWindow.send(call, to: window.handle)
+        }
         guard s.done else { steps = s; return }
         steps = nil
         lastSlowest = s.slowest
@@ -335,6 +366,7 @@ final class SidebarInstance: ObservableObject {
         let then = afterSteps
         afterSteps = nil
         if s.interrupted { takenByOther() } else { then?() }
+        releaseFlagIfIdle()
     }
 
     /// Someone else moved or resized the window while betterlink was moving
@@ -630,10 +662,7 @@ final class SidebarInstance: ObservableObject {
     /// keeps its record, so it is recognised later instead of narrowed again.
     @discardableResult
     func giveSpaceBack() -> Bool {
-        let missed = spaceBack().map { AXWindow.placeNow([$0], clock: clock, pause: pause) } ?? []
-        let answered = missed.isEmpty
-        if answered { unpair() }
-        return answered
+        !sidebar.giveSpaceBack(of: [self], clock: clock, pause: pause).contains(ObjectIdentifier(window.handle))
     }
 
     /// What giving the space back takes: the move that gives the browser
@@ -643,7 +672,8 @@ final class SidebarInstance: ObservableObject {
     /// (`AXWindow.placeNow`), for every window together when betterlink
     /// quits, and then lets the window go (`unpair`) unless its browser
     /// didn't answer. Reads nothing from the browser: a hung one would hold
-    /// quitting up.
+    /// quitting up. The flag this window's motion held stays held until the
+    /// caller is done (`releaseFlag`).
     func spaceBack() -> AXWindow.Move? {
         let underWay = closedUnderWay
         opening = nil
@@ -960,6 +990,7 @@ final class SidebarInstance: ObservableObject {
                       + "sidebar \(Int(r.drag.width)) -> \(Int(width))")
         remember()
         layout()
+        releaseFlagIfIdle()
     }
 
     // MARK: - Layout
