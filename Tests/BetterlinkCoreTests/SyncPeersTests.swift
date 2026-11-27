@@ -83,10 +83,16 @@ struct SyncPeersTests {
         #expect(b.localNotes.load().unresolvedRules == [work])
         let list = try #require(Agent.run("rules.list", input: [:], env: AgentEnvironment(folder: b.settings, installed: [])).data as? [[String: Any]])
         #expect(list.map { $0["unresolved"] as? Bool } == [true, false])
+        // It names the profile it was made for (here its folder, as A's catalog has no names).
+        #expect(b.localNotes.load().missingProfiles == [work.uuidString: "Work"])
+        #expect(list.map { $0["madeFor"] as? String } == ["Work", nil])
+        #expect(SyncLocal.missingProfileNote(madeFor: "Work")
+                == "Made for \u{201C}Work\u{201D}, a profile that isn't on this Mac, so its links open in the profile shown here.")
         // Pointed at a profile this Mac has, it is an ordinary rule again.
         _ = try RuleStore(folder: b.settings).update { $0.rules[0].profile = "Here" }
         try b.pull(now: t(3))
         #expect(b.localNotes.load().unresolvedRules == nil)
+        #expect(b.localNotes.load().missingProfiles == nil)
     }
 
     /// N2: a Mac whose sync is held still says when, once a day, and nothing else.

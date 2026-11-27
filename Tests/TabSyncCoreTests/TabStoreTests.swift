@@ -129,6 +129,60 @@ struct TabStoreTests {
         #expect(HostRegistration.state(dataFolder: "Google/Chrome", hostPath: "/x/host", home: home) == .notInstalled)
     }
 
+    @Test func braveReadsChromesFolderSoSetUpWritesBoth() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("bl-tabs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let support = home.appendingPathComponent("Library/Application Support")
+        let brave = "BraveSoftware/Brave-Browser", chrome = "Google/Chrome"
+        try FileManager.default.createDirectory(at: support.appendingPathComponent(brave), withIntermediateDirectories: true)
+        #expect(HostRegistration.readFolder(dataFolder: brave) == chrome)
+        #expect(HostRegistration.readFolder(dataFolder: "Dia/User Data") == "Dia/User Data")
+
+        // Chrome never ran: its folder is made for Brave's sake.
+        try HostRegistration.install(dataFolder: brave, hostPath: "/x/host", home: home)
+        let own = HostRegistration.manifestURL(dataFolder: brave, home: home), read = HostRegistration.manifestURL(dataFolder: chrome, home: home)
+        #expect(FileManager.default.fileExists(atPath: own.path) && FileManager.default.fileExists(atPath: read.path))
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .installed)
+        // The state is the file Brave reads: without it Brave isn't set up, whatever its own folder holds.
+        try FileManager.default.removeItem(at: read)
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .notInstalled)
+
+        // An older set-up (own file only) is repaired at launch, once.
+        #expect(HostRegistration.repair(dataFolder: brave, hostPath: "/x/host", home: home))
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .installed)
+        #expect(!HostRegistration.repair(dataFolder: brave, hostPath: "/x/host", home: home))
+        // A stale own file (another betterlink) isn't copied over.
+        try FileManager.default.removeItem(at: read)
+        #expect(!HostRegistration.repair(dataFolder: brave, hostPath: "/moved/host", home: home))
+        try HostRegistration.install(dataFolder: brave, hostPath: "/x/host", home: home)
+
+        // Uninstall in Chrome leaves the file while Brave is set up.
+        try FileManager.default.createDirectory(at: support.appendingPathComponent(chrome), withIntermediateDirectories: true)
+        try Data("{}".utf8).write(to: support.appendingPathComponent(chrome).appendingPathComponent("Local State"))
+        let sharers = [brave, chrome, "Dia/User Data"]
+        #expect(try HostRegistration.uninstall(dataFolder: chrome, sharers: sharers, home: home) == .keptFor([brave]))
+        #expect(FileManager.default.fileExists(atPath: read.path))
+        // Uninstall in Brave: Chrome has run here, so the shared file stays for it; Brave's own goes.
+        #expect(try HostRegistration.uninstall(dataFolder: brave, sharers: sharers, home: home) == .keptFor([chrome]))
+        #expect(!FileManager.default.fileExists(atPath: own.path) && FileManager.default.fileExists(atPath: read.path))
+        // Brave reads as uninstalled, as asked, though the file stays for Chrome.
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .notInstalled)
+        #expect(HostRegistration.state(dataFolder: chrome, hostPath: "/x/host", home: home) == .installed)
+        // Then Chrome's Uninstall removes it.
+        #expect(try HostRegistration.uninstall(dataFolder: chrome, sharers: sharers, home: home) == .removed)
+        #expect(!FileManager.default.fileExists(atPath: read.path))
+    }
+
+    @Test func braveAloneRemovesTheSharedFile() throws {
+        let home = FileManager.default.temporaryDirectory.appendingPathComponent("bl-tabs-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: home) }
+        let brave = "BraveSoftware/Brave-Browser"
+        try FileManager.default.createDirectory(at: home.appendingPathComponent("Library/Application Support").appendingPathComponent(brave), withIntermediateDirectories: true)
+        try HostRegistration.install(dataFolder: brave, hostPath: "/x/host", home: home)
+        #expect(try HostRegistration.uninstall(dataFolder: brave, sharers: [brave, "Google/Chrome"], home: home) == .removed)
+        #expect(HostRegistration.state(dataFolder: brave, hostPath: "/x/host", home: home) == .notInstalled)
+    }
+
     @Test func aRegistrationForAnotherExtensionIdIsStale() throws {
         // Written before the extension took its Chrome Web Store id: the path is
         // right, but the browser would refuse the extension that asks today.

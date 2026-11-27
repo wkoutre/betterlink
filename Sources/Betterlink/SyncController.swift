@@ -32,6 +32,8 @@ final class SyncController: ObservableObject {
     /// Synced Link Rules whose browser profile this Mac doesn't have: the
     /// Link Rules page marks them.
     @Published private(set) var unresolvedRules: Set<UUID> = []
+    /// The profile each unresolved rule was made for on another Mac.
+    @Published private(set) var missingProfiles: [UUID: String] = [:]
 
     private var settings: SettingsFolder?
     private var session: SyncSession?
@@ -149,12 +151,14 @@ final class SyncController: ObservableObject {
 
     /// The hold and the history, as sync-local.json has them now.
     private func refreshNotes() {
-        guard let settings else { held = nil; history = []; restoring = []; unresolvedRules = []; return }
+        guard let settings else { held = nil; history = []; restoring = []; unresolvedRules = []; missingProfiles = [:]; return }
         let notes = SyncLocalStore(folder: settings).load()
         held = notes.held
         history = notes.history
         restoring = Set(notes.restore)
         unresolvedRules = folder == nil ? [] : Set(notes.unresolvedRules ?? [])
+        missingProfiles = folder == nil ? [:] : Dictionary(uniqueKeysWithValues: (notes.missingProfiles ?? [:])
+            .compactMap { k, v in UUID(uuidString: k).map { ($0, v) } })
     }
 
     // MARK: - Running
@@ -164,7 +168,7 @@ final class SyncController: ObservableObject {
         peers = []
         if folder == nil, let settings {
             // Off: no rule is unresolved any more (the CLI's rules list reads this too).
-            try? SyncLocalStore(folder: settings).update { $0.unresolvedRules = nil }
+            try? SyncLocalStore(folder: settings).update { $0.unresolvedRules = nil; $0.missingProfiles = nil }
         }
         refreshNotes()
         guard let folder, let settings else { status = "Off"; held = nil; return }

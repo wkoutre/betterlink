@@ -132,6 +132,17 @@ public struct SyncLocal: Codable, Equatable, Sendable {
     /// last sync found; they open in the fallback.
     /// Optional, so notes written before it still read.
     public var unresolvedRules: [UUID]?
+    /// The profile each of those was made for, by rule id (`SyncModel.Notes.missingProfiles`).
+    public var missingProfiles: [String: String]?
+
+    /// The line under such a rule on the Link Rules page. `madeFor` is the
+    /// profile it was made for, when the synced rule names one.
+    public static func missingProfileNote(madeFor: String?) -> String {
+        guard let name = madeFor else {
+            return "The profile this rule was made for isn't on this Mac, so its links open in the profile shown here."
+        }
+        return "Made for \u{201C}\(name)\u{201D}, a profile that isn't on this Mac, so its links open in the profile shown here."
+    }
 
     public init() {}
 

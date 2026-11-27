@@ -99,7 +99,6 @@ struct RulesEditor: View {
 
 private struct RuleRow: View {
     @EnvironmentObject var model: AppModel
-    @ObservedObject private var sync = SyncController.shared
     @Binding var rule: Rule
     let remove: () -> Void
 
@@ -123,11 +122,7 @@ private struct RuleRow: View {
             if !rule.pattern.isEmpty, let problem = rule.problem {
                 Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 62)
             }
-            if sync.unresolvedRules.contains(rule.id) {
-                Text(UnresolvedRuleNote.text)
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                    .padding(.leading, 62)
-            }
+            UnresolvedRuleNote(rule: rule.id, leading: 62)
         }
         .padding(.vertical, DS.Space.space1)
     }

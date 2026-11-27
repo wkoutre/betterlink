@@ -149,7 +149,6 @@ struct ProfileRulesDetail: View {
 /// of another profile that can take the same links.
 private struct ProfileRuleRow: View {
     @EnvironmentObject var model: AppModel
-    @ObservedObject private var sync = SyncController.shared
     let index: Int
     let rules: [Rule]
     let crossings: [RuleGroups.Crossing]
@@ -165,11 +164,7 @@ private struct ProfileRuleRow: View {
             }
             .accessibilityElement(children: .combine)
             // A synced rule whose profile this Mac lacks (docs/sync.md, Rules on another Mac).
-            if sync.unresolvedRules.contains(rule.id) {
-                Text(UnresolvedRuleNote.text)
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                    .padding(.leading, DS.Space.space6)
-            }
+            UnresolvedRuleNote(rule: rule.id)
             ForEach(crossings, id: \.self) { x in
                 note(x, rule: rule)
                     // Under the sentence, past the number column.
@@ -230,13 +225,12 @@ private struct ProfileRuleRow: View {
 /// another Mac). Sync points such a rule at the fallback, or the same
 /// browser's Default profile, and that is the profile the rule shows here.
 struct UnresolvedRuleNote: View {
-    static let text = "The profile this rule was made for isn't on this Mac, so its links open in the profile shown here."
     let rule: UUID
     var leading: CGFloat = DS.Space.space6
     @ObservedObject private var sync = SyncController.shared
     var body: some View {
         if sync.unresolvedRules.contains(rule) {
-            Text(Self.text)
+            Text(SyncLocal.missingProfileNote(madeFor: sync.missingProfiles[rule]))
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 .padding(.leading, leading)
         }
