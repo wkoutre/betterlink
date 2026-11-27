@@ -213,10 +213,10 @@ public enum TourRegistry {
         TourTopic(id: "sync", title: "Sync between Macs",
                   summary: "Share rules and Sidebar Profiles through a folder your cloud drive syncs.",
                   symbol: "arrow.triangle.2.circlepath", tile: .accent, tier: .more, page: "general", steps: [
-            TourStep(id: "sync-folder", revision: 2,
+            TourStep(id: "sync-folder", revision: 3,
                      title: "Sync your setup between Macs",
                      body: "Pick a folder that Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes its own file there and reads the others', so edits made on two Macs both land. Permissions, and which browser profile shows which Sidebar Profile, stay on each Mac.",
-                     changed: "Sync now asks before one Mac deletes many synced items at once, and Sync settings lists what sync removed here with Restore (betterlink sync history).", symbol: "arrow.triangle.2.circlepath",
+                     changed: "Sync settings now lists your other Macs and when each last synced, and Link Rules marks a rule whose profile isn't on this Mac.", symbol: "arrow.triangle.2.circlepath",
                      status: .syncFolder, control: .chooseSyncFolder, requires: nil,
                      cli: "betterlink sync set --folder ~/Dropbox/betterlink", cliWhy: nil),
         ]),

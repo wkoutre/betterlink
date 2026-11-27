@@ -244,7 +244,10 @@ struct RulesPage: View {
             .padding(.top, -DS.Space.space4)
         DSSection {
             ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
-                RuleSentence(index: i, count: model.rules.count, rule: rule, hidden: hidden.contains(i))
+                VStack(alignment: .leading, spacing: DS.Space.space2) {
+                    RuleSentence(index: i, count: model.rules.count, rule: rule, hidden: hidden.contains(i))
+                    UnresolvedRuleNote(rule: rule.id)
+                }
             }
         } footer: {
             HStack {
