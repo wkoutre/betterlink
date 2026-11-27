@@ -1182,7 +1182,8 @@ struct RuleCheck {
     /// left off the screen). `before`: the browser's frame before, and the
     /// sidebar's width then.
     mutating func sidebarStaysOnScreen(before: CGRect, width: CGFloat, put: CGRect, _ step: String) {
-        guard rig.open else { return }
+        // A move (the size within 2 pt) is the person's and stands (rule 3), wherever it puts the sidebar.
+        guard rig.open, abs(put.width - before.width) >= 2 || abs(put.height - before.height) >= 2 else { return }
         let was = SidebarGeometry.strip(beside: before, width: width, side: rig.side)
         let now = SidebarGeometry.strip(beside: rig.fake.frame, width: rig.sidebarWidth, side: rig.side)
         let ds = displays.map(\.frame)
