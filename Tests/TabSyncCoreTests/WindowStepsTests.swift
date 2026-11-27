@@ -17,6 +17,7 @@ import Testing
                 switch c {
                 case .size(let f): if takesSize { w.size.width = max(least, f.width); w.origin.y = w.maxY - f.height; w.size.height = f.height }
                 case .position(let f): w.origin.x = f.minX; w.origin.y = f.maxY - w.height
+                case .frame(let f): w = takesSize ? CGRect(x: f.minX, y: f.minY, width: max(least, f.width), height: f.height) : CGRect(origin: CGPoint(x: f.minX, y: f.maxY - w.height), size: w.size)
                 }
             }
             t += 1.0 / 120
@@ -150,6 +151,7 @@ import Testing
                 switch due.remove(at: i).call {
                 case .size(let f): w = CGRect(x: w.minX, y: w.maxY - f.height, width: f.width, height: f.height)
                 case .position(let f): w.origin = CGPoint(x: f.minX, y: f.maxY - w.height)
+                case .frame(let f): w = f
                 }
             }
             if let c = s.step(seen: w, now: t) { due.append((t + 0.4, c)) }
@@ -192,6 +194,7 @@ import Testing
             switch c {
             case .size(let f): w = CGRect(x: w.minX, y: w.maxY - f.height, width: f.width, height: f.height)
             case .position(let f): w.origin = CGPoint(x: f.minX, y: f.maxY - w.height)
+            case .frame(let f): w = f
             }
         }
         #expect(w == full, "\(w)")
@@ -255,6 +258,7 @@ import Testing
                     switch c {
                     case .size(let f): w = CGRect(x: w.minX, y: w.maxY - f.height, width: f.width, height: f.height)
                     case .position(let f): w.origin = CGPoint(x: f.minX, y: f.maxY - w.height)
+                    case .frame(let f): w = f
                     }
                 }
                 t += 1.0 / 120
@@ -305,6 +309,49 @@ import Testing
                 #expect(s.capped && !s.stoppedShort, "\(text)")
             }
         }
+    }
+
+    /// A slide-over's one set, sent by the caller (`init(sending:)`): a
+    /// browser that takes it at once is done once it has landed, with nothing
+    /// more sent (`clean`), either side, narrowing or widening.
+    @Test func oneSetThatLandsAtOnceIsAllThereIs() {
+        for (from, to, keep) in [(full, narrowed, SidebarSide.left), (narrowed, full, .left), (full, CGRect(x: 0, y: 0, width: 1776, height: 1290), .right)] {
+            let calls = WindowSet.calls(from: from, to: to, keep: keep, right: 2056)
+            let call: WindowSteps.Call = calls.count > 1 ? .frame(to) : calls[0]
+            var s = WindowSteps(target: to, keep: keep, deadline: 3, sending: call, from: from, at: 0)
+            var t = 1.0 / 120, more: [WindowSteps.Call] = []
+            while !s.done, t < 4 {
+                if let c = s.step(seen: to, now: t) { more.append(c) }
+                t += 1.0 / 120
+            }
+            #expect(s.clean && more.isEmpty && t < 0.3, "\(from) to \(to): clean \(s.clean), sent \(more), done at \(t)")
+        }
+    }
+
+    /// The set stopped at the browser's minimum (1830 of 1776 asked, on the
+    /// left: the window moved 280 and took 1830, its far edge out): it is
+    /// checked once more, then the far edge put back at the width it took.
+    /// Not clean: the final frame is owed.
+    @Test func oneSetStoppedAtAMinimumIsFinishedByTheSteps() {
+        var w = CGRect(x: 280, y: 0, width: 1830, height: 1290)
+        var s = WindowSteps(target: narrowed, keep: .left, widest: full.width - 200, deadline: 3, sending: .frame(narrowed), from: full, at: 0)
+        var t = 1.0 / 120, calls: [WindowSteps.Call] = []
+        while !s.done, t < 4 {
+            if let c = s.step(seen: w, now: t) {
+                calls.append(c)
+                if case .position(let f) = c { w.origin.x = f.minX }
+            }
+            t += 1.0 / 120
+        }
+        #expect(w == CGRect(x: 226, y: 0, width: 1830, height: 1290) && !s.clean && !s.interrupted && !s.stoppedShort, "at \(w), \(calls)")
+    }
+
+    /// A move by someone else while the set is on its way ends the steps
+    /// (the top edge moved): nothing more is sent.
+    @Test func someoneElsesMoveDuringTheSetEndsIt() {
+        var s = WindowSteps(target: narrowed, keep: .left, deadline: 3, sending: .frame(narrowed), from: full, at: 0)
+        #expect(s.step(seen: full.offsetBy(dx: 0, dy: -40), now: 0.01) == nil)
+        #expect(s.done && s.interrupted)
     }
 
     @Test func nothingToDoSendsNothing() {

@@ -21,6 +21,13 @@ final class TrackedWindow {
     /// is a browser window is for the browser to say, through the pairing
     /// (`BrowserWatcher.said`).
     fileprivate(set) var awaitsWord = false
+    /// Its sidebar's panel is sliding: it isn't read through Accessibility
+    /// meanwhile (`BrowserWatcher.refresh`), since a read waits for the
+    /// browser, and a browser laying its page out after a set would hold the
+    /// slide up. A read owed meanwhile (`readOwed`) is made once the panel is
+    /// still (`SidebarInstance`).
+    var quiet = false
+    var readOwed = false
 
     private static var lastId = 0
 
@@ -280,6 +287,7 @@ final class BrowserWatcher {
 
     /// Reads a window again, and reports it if anything changed.
     func refresh(_ w: TrackedWindow) {
+        if w.quiet { w.readOwed = true; return }
         let old = w.target
         guard w.read() else {
             if AXWindow.timedOut { isStalled = true }

@@ -68,10 +68,13 @@ import CoreGraphics
 /// Pure: the caller reads the frame on screen and sends what `step` returns.
 public struct WindowSteps: Sendable {
     /// What to send: a size, or a position, each as the frame it gives (Cocoa
-    /// coordinates), the window's top edge where `frame` has it.
+    /// coordinates), the window's top edge where `frame` has it; or both, the
+    /// frame whole, as a size and a position sent back to back in the order
+    /// `WindowSet` gives from where the window is (a slide-over's one set).
     public enum Call: Equatable, Sendable {
         case size(CGRect)
         case position(CGRect)
+        case frame(CGRect)
     }
 
     public let target: CGRect
@@ -127,9 +130,29 @@ public struct WindowSteps: Sendable {
     public private(set) var slowest = 0.0
     /// How many calls moved the window.
     private var moves = 0
-    /// Every call that moved the window had landed within `WindowGlide.instant`
-    /// of being sent, and one did: this window's sets land at once.
-    public var landedAtOnce: Bool { moves > 0 && slowest <= WindowGlide.instant }
+    /// Every call that moved the window had landed within `instant` of being
+    /// sent, and one did: this window's sets land at once.
+    public var landedAtOnce: Bool { moves > 0 && slowest <= Self.instant }
+    /// Longer than this to show a call: the browser's sets don't land at once.
+    public static let instant = 0.05
+    /// How many calls `step` has returned: none after the call the steps
+    /// were made with (`sending`) is one set and nothing more.
+    public private(set) var more = 0
+    /// The steps were made with their first call already sent
+    /// (`init(sending:)`), it landed at once and whole, and nothing more was
+    /// sent: the motion was that one set (no final resend is owed).
+    public var clean: Bool { opened && done && more == 0 && !capped && !interrupted && !stoppedShort && landedAtOnce && short == nil }
+    private var opened = false
+    /// Made with their first call already sent (`init(sending:)`): a slide-over's one set.
+    public var oneSet: Bool { opened }
+    /// That set was seen partway: its position on its way, or cut short by its
+    /// size where it began (`WindowSet.between` says which went first). The
+    /// browser's sets animate (macOS 27's, or its
+    /// enhanced UI on), and the second of a set cuts the first short: its
+    /// next show or hide goes a call at a time. A set that shows late, but
+    /// whole, is no such sign (MINI-16, 1df43a3: one set 70 ms late).
+    public private(set) var partway = false
+    private var between: CGRect?
     /// The longest the window took to start on a call of these steps (its
     /// first change), in seconds: macOS 27's animation can begin late.
     private var startLag = 0.0
@@ -179,53 +202,10 @@ public struct WindowSteps: Sendable {
     /// The longest a show or a hide may take, every call of it included.
     public static let cap = 3.0
 
-    /// A glide (`WindowGlide`) that moved the window toward `target` and gave
-    /// way: the steps go on as though their size had been sent at `at` from
-    /// `from` (the window before the glide), the window seen at `seen` and
-    /// last changed at `changed`. A size of the glide's still on its way
-    /// keeps the window's top left, so it is taken as theirs; held still
-    /// short of the target, the size is sent once more and the steps' checks
-    /// (a stop short, its minimum, the far edge) are made as after a size.
-    public struct Resume: Equatable, Sendable {
-        public var from: CGRect
-        public var seen: CGRect
-        public var at: Double
-        public var changed: Double
-        /// The window has changed since the call: else it hasn't started on it, and it is waited for (and sent
-        /// again every `patience`) as a call of the steps' own that changes nothing.
-        public var moved: Bool
-        public init(from: CGRect, seen: CGRect, at: Double, changed: Double, moved: Bool = true) {
-            self.from = from
-            self.seen = seen
-            self.at = at
-            self.changed = changed
-            self.moved = moved
-        }
-    }
-
-    /// Steps whose one call, `call`, was sent at `at` by someone of
-    /// betterlink's other than steps (a glide): to pass as `after` to the
-    /// steps that take over, which wait for it and never send it again.
-    /// `from`: the window when it was sent; `seen`: now; `changed`: when it
-    /// last changed; `moved`: whether it has changed since the call.
-    /// `own`: the steps that take over treat it as theirs (sent again if
-    /// dropped or held partway), though it isn't what they ask: a glide's
-    /// probe of a widening (`WindowGlide`), of the same motion.
-    public static func inFlight(_ call: Call, at: Double, from: CGRect, seen: CGRect, changed: Double, moved: Bool, own: Bool = false) -> WindowSteps {
-        var w = WindowSteps(target: seen, keep: nil)
-        w.sent = (call, at, seen, changed, from, moved, nil, false)
-        w.lends = own
-        return w
-    }
-
-    /// Its call in flight is the taking-over steps' own (`inFlight(own:)`).
-    private var lends = false
-
     /// `after`: the steps these replace, mid-way: their call in flight is
-    /// waited for first. `resuming`: a glide's, which these finish.
+    /// waited for first.
     public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
-                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil,
-                resuming glide: Resume? = nil) {
+                resends: Bool = false, watches: Bool = false, settles: Bool = false, stops: CGFloat? = nil, after earlier: WindowSteps? = nil) {
         self.target = target
         self.keep = keep
         self.widest = widest
@@ -239,12 +219,24 @@ public struct WindowSteps: Sendable {
         if let earlier, !earlier.done {
             sent = earlier.sent
             inherited = sent != nil
-            foreign = earlier.lends ? false : sent.map { !Self.reached($0.call, target) } ?? false
+            foreign = sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
-        } else if let glide {
-            phase = .sizing(from: glide.from, movedFirst: nil)
-            sent = (.size(target), glide.at, glide.seen, glide.changed, glide.from, glide.moved, nil, false)
         }
+    }
+
+    /// Steps whose first call, `call`, the caller has just sent at `at`, the
+    /// window then at `from`: a slide-over's one set (`WindowSet`), a size, a
+    /// position or both back to back (`.frame`). They wait for it as their
+    /// own (sent again if dropped, checked if it holds still short) and go on
+    /// from where it leaves the window, as after their own size: a browser
+    /// that stops at its minimum, or stops short, is checked as then.
+    public init(target: CGRect, keep: SidebarSide?, widest: CGFloat? = nil, retreats: Bool = true, deadline: Double? = nil,
+                stops: CGFloat? = nil, sending call: Call, from: CGRect, at: Double, between: CGRect? = nil) {
+        self.init(target: target, keep: keep, widest: widest, retreats: retreats, deadline: deadline, stops: stops)
+        opened = true
+        self.between = between
+        sent = (call, at, from, at, from, false, nil, false)
+        if case .position = call { phase = .placed } else { phase = .sizing(from: from, movedFirst: nil) }
     }
 
     private static func near(_ a: CGFloat, _ b: CGFloat) -> Bool { abs(a - b) < 1 }
@@ -263,17 +255,34 @@ public struct WindowSteps: Sendable {
         case .position(let t):
             return near(p.width, seen.width) && near(p.height, seen.height)
                 && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
+        case .frame(let t):
+            // A position and a size, back to back, either first: there, or the position on its way (the size kept, the
+            // left and top edges going toward where they were sent), or the size on its way (the top left kept, where
+            // it was or where the position put it), at any width (a browser takes what it can).
+            let topLeft = (near(p.minX, seen.minX) && near(p.maxY, seen.maxY)) || (near(t.minX, seen.minX) && near(t.maxY, seen.maxY))
+            let moving = near(p.width, seen.width) && near(p.height, seen.height)
+                && between(seen.minX, p.minX, t.minX) && between(seen.maxY, p.maxY, t.maxY)
+            return topLeft || moving
+        }
+    }
+
+    /// The size a call asks, if it asks one.
+    private static func size(of c: Call) -> CGRect? {
+        switch c {
+        case .size(let f), .frame(let f): f
+        case .position: nil
         }
     }
 
     private static func narrows(_ c: Call, _ from: CGRect) -> Bool {
-        if case .size(let f) = c { f.width < from.width - 1 } else { false }
+        size(of: c).map { $0.width < from.width - 1 } ?? false
     }
 
     private static func reached(_ c: Call, _ seen: CGRect) -> Bool {
         switch c {
         case .size(let f): return near(seen.width, f.width) && near(seen.height, f.height)
         case .position(let f): return near(seen.minX, f.minX) && near(seen.maxY, f.maxY)
+        case .frame(let f): return near(seen.width, f.width) && near(seen.height, f.height) && near(seen.minX, f.minX) && near(seen.maxY, f.maxY)
         }
     }
 
@@ -296,6 +305,16 @@ public struct WindowSteps: Sendable {
                     done = true
                     return nil
                 }
+                if opened, moves == 0, more == 0 {
+                    // A position on its way (its left edge between where it was and where it was sent), or, where the
+                    // position goes first, a size that landed before it (the position cut short where it began). A
+                    // browser that stops at its minimum, its position landed, is neither.
+                    let from = s.from
+                    let across = !Self.near(seen.minX, from.minX) && !Self.near(seen.minX, target.minX)
+                    let positionFirst = between.map { Self.near($0.minX, target.minX) && !Self.near(from.minX, target.minX) } ?? false
+                    let cut = positionFirst && Self.near(seen.minX, from.minX) && !Self.near(seen.width, from.width)
+                    if across || cut { partway = true }
+                }
                 if !s.moved { startLag = max(startLag, now - s.at) }
                 if let c = s.checkedAt, !s.resumed { s.resumed = true; startLag = max(startLag, now - c) }
                 s.last = seen
@@ -307,14 +326,14 @@ public struct WindowSteps: Sendable {
             // A narrower size of a show or hide, the window already no wider than this window's browser
             // was seen to stop at (`stops`), at or above the width asked: not moving is its answer too.
             let atStop = capped && !foreign && Self.narrows(s.call, s.from) && !s.moved
-                && { if case .size(let f) = s.call, let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
+                && { if let f = Self.size(of: s.call), let stops, stops >= f.width - 0.5, seen.width <= stops + 0.5 { true } else { false } }()
             let still = (s.moved || atStop) && (s.checkedAt == nil || s.resumed) && now - s.changed >= Self.still
             // Reached, and no longer changing: an animation is never cut short a point from its end. A
             // narrower size, carrying out a show or hide or sending the final target, only once it has
             // held still too: a browser can take it and then widen itself back to its minimum.
             let holds = (capped || resends) && Self.narrows(s.call, s.from)
             // Settling: a size, reached, and nothing changed for `still`, whether it moved or not.
-            let settling = settles && { if case .size = s.call { true } else { false } }()
+            let settling = settles && Self.size(of: s.call) != nil
             let arrived = Self.reached(s.call, seen) && s.changed < now && (!holds || still) && (!settling || now - s.changed >= Self.still)
             // Held still short of what it asked, carrying out a show or hide or sending the final target:
             // sent once more, since macOS 27 can hold an animation partway. Moving again, it goes on;
@@ -325,6 +344,10 @@ public struct WindowSteps: Sendable {
                 s.checkedAt = now
                 s.changed = now
                 sent = s
+                more += 1
+                // A whole frame held still: its size, which is what an animation holds partway (its place, if missing,
+                // goes after, as after a size); sent whole, a position cut short the first time would move it again.
+                if case .frame(let f) = s.call { return .size(f) }
                 return s.call
             }
             // Once more, it hasn't moved within `still` plus the longest these steps' calls took to start.
@@ -344,6 +367,7 @@ public struct WindowSteps: Sendable {
                     s.at = now
                     s.changed = now
                     sent = s
+                    more += 1
                     return s.call
                 }
             }
@@ -389,7 +413,7 @@ public struct WindowSteps: Sendable {
                 return nil
             }
             // The steps taken over from asked this same narrower size, and the window answered: that answer is this one's.
-            if let a = adopt, a.moved, case .size(let f) = a.call, abs(f.width - target.width) < 1, abs(f.height - target.height) < 1,
+            if let a = adopt, a.moved, let f = Self.size(of: a.call), abs(f.width - target.width) < 1, abs(f.height - target.height) < 1,
                target.width < a.from.width {
                 adopt = nil
                 phase = .sizing(from: a.from, movedFirst: nil)
@@ -467,6 +491,7 @@ public struct WindowSteps: Sendable {
     }
 
     private mutating func send(_ c: Call, _ seen: CGRect, _ now: Double) -> Call {
+        more += 1
         sent = (c, now, seen, now, seen, false, nil, false)
         inherited = false
         foreign = false

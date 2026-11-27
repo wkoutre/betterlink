@@ -61,6 +61,23 @@ protocol WindowHandle: AnyObject {
     var missed: Bool { get }
     /// In native full screen (`AXFullScreen`); nil when it can't be read.
     func isFullScreen() -> Bool?
+    /// Sends `sets` in order, back to back, on this window's own serial
+    /// queue, never on the caller's thread, and returns at once: a browser
+    /// slow to answer (Brave laying its page out, Nick's recording of 0.3.34
+    /// on macOS 27) never holds up the panel's slide. In tests, a queue on
+    /// the rig's clock.
+    func send(_ sets: [AXSet])
+    /// Sets sent with `send` and not yet answered.
+    var sending: Bool { get }
+    /// Sets sent with `send` and not yet begun are dropped (quitting sends
+    /// the window's last word itself, at once).
+    func dropUnsent()
+}
+
+/// One Accessibility set, in Accessibility's coordinates.
+enum AXSet: Equatable, Sendable {
+    case size(CGSize)
+    case position(CGPoint)
 }
 
 /// A browser window through Accessibility, and the window server by its number.
@@ -105,6 +122,57 @@ final class AXHandle: WindowHandle {
     }
 
     func shownBounds() -> CGRect? { WindowServer.bounds(number) }
+
+    /// This window's own queue for betterlink's sets (`send`), and how many
+    /// sends are on it. `dropUnsent` moves the generation on: a send of an
+    /// older generation not yet begun does nothing.
+    private let queue = DispatchQueue(label: "com.wkoutre.betterlink.window-sets", qos: .userInteractive)
+    private var outstanding = 0
+    private let generation = Generation()
+
+    var sending: Bool { outstanding > 0 }
+
+    func send(_ sets: [AXSet]) {
+        guard !sets.isEmpty else { return }
+        outstanding += 1
+        let el = Element(value: element), gen = generation, g = gen.value
+        queue.async { [weak self] in
+            var missed = false
+            if gen.value == g { for s in sets { missed = AXHandle.apply(s, to: el.value) || missed } }
+            DispatchQueue.main.async {
+                MainActor.assumeIsolated {
+                    guard let self else { return }
+                    self.outstanding -= 1
+                    if gen.value == g { self.missed = missed }
+                }
+            }
+        }
+    }
+
+    func dropUnsent() { generation.next() }
+
+    /// One set, off the main thread. True when the browser didn't answer in time.
+    private nonisolated static func apply(_ s: AXSet, to el: AXUIElement) -> Bool {
+        switch s {
+        case .size(var z):
+            guard let v = AXValueCreate(.cgSize, &z) else { return false }
+            return AXUIElementSetAttributeValue(el, kAXSizeAttribute as CFString, v) == .cannotComplete
+        case .position(var p):
+            guard let v = AXValueCreate(.cgPoint, &p) else { return false }
+            return AXUIElementSetAttributeValue(el, kAXPositionAttribute as CFString, v) == .cannotComplete
+        }
+    }
+
+    /// The element, handed to the window's queue (Accessibility's calls may be made from any thread).
+    private struct Element: @unchecked Sendable { let value: AXUIElement }
+
+    /// A counter both threads read.
+    private final class Generation: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n = 0
+        var value: Int { lock.lock(); defer { lock.unlock() }; return n }
+        func next() { lock.lock(); n += 1; lock.unlock() }
+    }
 
     func isFullScreen() -> Bool? { AXWindow.copy(element, "AXFullScreen") }
 
