@@ -60,19 +60,32 @@ public struct ExtensionConnections: Equatable, Sendable {
             guard helperSetUp else { return nil }
             return "No Tabs extension is connected in \(browser). Add it in each profile, and check that Developer mode is still on in chrome://extensions."
         case .connected, .outdated:
-            let names = profiles.map(Self.label)
+            let names = labels
             var text = "Connected: " + names.joined(separator: ", ") + "."
-            let stale = profiles.filter(\.needsReload).map(Self.label)
+            let stale = profiles.indices.filter { profiles[$0].needsReload }.map { names[$0] }
             if !stale.isEmpty {
-                text += " " + stale.joined(separator: ", ") + (stale.count == 1 ? " runs" : " run")
-                    + " an older Tabs extension than betterlink's: reload it in chrome://extensions, or load the folder Show in Finder opens."
+                text += " Reload the Tabs extension in chrome://extensions for " + stale.joined(separator: " and ")
+                    + (stale.count == 1 ? ", which runs" : ", which run")
+                    + " an older copy than betterlink's, or load the folder Show in Finder opens."
             }
             return text
         }
     }
 
-    static func label(_ p: Profile) -> String {
-        (p.name ?? "a profile") + (p.version.map { " (\($0))" } ?? "")
+    /// Each profile's name and version. A profile whose name isn't found yet
+    /// (a copy loaded under another id, or one just connected) is "Unnamed
+    /// profile", numbered when there are several, so no two read the same.
+    var labels: [String] {
+        let unnamed = profiles.filter { $0.name == nil }.count
+        var n = 0
+        return profiles.map { p in
+            let name: String
+            if let given = p.name { name = given } else {
+                n += 1
+                name = unnamed > 1 ? "Unnamed profile \(n)" : "Unnamed profile"
+            }
+            return name + (p.version.map { " (\($0))" } ?? "")
+        }
     }
 }
 

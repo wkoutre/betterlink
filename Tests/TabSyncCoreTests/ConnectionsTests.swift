@@ -20,7 +20,7 @@ struct ConnectionsTests {
     @Test func connectedProfilesAreNamedInOrderWithTheirVersion() {
         let c = ExtensionConnections(running: true, sessions: [("Work", "0.3.4"), ("Claude", "0.3.4"), (nil, "0.3.4")], folderVersion: "0.3.4")
         #expect(c.state == .connected)
-        #expect(c.line(browser: "Google Chrome", helperSetUp: true) == "Connected: Claude (0.3.4), Work (0.3.4), a profile (0.3.4).")
+        #expect(c.line(browser: "Google Chrome", helperSetUp: true) == "Connected: Claude (0.3.4), Work (0.3.4), Unnamed profile (0.3.4).")
     }
 
     @Test func anOlderCopySaysToReloadIt() {
@@ -29,7 +29,7 @@ struct ConnectionsTests {
         #expect(c.profiles.map(\.needsReload) == [false, true] || c.profiles.map(\.needsReload) == [true, false])
         let line = c.line(browser: "Google Chrome", helperSetUp: true) ?? ""
         #expect(line.hasPrefix("Connected: Personal (0.2.0), Work (0.3.4)."))
-        #expect(line.contains("Personal (0.2.0) runs an older Tabs extension"))
+        #expect(line.hasSuffix("Reload the Tabs extension in chrome://extensions for Personal (0.2.0), which runs an older copy than betterlink's, or load the folder Show in Finder opens."))
     }
 
     @Test func aNewerCopyOrNoFolderIsNotOutdated() {
@@ -88,5 +88,12 @@ struct ConnectionsTests {
         #expect(s.tabs[20]?.title == "T20")
         #expect(s.tabs[20]?.windowId == 1)
         #expect(s.windows[1]?.tabIds == [20])
+    }
+
+    /// Seen live: two copies loaded under another id, so neither name is found.
+    @Test func unnamedProfilesAreToldApart() {
+        let c = ExtensionConnections(running: true, sessions: [(nil, "0.2.0"), (nil, "0.3.4")], folderVersion: "0.3.4")
+        #expect(c.line(browser: "Google Chrome", helperSetUp: true)
+            == "Connected: Unnamed profile 1 (0.2.0), Unnamed profile 2 (0.3.4). Reload the Tabs extension in chrome://extensions for Unnamed profile 1 (0.2.0), which runs an older copy than betterlink's, or load the folder Show in Finder opens.")
     }
 }
