@@ -229,6 +229,11 @@ struct SidebarView: View {
                     .lineLimit(1)
             }
             Spacer(minLength: 0)
+            // Needs no Browser Profile, so it works before the window's is known.
+            Button { FindTabPanel.shared.show() } label: { headerIcon("magnifyingglass") }
+                .buttonStyle(PressStyle())
+                .help("Find a Tab (\(SidebarController.shared.findShortcut.display))")
+                .accessibilityLabel("Find a Tab")
             Button { if let p = profile { newFolder(in: nil, p) } } label: { headerIcon("plus") }
                 .buttonStyle(PressStyle())
                 .disabled(match == nil || profile == nil)

@@ -33,6 +33,9 @@ final class SidebarController: ObservableObject {
     /// Shows and hides the sidebar of the window in front, while an attached
     /// browser is in front.
     @Published var shortcut: Shortcut { didSet { save(); hotKey.shortcut = shortcut; updateHotKey() } }
+    /// Opens the Find Tab panel (every open tab, in every attached browser
+    /// and profile), while an attached browser is in front.
+    @Published var findShortcut: Shortcut { didSet { save(); findHotKey.shortcut = findShortcut; updateHotKey() } }
 
     @Published private(set) var trusted = WindowTracker.isTrusted
     /// False when this macOS no longer says which window is which
@@ -44,6 +47,8 @@ final class SidebarController: ObservableObject {
     let readsWindowCorners = WindowServer.readsCorners
     /// Why the shortcut couldn't be registered, for the setting.
     @Published private(set) var hotKeyProblem: String?
+    /// Why the Find Tab shortcut couldn't be registered.
+    @Published private(set) var findHotKeyProblem: String?
 
     /// What a window gets when nothing was chosen for it: hidden or shown
     /// (`betterlink sidebar settings set --shown`, or the menu item with no
@@ -64,6 +69,7 @@ final class SidebarController: ObservableObject {
     private(set) var screensChangedAt = Date.distantPast
     private var tokens: [NSObjectProtocol] = []
     private let hotKey = SidebarHotKey()
+    private let findHotKey = SidebarHotKey(number: 2, shortcut: .findTabDefault)
     /// A separate domain while `BETTERLINK_HOME` is set, like the menu bar icon.
     private let defaults = MenuBarIcon.defaults()
 
@@ -73,6 +79,7 @@ final class SidebarController: ObservableObject {
         attachTo = attach
         collapsed = defaults.bool(forKey: "sidebar.collapsed")
         shortcut = Shortcut.load(defaults, key: "sidebar.shortcut") ?? .sidebarDefault
+        findShortcut = Shortcut.load(defaults, key: "sidebar.findShortcut") ?? .findTabDefault
         takeOverTabs = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
         enabled = defaults.bool(forKey: "sidebar.enabled")
         side = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? "") ?? .right
@@ -93,6 +100,8 @@ final class SidebarController: ObservableObject {
         tracker.onDragStart = { [weak self] id in self?.instances[id]?.panel?.windowNumber }
         hotKey.onPress = { [weak self] in self?.toggle() }
         hotKey.shortcut = shortcut
+        findHotKey.onPress = { FindTabPanel.shared.toggle() }
+        findHotKey.shortcut = findShortcut
         tokens.append(NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                              object: nil, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.screensChangedAt = Date() }
@@ -127,6 +136,10 @@ final class SidebarController: ObservableObject {
         if let s = SidebarSide(rawValue: defaults.string(forKey: "sidebar.side") ?? ""), s != side { side = s }
         let take = defaults.object(forKey: "sidebar.takeOverTabs") as? Bool ?? true
         if take != takeOverTabs { takeOverTabs = take }
+        let toggle = Shortcut.load(defaults, key: "sidebar.shortcut") ?? .sidebarDefault
+        if toggle != shortcut { shortcut = toggle }
+        let find = Shortcut.load(defaults, key: "sidebar.findShortcut") ?? .findTabDefault
+        if find != findShortcut { findShortcut = find }
         let on = defaults.bool(forKey: "sidebar.enabled")
         if on != enabled { enabled = on }
         applyForAll()
@@ -197,6 +210,8 @@ final class SidebarController: ObservableObject {
     private func updateHotKey() {
         hotKey.setRegistered(enabled && front != nil)
         if hotKeyProblem != hotKey.problem { hotKeyProblem = hotKey.problem }
+        findHotKey.setRegistered(enabled && front != nil)
+        if findHotKeyProblem != findHotKey.problem { findHotKeyProblem = findHotKey.problem }
     }
 
     // MARK: - Lifecycle
@@ -283,6 +298,7 @@ final class SidebarController: ObservableObject {
         defaults.set(enabled, forKey: "sidebar.enabled")
         defaults.set(side.rawValue, forKey: "sidebar.side")
         shortcut.save(defaults, key: "sidebar.shortcut")
+        findShortcut.save(defaults, key: "sidebar.findShortcut")
         defaults.set(takeOverTabs, forKey: "sidebar.takeOverTabs")
     }
 

@@ -331,6 +331,8 @@ const sidebarSettings = Cli.create('settings', { description: 'The sidebar on th
       width: z.number().min(200).max(440).optional().describe("Points, 200 to 440, for every window's sidebar (dragging an edge sets one window's)"),
       takeOverTabs: onOff("switch the browser's own tab strip to its collapsed vertical tabs").optional(),
       browsers: z.string().optional().describe('Browsers it attaches to, comma separated names or bundle ids'),
+      shortcut: z.string().optional().describe('The show/hide shortcut, Control with a key: "ctrl+opt+s" or "⌃⌥S"'),
+      findShortcut: z.string().optional().describe('The Find a Tab shortcut, Control with a key: "ctrl+opt+f" or "⌃⌥F"'),
     }),
     run: (c) => {
       const o = c.options
@@ -341,6 +343,8 @@ const sidebarSettings = Cli.create('settings', { description: 'The sidebar on th
         width: o.width,
         takeOverTabs: o.takeOverTabs && isOn(o.takeOverTabs),
         browsers: o.browsers?.split(',').map((b) => b.trim()).filter(Boolean),
+        shortcut: o.shortcut,
+        findShortcut: o.findShortcut,
       })
     },
   })
@@ -462,6 +466,11 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
       }
       return core('tabs.close', { tabs: ids, browser: c.options.browser })
     },
+  })
+  .command('find', {
+    description: 'Find open tabs in every connected browser and profile by words from their title or address (the Find Tab panel); then tabs activate',
+    args: z.object({ query: z.string().describe('Words from the title or address, in any order') }),
+    run: (c) => core('tabs.find', { query: c.args.query }),
   })
   .command('activate', { description: 'Switch to a tab', options: tabId, run: (c) => core('tabs.activate', c.options) })
   .command('move', {

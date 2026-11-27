@@ -30,17 +30,17 @@ import Testing
     }
 
     @Test func onShowsItsSettingsUnderTheSwitch() {
-        #expect(SidebarPagePlan(enabled: true).rows == [.show, .side, .shortcut])
+        #expect(SidebarPagePlan(enabled: true).rows == [.show, .side, .shortcut, .findShortcut])
     }
 
     /// What is wrong on this Mac sits between the switch and the settings,
     /// and only what is wrong.
     @Test func onSaysWhatThisMacIsMissing() {
-        #expect(SidebarPagePlan(enabled: true, trusted: false).rows == [.show, .accessibility, .side, .shortcut])
-        #expect(SidebarPagePlan(enabled: true, canTellWindowsApart: false).rows == [.show, .windowsWarning, .side, .shortcut])
-        #expect(SidebarPagePlan(enabled: true, readsWindowCorners: false).rows == [.show, .cornersNote, .side, .shortcut])
+        #expect(SidebarPagePlan(enabled: true, trusted: false).rows == [.show, .accessibility, .side, .shortcut, .findShortcut])
+        #expect(SidebarPagePlan(enabled: true, canTellWindowsApart: false).rows == [.show, .windowsWarning, .side, .shortcut, .findShortcut])
+        #expect(SidebarPagePlan(enabled: true, readsWindowCorners: false).rows == [.show, .cornersNote, .side, .shortcut, .findShortcut])
         #expect(SidebarPagePlan(enabled: true, canTellWindowsApart: false, readsWindowCorners: false, trusted: false).rows
-            == [.show, .windowsWarning, .cornersNote, .accessibility, .side, .shortcut])
+            == [.show, .windowsWarning, .cornersNote, .accessibility, .side, .shortcut, .findShortcut])
     }
 
     /// The page animates when its plan changes, so the plan changes exactly

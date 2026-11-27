@@ -57,7 +57,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(work.items).toEqual([])
     // Several Sidebar Profiles: which one must be said.
     expect(run(d, 'sidebar', 'add-link', '--url', 'https://x.example').code).not.toBe(0)
-    for (const c of ['sidebar profiles assign', 'sidebar import', 'sidebar settings set', 'tabs list', 'tabs extension', 'tabs close-others', 'tabs send']) {
+    for (const c of ['sidebar profiles assign', 'sidebar import', 'sidebar settings set', 'tabs list', 'tabs extension', 'tabs close-others', 'tabs send', 'tabs find']) {
       expect(spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout).toContain(`betterlink ${c}`)
     }
   })

@@ -53,4 +53,22 @@ struct ShortcutTests {
         d.set(Data("nope".utf8), forKey: "k")
         #expect(Shortcut.load(d, key: "k") == nil)
     }
+
+    @Test func parseReadsWordsAndGlyphs() {
+        #expect(Shortcut.parse("ctrl+opt+f") == .findTabDefault)
+        #expect(Shortcut.parse("Control + Option + F") == .findTabDefault)
+        #expect(Shortcut.parse("⌃⌥F") == .findTabDefault)
+        #expect(Shortcut.parse("⌃⌥S") == .sidebarDefault)
+        #expect(Shortcut.parse("ctrl+shift+1")?.display == "⌃⇧1")
+        #expect(Shortcut.parse("ctrl+space")?.display == "⌃Space")
+    }
+
+    @Test func parseRefusesWhatCantBeAShortcut() {
+        #expect(Shortcut.parse("opt+f") == nil)          // no Control
+        #expect(Shortcut.parse("ctrl+cmd+f") == nil)     // the browser's full screen
+        #expect(Shortcut.parse("ctrl+hyper+f") == nil)   // unknown modifier
+        #expect(Shortcut.parse("ctrl+f13") == nil)       // unknown key
+        #expect(Shortcut.parse("f") == nil)
+        #expect(Shortcut.parse("") == nil)
+    }
 }
