@@ -141,7 +141,7 @@ enum AgentCommand {
                 if on { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
                 return AgentResponseJSON.success(["enabled": SMAppService.mainApp.status == .enabled])
             } catch {
-                return AgentResponseJSON.failure("Couldn't change Open at login: \(error.localizedDescription). Use betterlink's Permissions page.")
+                return AgentResponseJSON.failure("Couldn't change Open at login: \(error.localizedDescription). Use the General page in betterlink's window.")
             }
         case "menu-bar.get":
             return AgentResponseJSON.success(["shown": MenuBarIcon.isShown(in: MenuBarIcon.defaults())])
@@ -252,7 +252,7 @@ enum AgentCommand {
 
     // MARK: Sync
 
-    /// General › Sync on this Mac, from the keys SyncController uses.
+    /// The Sync page on this Mac, from the keys SyncController uses.
     private static func syncSettings(folder: SettingsFolder) -> [String: Any] {
         let d = MenuBarIcon.defaults()
         let selection = SyncDefaults.selection(in: d)
