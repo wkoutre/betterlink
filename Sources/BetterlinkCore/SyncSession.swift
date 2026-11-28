@@ -476,7 +476,7 @@ public final class SyncSession {
                                           identity: identity, state: merged, applied: applied)
             let before = SyncModel.scope(selection, state: state), after = SyncModel.scope(sel, state: merged)
             for (id, fields) in local.sorted(by: { $0.key < $1.key })
-            where (id.hasPrefix("node:") || id.hasPrefix("sp:")) && after(id) && !(merged.entities[id] != nil && before(id)) {
+            where (id.hasPrefix("node:") || id.hasPrefix("sp:")) && (merged.entities[id] == nil || (after(id) && !before(id))) {
                 for (k, v) in fields.sorted(by: { $0.key < $1.key }) where merged.entities[id]?[k]?.value != v {
                     merged.entities[id, default: [:]][k] = Stamped(v, clock.tick(now: Self.ms(now)))
                 }
