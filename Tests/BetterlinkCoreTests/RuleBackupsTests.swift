@@ -17,7 +17,9 @@ private let both = ProfileCatalog(profiles: [
 ])
 private let fallbackRef = braveWork
 
-private func rule(_ pattern: String = "acme.com", _ targets: [ProfileRef]) -> Rule {
+private func rule(_ targets: [ProfileRef]) -> Rule { rule("acme.com", targets) }
+
+private func rule(_ pattern: String, _ targets: [ProfileRef]) -> Rule {
     var r = Rule(kind: .domain, pattern: pattern, browser: targets[0].browser, profile: targets[0].directory)
     r.setTargets(targets)
     return r
@@ -66,12 +68,12 @@ private struct Verdict: LinkScript {
         // The personal laptop has Dia.
         let personal = routes(rules, installed: [diaID, braveID]).decide("https://acme.com/x")
         #expect(opened(personal) == dia)
-        #expect(personal.chosenBy == .rule(1))
+        #expect(personal.chosenBy == Decision.Chooser.rule(1))
         #expect(personal.reason == "Rule 1 (domains matching acme.com) chose Primary.")
         // The work laptop has only Brave, though the catalog still lists Dia's profiles.
         let work = routes(rules, installed: [braveID]).decide("https://acme.com/x")
         #expect(opened(work) == brave)
-        #expect(work.chosenBy == .rule(1))
+        #expect(work.chosenBy == Decision.Chooser.rule(1))
         #expect(work.reason == "Rule 1 (domains matching acme.com) chose Primary, the first of its profiles this Mac has.")
         // A Mac with neither opens the fallback.
         let neither = routes(rules, installed: ["com.google.Chrome"]).decide("https://acme.com/x")
@@ -98,7 +100,7 @@ private struct Verdict: LinkScript {
         let list = ScriptVerdict.firstOf([ScriptTarget("Primary", browser: "Dia"), ScriptTarget("Primary", browser: "Brave")])
         let personal = routes([], installed: [diaID, braveID], script: Verdict(v: list)).decide("https://acme.com")
         #expect(opened(personal) == dia)
-        #expect(personal.chosenBy == .script)
+        #expect(personal.chosenBy == Decision.Chooser.script)
         let work = routes([], installed: [braveID], script: Verdict(v: list)).decide("https://acme.com")
         #expect(opened(work) == brave)
         let none = routes([], installed: [braveID], script: Verdict(v: .firstOf([ScriptTarget("Primary", browser: "Dia")])))
