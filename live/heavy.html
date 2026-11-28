@@ -1,0 +1,4 @@
+<title>heavy</title><body><div id=r></div><script>
+const r=document.getElementById('r');for(let i=0;i<20000;i++){const d=document.createElement('div');d.textContent='row '+i;r.appendChild(d)}
+let n=0;function f(){n++;for(let i=0;i<400;i++){const c=r.children[(n*400+i)%20000];c.textContent='row '+n+' '+i;c.style.width=(n%50)+'px'}requestAnimationFrame(f)}requestAnimationFrame(f)
+</script>
