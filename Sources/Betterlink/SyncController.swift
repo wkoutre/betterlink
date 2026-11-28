@@ -19,7 +19,9 @@ final class SyncController: ObservableObject {
     /// One line for the Sync settings: when it last synced, or what is wrong.
     @Published private(set) var status = "Off"
     /// Sidebar Profiles other Macs share that this Mac hasn't added.
-    @Published private(set) var offered: [(id: UUID, name: String)] = []
+    @Published private(set) var offered: [SyncOffer] = []
+    /// Offers whose Add or Merge waits for the next sync.
+    @Published private(set) var pendingOffers: Set<UUID> = []
     /// Sync held back instead of deleting many synced items at once
     /// (SyncGuard); nil while syncing.
     @Published private(set) var held: SyncHold?
@@ -118,8 +120,31 @@ final class SyncController: ObservableObject {
     /// see editors that save in place): sync it out.
     func localChanged() { if session != nil { schedulePull() } }
 
-    /// Adds a Sidebar Profile another Mac shares, with all its parts.
-    func add(_ id: UUID) { selection.profiles[id] = .init() }
+    /// Adds a Sidebar Profile another Mac shares, with all its parts, on the
+    /// next sync (`betterlink sync add`). The sync copies it in before it
+    /// starts syncing it: a selected profile this Mac doesn't have reads as
+    /// deleted here.
+    func add(_ offer: SyncOffer) {
+        request(offer) { if !($0.adding ?? []).contains(offer.id) { $0.adding = ($0.adding ?? []) + [offer.id] } }
+    }
+
+    /// Makes an offer and this Mac's profile with the same name one Sidebar
+    /// Profile on every Mac, with everything in both (`betterlink sync merge`).
+    func merge(_ offer: SyncOffer) {
+        let group = offered.filter { SyncModel.sameName($0.name, offer.name) }.map(\.id) + [offer.sameNameAs].compactMap { $0 }
+        request(offer) { $0.merging = ($0.merging ?? []) + [Array(Set(group + [offer.id])).sorted { $0.uuidString < $1.uuidString }] }
+    }
+
+    private func request(_ offer: SyncOffer, _ change: (inout SyncLocal) -> Void) {
+        guard let settings else { return }
+        do {
+            try SyncLocalStore(folder: settings).update(change)
+            pendingOffers.insert(offer.id)
+        } catch {
+            status = "Couldn't save that: \(error.localizedDescription)"
+        }
+        schedulePull()
+    }
 
     /// Answers a hold: delete those items on every Mac once, or keep them
     /// and take the shared ones back on this Mac. `betterlink sync resolve`
@@ -237,7 +262,10 @@ final class SyncController: ObservableObject {
             let others = Set(session.otherDevices)
             peers = session.peers
             status = "Synced \(Date().formatted(date: .omitted, time: .shortened))" + (others.isEmpty ? "" : " with \(others.count) other Mac\(others.count == 1 ? "" : "s")")
-            offered = session.offeredProfiles(localIDs: Set(selection.profiles.keys))
+            // An Add or Merge, or another Mac's merge, changed what this Mac syncs.
+            if r.selectionChanged, session.selection != selection { selection = session.selection }
+            offered = session.offers()
+            pendingOffers = []
         } catch let e as SyncSession.Held {
             if wasHeld != e.hold.ids { note(e.hold.reason) }
             let n = e.hold.ids.count

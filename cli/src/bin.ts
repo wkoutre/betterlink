@@ -540,6 +540,16 @@ const sync = Cli.create('sync', {
       })
     },
   })
+  .command('add', {
+    description: 'Add a Sidebar Profile another Mac shares (sync get lists them under offered); the next sync copies it in',
+    options: z.object({ profile: z.string().describe('The shared Sidebar Profile, by name or id (sync get, offered)') }),
+    run: (c) => core('sync.add', { profile: c.options.profile }),
+  })
+  .command('merge', {
+    description: "Make a shared Sidebar Profile and this Mac's one with the same name one profile on every Mac, keeping everything in both",
+    options: z.object({ profile: z.string().describe('The name both have, such as Primary, or the shared one\'s id (sync get, offered)') }),
+    run: (c) => core('sync.merge', { profile: c.options.profile }),
+  })
   .command('paused', {
     description: 'Show whether Sync is paused because this Mac would delete many synced items at once, and which',
     run: () => core('sync.paused'),

@@ -24,6 +24,10 @@ struct SidebarView: View {
     @State private var renamingProfile: UUID?
     /// The header's own field: a folder or link rename may be open too (review F2).
     @State private var profileDraft = ""
+    /// Naming a new Sidebar Profile in the header, for this browser profile.
+    @State private var creatingProfileFor: ProfileRef?
+    /// Why the name typed there can't be used yet.
+    @State private var profileNameProblem: String?
     @FocusState private var profileNameFocused: Bool
     /// The row a drag is over, and where in it.
     @State private var dropTarget: DropTarget?
@@ -70,7 +74,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(match: match, profile: profile, open: windowTabs)
                 // Another profile now: an open rename belonged to the last one.
-                .onChange(of: profile?.id) { renamingProfile = nil }
+                .onChange(of: profile?.id) { renamingProfile = nil; profileNameProblem = nil }
             if let m = match, let profile {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
                 let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
@@ -212,16 +216,39 @@ struct SidebarView: View {
 
     private func headerLine(match: Match?, profile: SidebarProfile?) -> some View {
         let known = match?.profile != nil
-        return HStack(spacing: DS.Space.space1) {
-            if let p = profile, renamingProfile == p.id {
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: DS.Space.space1) { headerRow(match: match, profile: profile, known: known) }
+            if let problem = profileNameProblem, creatingProfileFor != nil || renamingProfile != nil {
+                // The sidebar's own colors: its tint can be any profile color.
+                Label(problem, systemImage: "exclamationmark.circle").font(DS.TextStyle.caption).foregroundStyle(pal.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func headerRow(match: Match?, profile: SidebarProfile?, known: Bool) -> some View {
+            if let ref = creatingProfileFor {
+                TextField("New Sidebar Profile name", text: $profileDraft)
+                    .textFieldStyle(.plain)
+                    .font(DS.TextStyle.headline)
+                    .foregroundStyle(pal.text)
+                    .focused($profileNameFocused)
+                    .onAppear { profileNameFocused = true }
+                    .onChange(of: profileDraft) { profileNameProblem = nil }
+                    .onSubmit { createProfile(for: ref) }
+                    .onExitCommand { creatingProfileFor = nil; profileNameProblem = nil }
+                    .accessibilityLabel("New Sidebar Profile name")
+            } else if let p = profile, renamingProfile == p.id {
                 TextField("Name", text: $profileDraft)
                     .textFieldStyle(.plain)
                     .font(DS.TextStyle.headline)
                     .foregroundStyle(pal.text)
                     .focused($profileNameFocused)
                     .onAppear { profileNameFocused = true }
+                    .onChange(of: profileDraft) { profileNameProblem = nil }
                     .onSubmit { renameProfile(p.id) }
-                    .onExitCommand { renamingProfile = nil }
+                    .onExitCommand { renamingProfile = nil; profileNameProblem = nil }
             } else {
                 Text(profile?.name ?? "Sidebar")
                     .font(DS.TextStyle.headline)
@@ -252,7 +279,6 @@ struct SidebarView: View {
             .disabled(!known)
             .help(known ? "Sidebar Profile settings" : "Waiting to learn this window's Browser Profile")
             .accessibilityLabel("Sidebar Profile settings")
-        }
     }
 
     private func headerIcon(_ symbol: String) -> some View {
@@ -273,12 +299,9 @@ struct SidebarView: View {
                     }
                 }
             }
-            Button("New Sidebar Profile") {
-                animate { lib.change { l in
-                    let sp = SidebarProfile(name: known.name)
-                    l.profiles.append(sp)
-                    l.link(known.ref, to: sp.id)
-                } }
+            Button("New Sidebar Profile…") {
+                renaming = nil; iconEditing = nil; renamingProfile = nil; profileNameProblem = nil
+                profileDraft = ""; creatingProfileFor = known.ref
             }
         }
         if let p = profile {
@@ -293,8 +316,21 @@ struct SidebarView: View {
 
     private func renameProfile(_ id: UUID) {
         let name = profileDraft.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !name.isEmpty { lib.change(profile: id) { $0.name = name } }
+        // Unchanged or emptied: nothing to do. A name another profile has stays open to change.
+        if !name.isEmpty, lib.library.profiles.first(where: { $0.id == id })?.name != name {
+            if let problem = lib.library.nameProblem(name, except: id) { profileNameProblem = problem; return }
+            lib.change(profile: id) { $0.name = name }
+        }
+        profileNameProblem = nil
         renamingProfile = nil
+    }
+
+    /// Makes the Sidebar Profile named in the header and shows it for `ref`.
+    private func createProfile(for ref: ProfileRef) {
+        if let problem = lib.library.nameProblem(profileDraft) { profileNameProblem = problem; return }
+        animate { lib.change { _ = $0.addProfile(named: profileDraft, showingFor: ref) } }
+        profileNameProblem = nil
+        creatingProfileFor = nil
     }
 
     // MARK: - Favorites

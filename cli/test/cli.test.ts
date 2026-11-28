@@ -382,7 +382,7 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
   // (scripts/gen-tour.py checks each step's command and options exist).
   test('the tour, Sync and tab helper commands are listed for agents', () => {
     const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
-    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'sync paused', 'sync resolve', 'sync history', 'sync restore', 'tabs helpers', 'tabs setup', 'changelog list']) {
+    for (const c of ['tour status', 'tour show', 'tour new', 'tour done', 'tour reset', 'sync get', 'sync set', 'sync add', 'sync merge', 'sync paused', 'sync resolve', 'sync history', 'sync restore', 'tabs helpers', 'tabs setup', 'changelog list']) {
       expect(llms).toContain(`betterlink ${c}`)
     }
   })

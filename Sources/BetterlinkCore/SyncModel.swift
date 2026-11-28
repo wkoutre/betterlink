@@ -154,8 +154,9 @@ public enum SyncModel {
             if id == globalID || id == configID || id.hasPrefix("rule:") || id.hasPrefix("mod:") { return selection.global }
             if id.hasPrefix("sp:") { return uuid(id).flatMap { selection.profiles[$0] } != nil }
             if id.hasPrefix("node:") {
+                // A node of a merged profile belongs to the profile it was merged into.
                 guard let p = state.value(id, "profile")?.string.flatMap(UUID.init(uuidString:)),
-                      let parts = selection.profiles[p] else { return false }
+                      let parts = selection.profiles[mergeTarget(p, in: state)] else { return false }
                 return state.value(id, "container")?.string == "fav" ? parts.favorites : parts.folders
             }
             return false
@@ -245,12 +246,15 @@ public enum SyncModel {
         var lib = library
         for (pid, parts) in selection.profiles.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
             let sid = profileID(pid)
-            guard state.entities[sid] != nil else { continue }
+            guard state.entities[sid] != nil, mergeTarget(pid, in: state) == pid else { continue }
             if !state.isLive(sid) { lib.profiles.removeAll { $0.id == pid }; continue }
             var p = lib.profiles.first { $0.id == pid } ?? SidebarProfile(id: pid, name: "Profile")
             if parts.appearance, let n = state.value(sid, "name")?.string { p.name = n }
+            // Its own nodes, and those of any profile merged into it whose
+            // move hasn't reached this Mac yet.
             let nodes = state.entities.filter { k, f in
-                k.hasPrefix("node:") && state.isLive(k) && f["profile"]?.value.string == pid.uuidString
+                k.hasPrefix("node:") && state.isLive(k)
+                    && f["profile"]?.value.string.flatMap(UUID.init(uuidString:)).map { mergeTarget($0, in: state) } == pid
             }
             if parts.favorites {
                 p.favorites = nodes.filter { $0.value["container"]?.value.string == "fav" && $0.value["kind"]?.value.string == "link" }

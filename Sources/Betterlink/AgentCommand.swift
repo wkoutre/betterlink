@@ -20,7 +20,7 @@ enum AgentCommand {
         "menu-bar.get", "menu-bar.set",
         "updates.get", "updates.set",
         "toast.get", "toast.set",
-        "sync.get", "sync.set",
+        "sync.get", "sync.set", "sync.add", "sync.merge",
     ]
 
     static func run(_ args: [String]) -> Int32 {
@@ -216,6 +216,8 @@ enum AgentCommand {
             return AgentResponseJSON.success(syncSettings(folder: folder))
         case "sync.set":
             return setSyncSettings(input, folder: folder)
+        case "sync.add", "sync.merge":
+            return requestOffer(command == "sync.merge", input, folder: folder)
         case "folder.get":
             return AgentResponseJSON.success(["path": folder.directory.path,
                                               "isStandard": folder.directory == SettingsFolder.defaultDirectory])
@@ -261,6 +263,10 @@ enum AgentCommand {
             "global": selection.global,
             // The other Macs in the folder, with when each last synced.
             "macs": otherMacs(d),
+            // Sidebar Profiles other Macs share that this Mac hasn't added (sync add, sync merge).
+            "offered": offers(d, folder: folder).map { o -> [String: Any] in
+                ["id": o.id.uuidString, "name": o.name, "sameNameAs": o.sameNameAs?.uuidString ?? NSNull()]
+            },
             "profiles": selection.profiles.sorted { $0.key.uuidString < $1.key.uuidString }.map { entry -> [String: Any] in
                 ["id": entry.key.uuidString, "name": names[entry.key] ?? NSNull(),
                  "favorites": entry.value.favorites, "folders": entry.value.folders, "appearance": entry.value.appearance]
@@ -274,6 +280,55 @@ enum AgentCommand {
         let me: String? = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"] ?? d.string(forKey: "sync.device")
         let now = Date()
         return SyncFolder(root).peers(except: me).map { $0.describe(now: now) }
+    }
+
+    /// What every Mac's file in the sync folder holds, merged, and the
+    /// Sidebar Profiles in it this Mac hasn't added.
+    private static func shared(_ d: UserDefaults) -> SyncState? {
+        guard let root = SyncDefaults.folder(in: d) else { return nil }
+        return SyncFolder(root).readAll().files.reduce(SyncState()) { $0.merged(with: $1.state) }
+    }
+
+    private static func offers(_ d: UserDefaults, folder: SettingsFolder) -> [SyncOffer] {
+        guard let state = shared(d) else { return [] }
+        return SyncModel.offers(state: state, selected: Set(SyncDefaults.selection(in: d).profiles.keys),
+                                library: (try? SidebarStore(folder: folder).load()) ?? SidebarLibrary())
+    }
+
+    /// `sync add` and `sync merge`: noted in sync-local.json for the app's
+    /// next sync, which copies the profile in before it syncs it (Sync
+    /// settings' Add and Merge do the same).
+    private static func requestOffer(_ merge: Bool, _ input: [String: Any], folder: SettingsFolder) -> Data {
+        let d = MenuBarIcon.defaults()
+        guard let state = shared(d) else { return AgentResponseJSON.failure("Sync is off on this Mac (sync set --folder).") }
+        guard let wanted = (input["profile"] as? String)?.trimmingCharacters(in: .whitespaces), !wanted.isEmpty else {
+            return AgentResponseJSON.failure("Give profile: a Sidebar Profile another Mac shares, by name or id (sync get lists them under offered).")
+        }
+        let all = offers(d, folder: folder)
+        let hits = all.filter { $0.id.uuidString.lowercased() == wanted.lowercased() || SyncModel.sameName($0.name, wanted) }
+        guard let offer = hits.first else {
+            return AgentResponseJSON.failure("No Sidebar Profile \"\(wanted)\" is waiting to be added from another Mac (sync get lists them under offered).")
+        }
+        let store = SyncLocalStore(folder: folder)
+        do {
+            if merge {
+                guard offer.sameNameAs != nil else {
+                    return AgentResponseJSON.failure("No Sidebar Profile on this Mac is named \"\(offer.name)\"; use sync add.")
+                }
+                let library = (try? SidebarStore(folder: folder).load()) ?? SidebarLibrary()
+                let group = SyncModel.mergeGroup(offer.id, state: state, selected: Set(SyncDefaults.selection(in: d).profiles.keys), library: library)
+                try store.update { $0.merging = ($0.merging ?? []) + [group] }
+                return AgentResponseJSON.success(["merging": group.map(\.uuidString), "name": offer.name,
+                                                  "note": "They become one Sidebar Profile on every Mac, with the favorites and folders of all of them. " + Agent.syncNote])
+            }
+            guard hits.count == 1 else {
+                return AgentResponseJSON.failure("More than one shared Sidebar Profile is named \"\(wanted)\"; give its id (sync get), or merge them (sync merge).")
+            }
+            try store.update { if !($0.adding ?? []).contains(offer.id) { $0.adding = ($0.adding ?? []) + [offer.id] } }
+            return AgentResponseJSON.success(["adding": offer.id.uuidString, "name": offer.name, "note": Agent.syncNote])
+        } catch {
+            return AgentResponseJSON.failure("Couldn't save that: \(error.localizedDescription)")
+        }
     }
 
     private static func setSyncSettings(_ input: [String: Any], folder: SettingsFolder) -> Data {

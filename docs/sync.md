@@ -16,7 +16,18 @@ Never synced (they belong to one Mac): browser profiles themselves (each Mac's o
 
 A Mac only writes what it has chosen to sync and only applies what it has chosen to receive.
 
-A new Mac: install betterlink, turn on Sync and pick the folder, and the synced settings and Sidebar Profiles arrive. Then open Chrome in any profile and choose its Sidebar Profile from the sidebar's ⚙, as on any Mac. Nothing about another Mac's Chrome profiles carries over. Today that assignment is stored in sidebar.json (each Sidebar Profile's `browserProfiles`). Sync leaves that field out of the device files and never changes it on merge, so it stays per Mac. A Chrome profile with no assignment shows the default Sidebar Profile (the one linked to nothing, such as Primary), as it does now. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button.
+A new Mac: install betterlink, turn on Sync and pick the folder, and the synced settings and Sidebar Profiles arrive. Then open Chrome in any profile and choose its Sidebar Profile from the sidebar's ⚙, as on any Mac. Nothing about another Mac's Chrome profiles carries over. Today that assignment is stored in sidebar.json (each Sidebar Profile's `browserProfiles`). Sync leaves that field out of the device files and never changes it on merge, so it stays per Mac. A Chrome profile with no assignment shows the default Sidebar Profile (the one linked to nothing, such as Primary), as it does now. A profile synced on one Mac and not on another stays local on the second. When you first pick a folder, profiles that other Macs share but this one doesn't have yet are offered with an Add button (`betterlink sync add --profile <name>`). Add notes the request in this Mac's notes (`adding`) and the next sync copies the profile in before it starts syncing it. Turning the profile's switch on before it is here would make the push read it as deleted on this Mac, and delete it on every Mac.
+
+## Same-named profiles
+
+Every Mac starts with its own Sidebar Profile "Primary", each with its own id, so to sync they are different profiles. When another Mac shares a profile with the same name as one here (ignoring case), Sync settings offers **Merge** beside **Add Separately**; `betterlink sync merge --profile Primary` does the same.
+
+- A merge keeps one of the profiles, the survivor: the lowest id, so two Macs merging at once pick the same one. Each other one gets `mergedInto: <survivor>` and `deleted: true`, and its saved links and folders move into the survivor (their `profile` field), after the survivor's own. The survivor syncs every part of every profile merged into it.
+- Every Mac that syncs a merged profile follows on its next sync: its copy is folded into the survivor, or becomes the survivor when that Mac doesn't have it, keeping its browser profile links and anything it kept to itself. A profile a Mac keeps to itself is never touched by another Mac's merge.
+- Nothing is deleted. A merged profile's own entry going isn't listed under Recently changed by sync, and neither are its items moving.
+- Folders with the same name aren't combined, and duplicate saved links aren't removed: both stay, to tidy by hand.
+
+New Sidebar Profiles, from the sidebar's ⚙ or `betterlink sidebar profiles add`, ask for a name, and refuse one another profile here already has.
 
 ## Files
 

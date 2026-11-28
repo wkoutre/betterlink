@@ -132,6 +132,12 @@ public struct SyncLocal: Codable, Equatable, Sendable {
     /// last sync found; they open in the fallback.
     /// Optional, so notes written before it still read.
     public var unresolvedRules: [UUID]?
+    /// Sidebar Profiles other Macs share to add here on the next sync
+    /// (Sync settings' Add, `betterlink sync add`).
+    public var adding: [UUID]?
+    /// Groups of same-named Sidebar Profiles to make one on the next sync
+    /// (Sync settings' Merge, `betterlink sync merge`).
+    public var merging: [[UUID]]?
     /// The profile each of those was made for, by rule id (`SyncModel.Notes.missingProfiles`).
     public var missingProfiles: [String: String]?
 
@@ -238,6 +244,9 @@ public enum SyncSafety {
         var out: [SyncHistoryEntry] = []
         for id in new.entities.keys.sorted() where id != SyncModel.configID && scope(id) && old.isLive(id) {
             guard let before = old.entities[id], let after = new.entities[id] else { continue }
+            // A Sidebar Profile merged into another isn't gone: what was in it
+            // moved there, and its own entry going is no news.
+            if id.hasPrefix("sp:"), new.value(id, SyncModel.mergedIntoField) != nil { continue }
             let what = describe(id, in: old)
             func who(_ s: HLC) -> String { names[s.device] ?? "another Mac" }
             if !new.isLive(id), let d = after["deleted"] {
@@ -247,7 +256,8 @@ public enum SyncSafety {
                 continue
             }
             var previous: [String: SyncValue] = [:], stamp: HLC?
-            for (k, v) in after where !quiet.contains(k) {
+            // A saved link moving to another Sidebar Profile only happens in a merge.
+            for (k, v) in after where !quiet.contains(k) && !(id.hasPrefix("node:") && k == "profile") {
                 guard let was = before[k], v.stamp > was.stamp, v.value != was.value else { continue }
                 previous[k] = was.value
                 stamp = max(stamp ?? v.stamp, v.stamp)

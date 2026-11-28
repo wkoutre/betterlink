@@ -179,6 +179,7 @@ betterlink tabs extension                                     # where the Tabs e
 betterlink tabs setup --browser "Google Chrome"               # set up a browser's tab helper, as the Sidebar page does
 betterlink sync set --folder ~/Dropbox/betterlink             # sync through a folder your cloud drive keeps in sync
 betterlink sync history                                       # what sync deleted or replaced here; sync restore <id> puts one back
+betterlink sync merge --profile Primary                       # make another Mac's "Primary" and this Mac's one profile everywhere
 betterlink tour status                                        # every step of the tour, with the command that does it
 ```
 

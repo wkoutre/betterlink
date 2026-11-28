@@ -129,6 +129,12 @@ public final class SyncSession {
         public var restored: [SyncHistoryEntry] = []
         /// A "keep" answer to a hold was carried out.
         public var keepDone = false
+        /// The Adds and Merges this pull carried out (sync-local.json's `adding`, `merging`).
+        public var added: [UUID] = []
+        public var merged: [[UUID]] = []
+        /// The selection changed (an Add, a Merge, or another Mac's merge
+        /// this Mac followed): the app saves the new one.
+        public var selectionChanged = false
     }
 
     public init(settings: SettingsFolder, folder: SyncFolder, device: String, name: String, selection: SyncSelection,
@@ -335,7 +341,8 @@ public final class SyncSession {
         let unresolved = report.notes.unresolvedRules.sorted { $0.uuidString < $1.uuidString }
         let missing = Dictionary(uniqueKeysWithValues: report.notes.missingProfiles.map { ($0.key.uuidString, $0.value) })
         let before = localNotes.load()
-        guard !recorded.isEmpty || !restored.isEmpty || keepDone
+        let requests = done && (!report.added.isEmpty || !report.merged.isEmpty)
+        guard !recorded.isEmpty || !restored.isEmpty || keepDone || requests
                 || (done && (!before.restore.isEmpty || (before.unresolvedRules ?? []) != unresolved
                              || (before.missingProfiles ?? [:]) != missing)) else { return }
         try localNotes.update { notes in
@@ -345,6 +352,9 @@ public final class SyncSession {
                 // Asked for and done, or no longer in the history: either way, settled.
                 let known = Set(notes.history.map(\.id))
                 notes.restore.removeAll { restored.contains($0) || !known.contains($0) }
+                // Done; one asked for since this sync read the notes waits for the next.
+                notes.adding = notes.adding.map { a in a.filter { !report.added.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
+                notes.merging = notes.merging.map { m in m.filter { !report.merged.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
             }
             notes.history.removeAll { restored.contains($0.id) }
             notes.record(recorded, now: now)
@@ -393,6 +403,41 @@ public final class SyncSession {
         }
         report.keepDone = !(notes.decision?.keep.isEmpty ?? true)
 
+        // Add and Merge, asked for in Sync settings or by the CLI. The
+        // selection they change is this round's own until the sidebar is
+        // written: a sync that starts over, or a sidebar.json that can't be
+        // written, must not leave this Mac syncing a profile it doesn't have
+        // (its next push would delete that profile on every Mac).
+        var sel = selection
+        var requested: Set<UUID> = []
+        report.added = notes.adding ?? []
+        report.merged = notes.merging ?? []
+        for id in report.added where merged.isLive(SyncModel.profileID(id)) && sel.profiles[id] == nil {
+            sel.profiles[SyncModel.mergeTarget(id, in: merged)] = .init()
+        }
+        for group in report.merged {
+            if SyncModel.requestMerge(group, state: &merged, library: snap.library, selection: &sel, clock: &clock, now: Self.ms(now)) != nil {
+                requested.formUnion(group)
+            }
+        }
+        let followed = SyncModel.followMerges(merged, library: snap.library, selection: sel, requested: requested)
+        sel = followed.selection
+        if sel != selection || followed.library != snap.library {
+            // What now syncs that sync has never seen (a profile this Mac
+            // kept to itself until the merge, and what a fold brought in) is
+            // stamped now, or rebuilding the profile from the state below
+            // would leave it out.
+            let local = SyncModel.project(rules: snap.rules, library: followed.library, selection: sel,
+                                          identity: identity, state: merged, applied: applied)
+            for (id, fields) in local.sorted(by: { $0.key < $1.key })
+            where (id.hasPrefix("node:") || id.hasPrefix("sp:")) && merged.entities[id] == nil {
+                for (k, v) in fields.sorted(by: { $0.key < $1.key }) {
+                    merged.entities[id, default: [:]][k] = Stamped(v, clock.tick(now: Self.ms(now)))
+                }
+                merged.entities[id, default: [:]]["deleted"] = Stamped(.bool(false), clock.tick(now: Self.ms(now)))
+            }
+        }
+
         // `state` takes the merge one file at a time, once that file holds it:
         // the next push records whatever the files say that `state` doesn't,
         // so merging ahead of a file that isn't written would stamp this Mac's
@@ -401,7 +446,7 @@ public final class SyncSession {
             for (id, fields) in merged.entities where mine(id) { state.entities[id] = fields }
             for (id, e) in pending where mine(id) { found[id] = e }
         }
-        let r = SyncModel.materialize(merged, rules: snap.rules, library: snap.library, selection: selection, resolve: resolve)
+        let r = SyncModel.materialize(merged, rules: snap.rules, library: followed.library, selection: sel, resolve: resolve)
         // A sync that starts over may have moved things already: keep its notes.
         report.notes.unresolvedRules = r.notes.unresolvedRules
         report.notes.missingProfiles = r.notes.missingProfiles
@@ -414,6 +459,7 @@ public final class SyncSession {
 
         try replace(snap.library, with: r.library, in: sidebar.update, &report)
         adopt(Self.isLibrary)
+        if sel != selection { selection = sel; report.selectionChanged = true }
 
         if selection.global, let synced = merged.value(SyncModel.configID, "text"), synced.string != snap.config {
             let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")
@@ -436,15 +482,10 @@ public final class SyncSession {
         report.changedSettings = true
     }
 
-    /// Sidebar Profiles other Macs share that aren't in this Mac's selection,
-    /// to offer with an Add button.
-    public func offeredProfiles(localIDs: Set<UUID>) -> [(id: UUID, name: String)] {
-        state.entities.keys.filter { $0.hasPrefix("sp:") && state.isLive($0) }
-            .compactMap { k -> (id: UUID, name: String)? in
-                guard let u = SyncModel.uuid(k), !localIDs.contains(u) else { return nil }
-                return (u, state.value(k, "name")?.string ?? "Sidebar Profile")
-            }
-            .sorted { $0.name < $1.name }
+    /// Sidebar Profiles other Macs share that aren't on this Mac, to offer
+    /// with Add, and with Merge when one here has the same name.
+    public func offers() -> [SyncOffer] {
+        SyncModel.offers(state: state, selected: Set(selection.profiles.keys), library: (try? sidebar.load()) ?? SidebarLibrary())
     }
 
     static func ms(_ d: Date) -> Int64 { Int64(d.timeIntervalSince1970 * 1000) }

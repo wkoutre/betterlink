@@ -8,7 +8,7 @@ import Foundation
 extension Agent {
     static let syncCommands: [String] = ["sync.paused", "sync.resolve", "sync.history", "sync.restore"]
 
-    static let syncNote = "A running betterlink acts on it at once; otherwise it does when it next opens."
+    public static let syncNote = "A running betterlink acts on it at once; otherwise it does when it next opens."
 
     static func syncRun(_ command: String, _ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse? {
         let store = SyncLocalStore(folder: env.folder)

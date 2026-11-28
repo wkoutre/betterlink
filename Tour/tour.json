@@ -366,6 +366,13 @@
             "permissions": ["files-and-folders"],
             "settings": ["SyncSettings.sync.selection.global", "SyncSettings.on"]
           }
+        },
+        {
+          "id": "sync-merge",
+          "revision": 1,
+          "title": "Make your Primary profiles one",
+          "body": "Each Mac starts with its own Primary Sidebar Profile, so sync keeps them apart. When another Mac shares a profile with the same name as one here, Sync settings offers Merge, which makes them one profile on every Mac with the favorites and folders of both.",
+          "cli": "betterlink sync merge --profile Primary"
         }
       ]
     },

@@ -56,16 +56,7 @@ struct SyncSettingsSection: View {
                 ForEach(lib.library.profiles) { p in
                     profileRow(p.id, p.name)
                 }
-                ForEach(sync.offered, id: \.id) { o in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(o.name)
-                            Text("Shared from another Mac").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                        }
-                        Spacer()
-                        Button("Add") { sync.add(o.id) }
-                    }
-                }
+                ForEach(sync.offered) { o in offerRow(o) }
                 if !sync.history.isEmpty { recentlyChanged }
             }
         } header: {
@@ -129,6 +120,35 @@ struct SyncSettingsSection: View {
             }
         }
         .animation(.easeOut(duration: 0.15), value: parts != nil)
+    }
+
+    /// A Sidebar Profile another Mac shares. One with the same name as a
+    /// profile here (each Mac starts with its own "Primary") offers Merge,
+    /// which makes them one profile on every Mac; Add keeps them apart.
+    @ViewBuilder
+    private func offerRow(_ o: SyncOffer) -> some View {
+        let name = o.name.trimmingCharacters(in: .whitespaces)
+        HStack(spacing: DS.Space.space2) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Sidebar Profile \u{201C}\(name)\u{201D}")
+                Text(o.sameNameAs == nil ? "Shared from another Mac."
+                     : "Shared from another Mac, and this Mac has one with the same name. Merge makes them one profile on every Mac, with the favorites and folders of both.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer()
+            if sync.pendingOffers.contains(o.id) {
+                Text("Adding").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+            } else if o.sameNameAs != nil {
+                Button("Add Separately") { sync.add(o) }
+                    .help("Add it as a second profile named \u{201C}\(name)\u{201D}.")
+                Button("Merge") { sync.merge(o) }
+                    .buttonStyle(.dsPrimary)
+                    .help("Make it and this Mac's \u{201C}\(name)\u{201D} one Sidebar Profile on every Mac. Nothing in either is deleted.")
+            } else {
+                Button("Add") { sync.add(o) }
+            }
+        }
     }
 
     /// What this profile's switch covers now, in words.
