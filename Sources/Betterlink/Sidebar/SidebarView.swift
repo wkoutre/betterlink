@@ -103,12 +103,12 @@ struct SidebarView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
                             favorites(profile, m, windowTabs, several)
-                            // Every row is made, not only those in view: a lazy stack
-                            // makes the rows that come into view as a folder opens or
-                            // closes where they end up, at once, so they were seen drawn
-                            // over the rows still moving, at the start of an opening and
-                            // the end of a closing.
-                            VStack(alignment: .leading, spacing: 1) {
+                            // Lazy, though it makes the rows that come into view as a
+                            // folder opens or closes where they end up, at once (they show
+                            // over the rows still moving): with a plain VStack every row
+                            // moves together, but VoiceOver can no longer open a row's
+                            // menu (AXShowMenu fails, measured on macOS 26).
+                            LazyVStack(alignment: .leading, spacing: 1) {
                                 ForEach(profile.items) { item in
                                     node(item, depth: 0, profile, m, windowTabs, several).transition(Motion.reveal(reduceMotion))
                                 }
@@ -122,8 +122,7 @@ struct SidebarView: View {
                             } line: {
                                 newTabField(m)
                             }
-                            // Every tab row is made too, for the same reason.
-                            VStack(alignment: .leading, spacing: 1) {
+                            LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
                                     SkipUnchanged(key: rowKey(tab, profile, m, order, several)) {
