@@ -157,14 +157,15 @@ struct RulesPage: View {
         // Each view starts at the top.
         .id(view)
         .sheet(item: $sheet) { s in
-            RulesEditor(initial: model.rules, profile: s.profile, addOne: s.addOne) { sheet = nil }.environmentObject(model)
+            RulesEditor(initial: model.rules, profile: s.profile, addOne: s.addOne, key: model.ruleKey) { sheet = nil }
+                .environmentObject(model)
         }
         .sheet(isPresented: $editingKeys) {
             KeysEditor(initial: model.modifierRules) { editingKeys = false }.environmentObject(model)
         }
         // A profile whose last rule went away (here, from the CLI or another Mac) has no page.
         .onChange(of: model.rules) {
-            if case .profile(let ref) = view, !model.rules.contains(where: { $0.target == ref }) { view = .profiles }
+            if case .profile(let ref) = view, !model.rules.contains(where: { model.ruleKey($0) == ref }) { view = .profiles }
         }
         .onAppear(perform: openRequestedView)
     }
@@ -178,8 +179,8 @@ struct RulesPage: View {
     }
 
     @ViewBuilder private var overview: some View {
-        let groups = RuleGroups.groups(model.rules, order: model.catalog.profiles.map(\.ref))
-        let hidden = Set(RuleGroups.crossings(model.rules).filter(\.hidesLater).map(\.later))
+        let groups = RuleGroups.groups(model.rules, order: model.catalog.profiles.map(\.ref), key: model.ruleKey)
+        let hidden = Set(RuleGroups.crossings(model.rules, key: model.ruleKey).filter(\.hidesLater).map(\.later))
         PageHeader(title: "Link Rules",
                    subtitle: "Each link opens in the first rule that matches, checked top to bottom across every profile. Pick a profile to see and edit its rules. Everything else opens in the profile below.")
         if let err = model.rulesError {
@@ -237,7 +238,7 @@ struct RulesPage: View {
     }
 
     @ViewBuilder private var allRules: some View {
-        let hidden = Set(RuleGroups.crossings(model.rules).filter(\.hidesLater).map(\.later))
+        let hidden = Set(RuleGroups.crossings(model.rules, key: model.ruleKey).filter(\.hidesLater).map(\.later))
         BackHeader(title: "All Link Rules", back: { view = .profiles })
         Text("Every rule in the order they are checked. The first rule that matches a link decides where it opens.")
             .foregroundStyle(DS.Palette.textSecondary)
@@ -246,6 +247,20 @@ struct RulesPage: View {
             ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
                 VStack(alignment: .leading, spacing: DS.Space.space2) {
                     RuleSentence(index: i, count: model.rules.count, rule: rule, hidden: hidden.contains(i))
+                    if !rule.backups.isEmpty {
+                        // On its own line, so long profile names never squeeze the sentence above.
+                        HStack(spacing: DS.Space.space2) {
+                            Image(systemName: "arrow.turn.right.down").foregroundStyle(DS.Palette.textTertiary)
+                            Text("On a Mac without it, in").foregroundStyle(DS.Palette.textSecondary)
+                            ForEach(Array(rule.backups.enumerated()), id: \.element) { n, ref in
+                                if n > 0 { Text("or").foregroundStyle(DS.Palette.textSecondary) }
+                                ProfileLabel(ref: ref)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .font(DS.TextStyle.caption)
+                        .padding(.leading, DS.Space.space6)
+                    }
                     UnresolvedRuleNote(rule: rule.id)
                 }
             }

@@ -72,6 +72,13 @@ const profileOptions = {
 const onOff = (what: string) => z.enum(['on', 'off']).describe(`on or off: ${what}`)
 const isOn = (v: 'on' | 'off') => v === 'on'
 
+/** A rule's other profiles, in order. Repeat the option for each one. */
+const then = z.array(z.string()).optional()
+  .describe('Another profile for the rule, used on a Mac that doesn\'t have the ones before it: "Primary", or "Brave:Primary" to name the browser. Repeat for more, in order')
+
+/** `--then none` removes a rule's other profiles. */
+const thenInput = (v: string[] | undefined) => v === undefined ? undefined : v.length === 1 && v[0] === 'none' ? [] : v
+
 const kind = z.enum(['domain', 'startsWith', 'contains'])
   .describe('domain: the site and its subdomains; startsWith: a link prefix; contains: text anywhere in the link')
 
@@ -94,9 +101,10 @@ const rules = Cli.create('rules', { description: 'Link Rules: the first rule tha
       kind,
       pattern: z.string().describe('example.com, https://app.example.com/billing, or text'),
       ...profileOptions,
+      then,
       position: z.number().int().positive().optional().describe('1 puts it first; default is last'),
     }),
-    run: (c) => core('rules.add', c.options),
+    run: (c) => core('rules.add', { ...c.options, then: thenInput(c.options.then) }),
   })
   .command('update', {
     description: 'Change a rule',
@@ -104,10 +112,11 @@ const rules = Cli.create('rules', { description: 'Link Rules: the first rule tha
     options: z.object({
       kind: kind.optional(),
       pattern: z.string().optional(),
-      profile: z.string().optional(),
+      profile: z.string().optional().describe('The first choice: profile name or folder'),
       browser: z.string().optional(),
+      then: then.describe('Replaces the rule\'s other profiles, in order: "Primary" or "Brave:Primary", repeated. --then none removes them'),
     }),
-    run: (c) => core('rules.update', { id: c.args.id, ...c.options }),
+    run: (c) => core('rules.update', { id: c.args.id, ...c.options, then: thenInput(c.options.then) }),
   })
   .command('remove', {
     description: 'Remove a rule',

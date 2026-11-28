@@ -6,6 +6,8 @@ import SwiftUI
 /// Cancel (esc) and Done (return). Rules are checked top to bottom; drag a
 /// row to reorder. Given a profile, it edits only that profile's rules:
 /// they keep the places they had in the full list, new ones go last.
+/// A rule's + adds another profile ("or in ● Brave Primary"), used on a Mac
+/// that has none of the ones above it.
 struct RulesEditor: View {
     @EnvironmentObject var model: AppModel
     @State private var rules: [Rule]
@@ -13,10 +15,14 @@ struct RulesEditor: View {
     private let initial: [Rule]
     /// The profile whose rules this sheet edits; nil edits them all.
     private let profile: ProfileRef?
+    /// Which profile's page a rule is on (AppModel.ruleKey), as the sheet opened.
+    private let key: RuleGroups.Key
     let dismiss: () -> Void
 
-    init(initial: [Rule], profile: ProfileRef? = nil, addOne: Bool = false, dismiss: @escaping () -> Void) {
-        var shown = profile.map { p in initial.filter { $0.target == p } } ?? initial
+    init(initial: [Rule], profile: ProfileRef? = nil, addOne: Bool = false, key: @escaping RuleGroups.Key = { $0.target },
+         dismiss: @escaping () -> Void) {
+        self.key = key
+        var shown = profile.map { p in initial.filter { key($0) == p } } ?? initial
         if addOne, let p = profile { shown.append(Rule(kind: .domain, pattern: "", browser: p.browser, profile: p.directory)) }
         _rules = State(initialValue: shown)
         self.initial = initial
@@ -91,8 +97,13 @@ struct RulesEditor: View {
     }
 
     private func save() {
-        let edited = rules.map { r in var r = r; r.pattern = r.pattern.trimmingCharacters(in: .whitespaces); return r }
-        model.saveRules(profile.map { RuleGroups.splice(initial, profile: $0, edited: edited) } ?? edited, from: initial)
+        let edited = rules.map { r in
+            var r = r
+            r.pattern = r.pattern.trimmingCharacters(in: .whitespaces)
+            r.setTargets(r.targets)   // a profile picked twice keeps its first place
+            return r
+        }
+        model.saveRules(profile.map { RuleGroups.splice(initial, profile: $0, edited: edited, key: key) } ?? edited, from: initial)
         dismiss()
     }
 }
@@ -117,7 +128,29 @@ private struct RuleRow: View {
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
                             width: 236)
+                DSIconButton(symbol: "plus", label: "Add another profile, for a Mac without this one", destructive: false,
+                             action: addBackup)
+                    .disabled(nextBackup == nil)
                 DSIconButton(symbol: "xmark", label: "Remove rule", action: remove)
+            }
+            ForEach(rule.backups.indices, id: \.self) { i in
+                HStack(spacing: DS.Space.space2) {
+                    Spacer(minLength: 0)
+                    Text("or in").foregroundStyle(DS.Palette.textSecondary)
+                    ProfileMenu(selection: Binding(get: { rule.backup(i) },
+                                                   set: { if rule.backups.indices.contains(i) { rule.backups[i] = $0 } }),
+                                width: 236)
+                    DSIconButton(symbol: "xmark", label: "Remove this profile from the rule") {
+                        if rule.backups.indices.contains(i) { rule.backups.remove(at: i) }
+                    }
+                    Color.clear.frame(width: 22, height: 22).accessibilityHidden(true)
+                }
+            }
+            if !rule.backups.isEmpty {
+                Text("Opens in the first of these profiles the Mac has, so one rule works on Macs with different browsers.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+                    .padding(.trailing, 22 + DS.Space.space2)
             }
             if !rule.pattern.isEmpty, let problem = rule.problem {
                 Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 62)
@@ -127,6 +160,18 @@ private struct RuleRow: View {
         .padding(.vertical, DS.Space.space1)
     }
 
+    /// The profile + adds: one the rule doesn't name yet, from another
+    /// browser than the rule's first choice when there is one.
+    private var nextBackup: ProfileRef? {
+        let named = Set(rule.targets)
+        let free = model.catalog.profiles.map(\.ref).filter { !named.contains($0) }
+        return free.first { $0.browser != rule.browser } ?? free.first
+    }
+
+    private func addBackup() {
+        if let next = nextBackup { rule.backups.append(next) }
+    }
+
     private var placeholder: String {
         switch rule.kind {
         case .contains: "text"
@@ -134,4 +179,9 @@ private struct RuleRow: View {
         case .domain: "example.com"
         }
     }
+}
+
+private extension Rule {
+    /// Backup `i`, or the first choice while a removed row is still on screen.
+    func backup(_ i: Int) -> ProfileRef { backups.indices.contains(i) ? backups[i] : target }
 }
