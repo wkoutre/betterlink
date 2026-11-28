@@ -231,6 +231,49 @@ private nonisolated(unsafe) var made: String?
         #expect(instance.current(gone) == gone)
     }
 
+    /// A list long enough to scroll has no scroll bar, and is as wide as one
+    /// that fits. With macOS set to always show scroll bars (or with a mouse
+    /// plugged in) the bar took 15 pt of the width once the list scrolled,
+    /// and the Favorites went from five in a row to four.
+    @Test func aListThatScrollsHasNoScrollBarAndKeepsItsWidth() throws {
+        var long = profile(favorites: 7)
+        for i in 0..<40 { long.addLink(SavedLink(title: "Link \(i)", url: "https://link\(i).example/")) }
+        try show(long)
+        let host = hosted()
+        _ = try drawing(host)
+        let found = scrollViews(in: host)
+        try #require(found.count == 1, "\(found)")
+        let list = found[0]
+        // It does scroll: there is more list than room.
+        let document = try #require(list.documentView)
+        try #require(document.frame.height > list.contentSize.height + 200)
+
+        // Drawn as on a Mac whose scroll bars come and go, then as on one
+        // that always shows them: the same picture, as wide as the sidebar.
+        list.scrollerStyle = .overlay
+        list.tile()
+        let overlay = try drawing(host)
+        list.scrollerStyle = .legacy
+        list.tile()
+        let always = try drawing(host)
+        #expect(!list.hasVerticalScroller && !list.hasHorizontalScroller)
+        #expect(list.contentSize.width == list.frame.width)
+        #expect(document.frame.width == list.frame.width)
+        #expect(try bands(overlay, always).isEmpty)
+        #expect(inked(always, from: 0, to: size.height) > 100)
+
+        // And it still scrolls with the bar gone.
+        list.contentView.scroll(to: NSPoint(x: 0, y: 200))
+        list.reflectScrolledClipView(list.contentView)
+        #expect(list.contentView.bounds.origin.y == 200)
+        #expect(try !bands(always, drawing(host)).isEmpty)
+    }
+
+    private func scrollViews(in view: NSView) -> [NSScrollView] {
+        if let scroll = view as? NSScrollView { return [scroll] }
+        return view.subviews.flatMap { scrollViews(in: $0) }
+    }
+
     private func look(_ tabs: [BrowserTab]) -> SidebarLook {
         var session = BrowserSession(socketPath: "/layout-test")
         var snapshot = Inbound(type: "snapshot")
