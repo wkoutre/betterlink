@@ -16,6 +16,7 @@ public enum TourControl: String, CaseIterable, Sendable {
     case showLog
     case menuBarIcon
     case openAtLogin
+    case textSize
     case sidebarBrowsers
     case showExtension
     case allowAccessibility
@@ -153,6 +154,16 @@ public enum TourRegistry {
                      changed: "Open at login moved from Permissions to General, next to the menu bar icon.", symbol: "menubar.rectangle",
                      status: .openAtLogin, control: .openAtLogin, requires: nil,
                      cli: "betterlink login set --enabled on", cliWhy: nil),
+        ]),
+        TourTopic(id: "appearance", title: "Text size",
+                  summary: "Larger or smaller words in the window and in the sidebar.",
+                  symbol: "textformat.size", tile: .tileNeutral, tier: .more, page: "general", steps: [
+            TourStep(id: "text-size", revision: 1,
+                     title: "Choose how large the words are",
+                     body: "Pick a text size, and this window and the sidebar beside your browser change at once. Rows, buttons and icons are drawn to match the words. The choice is kept on this Mac only.",
+                     changed: nil, symbol: "textformat.size",
+                     status: nil, control: .textSize, requires: nil,
+                     cli: "betterlink text-size set --size large", cliWhy: nil),
         ]),
         TourTopic(id: "sidebar", title: "Sidebar",
                   summary: "Favorites, folders and live tabs beside your browser window. A preview.",

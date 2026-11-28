@@ -12,7 +12,7 @@ struct KeyChips: View {
                 Button {
                     if on { keys.remove(k.key) } else { keys.insert(k.key) }
                 } label: {
-                    Text(k.symbol).font(.system(size: 13, weight: .semibold)).frame(minWidth: 16)
+                    Text(k.symbol).font(.system(size: DS.text(13), weight: .semibold)).frame(minWidth: DS.scaled(16))
                 }
                 .buttonStyle(DSButtonStyle(kind: on ? .primary : .secondary))
                 .help(k.label)
@@ -85,8 +85,9 @@ struct KeysEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 720, height: 420)
+        .frame(width: DS.scaled(720), height: DS.scaled(420))
         .background(DS.Palette.canvas)
+        .font(DS.TextStyle.body)
     }
 
     /// A new row starts as ⌃⌘, or the first combination not yet used.
@@ -113,7 +114,7 @@ private struct KeysRow: View {
                 Text("to open links in").foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
-                            width: 236)
+                            width: DS.scaled(236))
                 Spacer(minLength: 0)
                 DSIconButton(symbol: "xmark", label: "Remove", action: remove)
             }

@@ -45,10 +45,10 @@ struct ProfilesEditor: View {
             VStack(spacing: 0) {
                 HStack(spacing: DS.Space.space2) {
                     Text("Colour").frame(width: 52, alignment: .leading)
-                    Text("Browser").frame(width: 170, alignment: .leading)
+                    Text("Browser").frame(width: DS.scaled(170), alignment: .leading)
                     Text("Name").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Folder or profile name").frame(width: 150, alignment: .leading)
-                    Color.clear.frame(width: 22, height: 1)
+                    Text("Folder or profile name").frame(width: DS.scaled(150), alignment: .leading)
+                    Color.clear.frame(width: DS.scaled(22), height: 1)
                 }
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 .padding(.horizontal, DS.Space.space4).padding(.vertical, DS.Space.space2)
@@ -69,12 +69,12 @@ struct ProfilesEditor: View {
                                              options: browserChoices(including: row.browser).map(\.bundleId)) {
                                         model.browserName($0)
                                     }
-                                    .frame(width: 170)
+                                    .frame(width: DS.scaled(170))
                                     DSTextField(label: "Name", text: $row.name, prompt: "Work")
                                     DSTextField(label: "Folder or profile name", text: $row.directory,
                                                 prompt: family(row) == .firefox ? "default-release" : "Profile 1",
                                                 invalid: !row.directory.isEmpty && problem(row) != nil)
-                                        .frame(width: 150)
+                                        .frame(width: DS.scaled(150))
                                         .disabled(family(row) == .plain)
                                     DSIconButton(symbol: "xmark", label: "Remove \(row.name)") {
                                         rows.removeAll { $0.id == row.id }
@@ -112,8 +112,9 @@ struct ProfilesEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 800, height: 480)
+        .frame(width: DS.scaled(800), height: DS.scaled(480))
         .background(DS.Palette.canvas)
+        .font(DS.TextStyle.body)
     }
 
     private func addProfile() {

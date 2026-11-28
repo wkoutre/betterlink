@@ -80,9 +80,10 @@ struct RulesEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 800, height: 480)
+        .frame(width: DS.scaled(800), height: DS.scaled(480))
         .background(DS.Palette.canvas)
         .toggleStyle(.ds)
+        .font(DS.TextStyle.body)
     }
 
     private func addRule() {
@@ -109,14 +110,14 @@ private struct RuleRow: View {
                     .accessibilityHidden(true)
                 Text("Open").foregroundStyle(DS.Palette.textSecondary)
                 DSPicker(accessibility: "Match type", selection: $rule.kind, options: Rule.Kind.allCases) { $0.label }
-                    .frame(width: 164)
+                    .frame(width: DS.scaled(164))
                 DSTextField(label: "Pattern", text: $rule.pattern, prompt: placeholder,
                             invalid: !rule.pattern.isEmpty && rule.problem != nil)
-                    .frame(minWidth: 150)
+                    .frame(minWidth: DS.scaled(150))
                 Text("in").foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
-                            width: 236)
+                            width: DS.scaled(236))
                 DSIconButton(symbol: "xmark", label: "Remove rule", action: remove)
             }
             if !rule.pattern.isEmpty, let problem = rule.problem {

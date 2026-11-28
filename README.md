@@ -125,6 +125,10 @@ How it's checked and run:
 
 When held keys, config.ts or a Link Rule picks the profile, a small badge fades in at the top middle of the screen the pointer is on, for example "● Work  Rule 2", and fades out after about two seconds. Links that open in the fallback show none. It never takes focus or clicks. Turn it off, or move it to the bottom, under **General › Link toast** (this Mac only), or with `betterlink toast set --shown off` / `--position bottom`. With Reduce Motion on, it fades without sliding.
 
+## Text size
+
+**General › Appearance › Text size** sets how large the words are in betterlink's window and in the sidebar beside your browser: Small (12 pt), Default (13 pt), Large (14 pt), Larger (16 pt) or Largest (18 pt). Rows, buttons and icons are drawn to match, and the window's smallest size grows with larger text. The change shows at once, without a restart. It is kept on this Mac only, since what reads well depends on the display. The same from the command line: `betterlink text-size set --size large`.
+
 ## Log
 
 Turn on **General › Show the Log page** to see every link, where it went, and why. The log is kept in memory only:
@@ -157,6 +161,7 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - the menu bar icon;
 - automatic update checks;
 - the link toast;
+- the text size;
 - default browser;
 - the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close, and a folder's icon: an emoji or a built-in symbol), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
 - open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open);
@@ -235,7 +240,7 @@ For screenshots and manual checks, these environment variables change how better
 
 | Variable | Effect |
 |---|---|
-| `BETTERLINK_HOME` | Settings folder to use instead of the standard one. Use a temporary folder so tests never touch your real rules. This Mac's own settings (the sidebar, Sync, the toast) are separate for each such folder too. |
+| `BETTERLINK_HOME` | Settings folder to use instead of the standard one. Use a temporary folder so tests never touch your real rules. This Mac's own settings (the sidebar, Sync, the toast, the text size) are separate for each such folder too. |
 | `BETTERLINK_TABS_EXTENSION_DIR` | Folder betterlink keeps the Tabs extension in, instead of the standard one (under `BETTERLINK_HOME`, `tabs-extension` in there). |
 | `BETTERLINK_APPEARANCE` | `light` or `dark`, regardless of the system setting. |
 | `BETTERLINK_PAGE` | Page to open: `rules`, `profiles`, `permissions`, `config`, `general`, `log`, `about`. |

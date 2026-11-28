@@ -105,6 +105,8 @@ struct RootView: View {
         .buttonStyle(.dsSecondary)
         .toggleStyle(.ds)
         .tint(DS.Palette.accent)
+        // Words with no style of their own are body text, at the chosen text size.
+        .font(DS.TextStyle.body)
         .frame(minWidth: BetterlinkWindow.minSize.width, minHeight: BetterlinkWindow.minSize.height)
     }
 
@@ -132,7 +134,7 @@ private struct NavTile: View {
     let color: Color
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: DS.text(11), weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: DS.Size.sizeTile, height: DS.Size.sizeTile)
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(color.gradient))
@@ -227,7 +229,7 @@ private struct NavHeader: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         HStack(spacing: DS.Space.space3) {
-            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 36, height: 36)
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: DS.scaled(36), height: DS.scaled(36))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("betterlink").font(DS.TextStyle.headline)
@@ -248,10 +250,18 @@ private struct NavHeader: View {
 enum BetterlinkWindow {
     /// The smallest the window gets. A tour step's words fit it; a step with a
     /// tall control scrolls (TourLayoutTests).
-    static let minSize = CGSize(width: 780, height: 540)
+    static var minSize: CGSize { grown(CGSize(width: 780, height: 540)) }
     /// The size the window opens at. The tour's steps fit it without scrolling
     /// (TourLayoutTests).
-    static let defaultSize = CGSize(width: 880, height: 640)
+    static var defaultSize: CGSize { grown(CGSize(width: 880, height: 640)) }
+
+    /// A size drawn for standard text, at the chosen text size: larger text
+    /// gets a larger window, so the page list still fits without scrolling and
+    /// a page holds as many words to a line. Smaller text keeps the size.
+    private static func grown(_ size: CGSize) -> CGSize {
+        let scale = max(1, CGFloat(TextScale.shared.size.scale))
+        return CGSize(width: (size.width * scale).rounded(), height: (size.height * scale).rounded())
+    }
 
     static func open(_ page: RootView.Page) {
         MenuBarIcon.defaults().set(page.rawValue, forKey: "page")

@@ -259,6 +259,19 @@ const toast = Cli.create('toast', {
     }),
   })
 
+const textSize = Cli.create('text-size', {
+  description: "How large betterlink draws its text, in its window and in the sidebar (this Mac only; 13 pt by default)",
+})
+  .command('get', { description: 'Show the text size, in words and in points, and the sizes there are', run: () => core('text-size.get') })
+  .command('set', {
+    description: 'Choose the text size. An open betterlink window and its sidebars change at once, with rows, buttons and icons to match',
+    options: z.object({
+      size: z.enum(['small', 'default', 'large', 'larger', 'largest'])
+        .describe('small (12 pt), default (13 pt), large (14 pt), larger (16 pt) or largest (18 pt)'),
+    }),
+    run: (c) => core('text-size.set', { size: c.options.size }),
+  })
+
 const updates = Cli.create('updates', { description: 'Automatic updates (this Mac only)' })
   .command('get', {
     description: 'Show the version, whether betterlink checks for updates by itself, and whether it installs them',
@@ -642,7 +655,7 @@ const changelog = Cli.create('changelog', {
 export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
-    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders and their icons, saved links, imports and settings; ' +
+    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings, the text size among them; the sidebar\'s Sidebar Profiles, Favorites, folders and their icons, saved links, imports and settings; ' +
     "and open tabs in browsers with the Tabs extension; Sync between Macs; the tour (the first-run flow and What's New); and read the changelog. " +
     '(The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).
@@ -668,6 +681,7 @@ export const cli = Cli.create('betterlink', {
   .command(login)
   .command(menuBar)
   .command(toast)
+  .command(textSize)
   .command(updates)
   .command(sidebar)
   .command(tabs)

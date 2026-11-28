@@ -22,7 +22,7 @@ struct SavedIcon: View {
             Text(Self.letter(title))
                 .font(DS.TextStyle.caption)
                 .foregroundStyle(pal.textSecondary)
-                .frame(width: 16, height: 16)
+                .frame(width: DS.scaled(16), height: DS.scaled(16))
                 .background(RoundedRectangle(cornerRadius: DS.Space.space1, style: .continuous).fill(pal.hover))
                 .accessibilityHidden(true)
         }

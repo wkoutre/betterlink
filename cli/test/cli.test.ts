@@ -2,7 +2,7 @@
 // (`make build` first) and a temporary settings folder.
 import { describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 
@@ -37,7 +37,7 @@ function chromium(dir: string): string {
 describe.skipIf(!existsSync(app))('betterlink CLI', () => {
   test('lists every command for agents, and has no update command', () => {
     const r = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } })
-    for (const c of ['rules add', 'rules move', 'keys add', 'keys remove', 'fallback set', 'profiles import', 'config check', 'folder set', 'login set', 'menu-bar set', 'toast set', 'updates set', 'folder reset', 'default-browser set', 'test']) {
+    for (const c of ['rules add', 'rules move', 'keys add', 'keys remove', 'fallback set', 'profiles import', 'config check', 'folder set', 'login set', 'menu-bar set', 'toast set', 'text-size set', 'updates set', 'folder reset', 'default-browser set', 'test']) {
       expect(r.stdout).toContain(`betterlink ${c}`)
     }
     const help = spawnSync('bun', [bin, '--help'], { encoding: 'utf8' }).stdout
@@ -287,6 +287,37 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
       expect(command).toBe('toast.set')
       expect(JSON.parse(json)).toEqual(sent)
     }
+  })
+
+  test('text-size set sends the size that was typed, and refuses one there is not', () => {
+    // A stand-in app, so the real setting is never touched.
+    const d = home()
+    const fake = join(d, 'fake-app')
+    writeFileSync(fake, `#!/bin/sh\nprintf '%s %s' "$2" "$3" > '${join(d, 'sent.txt')}'\necho '{"version":1,"ok":true}'\n`)
+    chmodSync(fake, 0o755)
+    const env = { ...process.env, BETTERLINK_HOME: d, BETTERLINK_APP_BINARY: fake }
+    for (const size of ['small', 'default', 'large', 'larger', 'largest']) {
+      const r = spawnSync('bun', [bin, 'text-size', 'set', '--size', size, '--json'], { encoding: 'utf8', env })
+      expect(r.status).toBe(0)
+      const [command, json] = readFileSync(join(d, 'sent.txt'), 'utf8').split(' ')
+      expect(command).toBe('text-size.set')
+      expect(JSON.parse(json)).toEqual({ size })
+    }
+    rmSync(join(d, 'sent.txt'))
+    const refused = spawnSync('bun', [bin, 'text-size', 'set', '--size', 'enormous', '--json'], { encoding: 'utf8', env })
+    expect(refused.status).not.toBe(0)
+    expect(existsSync(join(d, 'sent.txt'))).toBe(false)
+  })
+
+  test('text-size get and set keep the size in the settings folder given, and say it', () => {
+    const d = home()
+    expect(run(d, 'text-size', 'get').json).toMatchObject({ size: 'default', points: 13 })
+    const set = run(d, 'text-size', 'set', '--size', 'larger')
+    expect(set.code).toBe(0)
+    expect(set.json).toMatchObject({ size: 'larger', points: 16 })
+    expect(run(d, 'text-size', 'get').json).toMatchObject({ size: 'larger', points: 16, sizes: ['small', 'default', 'large', 'larger', 'largest'] })
+    // Another settings folder has its own.
+    expect(run(home(), 'text-size', 'get').json).toMatchObject({ size: 'default' })
   })
 
   test('updates set off sends automatic: false', () => {

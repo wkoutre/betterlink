@@ -27,7 +27,7 @@ struct ProfileRulesRow: View {
                     .monospacedDigit()
                     .foregroundStyle(DS.Palette.textSecondary)
                 Image(systemName: "chevron.right")
-                    .font(.system(size: 11, weight: .semibold))
+                    .font(.system(size: DS.text(11), weight: .semibold))
                     .foregroundStyle(DS.Palette.textTertiary)
                     .accessibilityHidden(true)
             }
@@ -76,9 +76,9 @@ struct BackHeader<Leading: View>: View {
         HStack(spacing: DS.Space.space2) {
             Button(action: back) {
                 Image(systemName: "chevron.left")
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: DS.text(13), weight: .semibold))
                     .foregroundStyle(DS.Palette.accentText)
-                    .frame(width: 24, height: 24)
+                    .frame(width: DS.scaled(24), height: DS.scaled(24))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
