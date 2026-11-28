@@ -568,7 +568,7 @@ struct SidebarView: View {
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($nameFocused)
-                .onAppear { nameFocused = true }
+                .onAppear { focusNameField() }
                 .onSubmit { edit(p.id) { $0.rename(id, to: draftName) }; renaming = nil }
                 .onExitCommand { renaming = nil }
         } else {
@@ -580,7 +580,31 @@ struct SidebarView: View {
         renamingProfile = nil
         iconEditing = nil
         draftName = name
+        // Unset first: SwiftUI moves the keyboard only when the focus changes.
+        nameFocused = false
         renaming = id
+    }
+
+    /// Gives the name field the keyboard as it opens. Opened from a menu
+    /// (Rename, New Folder, New Folder with Selection) it was seen on screen
+    /// to take typing only after a click, as the icon field was, so it is
+    /// tried the same way: again a turn later and once the menu has closed,
+    /// making the panel key when it isn't. The browser stays the active app.
+    private func focusNameField() {
+        func attempt(last: Bool) {
+            guard renaming != nil else { return }
+            if let panel = sidebar.panel, !panel.isKeyWindow { panel.makeKey() }
+            if !nameFocused {
+                nameFocused = true
+            } else if last, !(sidebar.panel?.firstResponder is NSTextView) {
+                // Set, and it did not take: SwiftUI moves the focus only on a change.
+                nameFocused = false
+                DispatchQueue.main.async { nameFocused = true }
+            }
+        }
+        attempt(last: false)
+        DispatchQueue.main.async { attempt(last: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { attempt(last: true) }
     }
 
     // MARK: - Folder icons

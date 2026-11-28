@@ -17,6 +17,14 @@ public struct SidebarLibrary: Codable, Equatable, Sendable {
         return profiles.first { $0.browserProfiles.isEmpty } ?? profiles.first
     }
 
+    /// The one Sidebar Profile the sidebars of browser profiles `refs` show,
+    /// nil for none or several. A browser profile that can't be told (nil)
+    /// shows the catch-all, as it does on screen.
+    public func shownProfile(for refs: [ProfileRef?]) -> UUID? {
+        let shown = Set(refs.compactMap { profile(for: $0)?.id })
+        return shown.count == 1 ? shown.first : nil
+    }
+
     /// The library with one profile, "Primary", for everything.
     public static let starter = SidebarLibrary(profiles: [SidebarProfile(name: "Primary")])
 

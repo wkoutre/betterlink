@@ -369,12 +369,12 @@ extension AgentCommand {
             if (input["profile"] as? String ?? "").trimmingCharacters(in: .whitespaces).isEmpty,
                let lib = try? SidebarStore(folder: folder).load(), lib.profiles.count > 1 {
                 var asked = Set<String>()
-                let shown = Set(picked.map(\.1).filter { asked.insert($0.socketPath).inserted }.compactMap { s -> UUID? in
-                    guard let instance = s.instance, let place = TabsModel.profileFolder(of: s),
-                          let ref = TabsModel.readProfile(instance: instance, place.browser, place.root)?.0 else { return nil }
-                    return lib.profile(for: ref)?.id
-                })
-                if shown.count == 1, let id = shown.first { input["profile"] = id.uuidString }
+                // A browser profile that can't be told shows the catch-all, on screen and here.
+                let refs = picked.map(\.1).filter { asked.insert($0.socketPath).inserted }.map { s -> ProfileRef? in
+                    guard let instance = s.instance, let place = TabsModel.profileFolder(of: s) else { return nil }
+                    return TabsModel.readProfile(instance: instance, place.browser, place.root)?.0
+                }
+                if let id = lib.shownProfile(for: refs) { input["profile"] = id.uuidString }
             }
             let installed = Browser.known.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
             let r = Agent.saveTabs(links, input, AgentEnvironment(folder: folder, installed: installed))
