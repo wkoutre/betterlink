@@ -58,7 +58,8 @@ import Testing
         let saved = try store.save({ var c = SidebarOpenChanges(); c.add(.folder(profile: profile.id, id: folder, open: false)); return c }())
         #expect(saved.wrote && saved.onlyOpenFolders)
         #expect(SyncInputs.of(settings: settings, sync: sync) != seen)
-        #expect(seen.moved(store.file, from: saved.before, to: saved.after))
+        let moved = seen.moved(store.file, from: saved.before, to: saved.after)
+        #expect(moved)
         #expect(SyncInputs.of(settings: settings, sync: sync) == seen)
     }
 
@@ -75,7 +76,8 @@ import Testing
         let folder = try #require(store.load().profiles[0].items.first?.id)
         // ...and then this Mac only opens it: the file the save started from is not the one the pull saw.
         let saved = try store.save({ var c = SidebarOpenChanges(); c.add(.folder(profile: profile.id, id: folder, open: false)); return c }())
-        #expect(!seen.moved(store.file, from: saved.before, to: saved.after))
+        let moved = seen.moved(store.file, from: saved.before, to: saved.after)
+        #expect(!moved)
         #expect(SyncInputs.of(settings: settings, sync: sync) != seen)
     }
 }
