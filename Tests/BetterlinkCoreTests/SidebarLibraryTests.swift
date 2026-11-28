@@ -16,6 +16,20 @@ struct SidebarLibraryTests {
         #expect(SidebarLibrary(profiles: [work]).profile(for: chromeDefault)?.name == "Work")
     }
 
+    /// `tabs save` with no profile named: the one the tabs' sidebar shows,
+    /// which for a browser profile that can't be told is the catch-all, as on
+    /// screen; tabs whose sidebars show different profiles name none.
+    @Test func theProfileSeveralTabsSidebarsShow() {
+        let work = SidebarProfile(name: "Work", browserProfiles: [chromeClaude])
+        let primary = SidebarProfile(name: "Primary")
+        let lib = SidebarLibrary(profiles: [work, primary])
+        #expect(lib.shownProfile(for: [nil]) == primary.id, "a profile that can't be told shows the catch-all")
+        #expect(lib.shownProfile(for: [chromeDefault, nil]) == primary.id)
+        #expect(lib.shownProfile(for: [chromeClaude, chromeClaude]) == work.id)
+        #expect(lib.shownProfile(for: [chromeClaude, nil]) == nil, "two sidebars, two profiles: ask")
+        #expect(lib.shownProfile(for: []) == nil)
+    }
+
     @Test func linkingABrowserProfileMovesItToThatSidebarProfile() {
         let a = SidebarProfile(name: "A", browserProfiles: [chromeClaude]), b = SidebarProfile(name: "B")
         var lib = SidebarLibrary(profiles: [a, b])

@@ -160,8 +160,8 @@ betterlink includes a `betterlink` command for people and coding agents (Claude 
 - automatic update checks;
 - the link toast;
 - default browser;
-- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close, and a folder's icon: an emoji or a built-in symbol), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
-- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open);
+- the sidebar: Sidebar Profiles (and which browser profile shows each), Favorites, folders and saved links (add, rename, repoint, move, delete, open or close, one or several at once, and a folder's icon: an emoji or a built-in symbol), imports from bookmarks or Arc, and its settings (on or off, shown or hidden, side, width, browsers, tab-strip takeover);
+- open tabs in browsers with the Tabs extension: list, open, switch, move, mute, duplicate, reload, navigate, move to a new window, close, close others, close below (the last two leave saved links' tabs open), and save their pages in the sidebar; mute, reload, close and save take several tabs at once;
 - a browser's tab helper (the Sidebar page's Set Up);
 - Sync: the folder, what syncs, and off;
 - the tour: what was seen, showing it, and putting it back.
@@ -174,10 +174,13 @@ betterlink sidebar add-link --url https://mail.google.com --to favorites
 betterlink sidebar add-folder --name Reading
 betterlink sidebar icon set 3f2a --emoji 📚                   # a folder's icon: an emoji, or --symbol star.fill
 betterlink sidebar move 3f2a --to favorites --position 1      # the first 4+ characters of an id are enough
+betterlink sidebar move 3f2a,9c1d --to top                    # several at once, as Command-click and Shift-click pick them in the sidebar
+betterlink sidebar add-folder --name Trip --with 3f2a,9c1d    # a new folder holding them
 betterlink sidebar profiles assign --profile Work --browser "Google Chrome" --browserProfile "Profile 1"
 betterlink sidebar settings set --side left --width 300
 betterlink tabs list
 betterlink tabs close-others --tab 1234
+betterlink tabs save 1234,1235 --folder "Read later"          # save open tabs in a new folder (or --to favorites, or a folder's id)
 betterlink tabs extension                                     # where the Tabs extension is, for Load unpacked
 betterlink tabs setup --browser "Google Chrome"               # set up a browser's tab helper, as the Sidebar page does
 betterlink sync set --folder ~/Dropbox/betterlink             # sync through a folder your cloud drive keeps in sync
