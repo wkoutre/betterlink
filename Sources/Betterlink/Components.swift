@@ -88,7 +88,9 @@ struct ProfileMenu: View {
                 }
             }
         } label: {
-            ProfileLabel(ref: selection)
+            // Body text, as every select's label is (DSPicker): set here, since
+            // a List row's own font wins over one its row was given.
+            ProfileLabel(ref: selection).font(DS.TextStyle.body)
         }
         .frame(width: width)
         .fixedSize(horizontal: width == nil, vertical: false)

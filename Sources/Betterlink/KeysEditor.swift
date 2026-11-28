@@ -51,6 +51,7 @@ struct KeysEditor: View {
             List {
                 if rules.isEmpty {
                     Text("No modifier keys. Links open by your Link Rules whatever keys you hold.")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
@@ -111,10 +112,10 @@ private struct KeysRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.space1) {
             HStack(spacing: DS.Space.space2) {
-                Text("Hold").foregroundStyle(DS.Palette.textSecondary)
+                Text("Hold").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 KeyChips(keys: $rule.keys)
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { keysLeading = $0 }
-                Text("to open links in").foregroundStyle(DS.Palette.textSecondary)
+                Text("to open links in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
                             width: DS.scaled(236))
@@ -127,9 +128,6 @@ private struct KeysRow: View {
         }
         .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
-        // A List gives its rows a font of its own: the row's words are body
-        // text at the chosen size.
-        .font(DS.TextStyle.body)
     }
 
     private static let row = "keys row"

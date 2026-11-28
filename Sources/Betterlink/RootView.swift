@@ -269,7 +269,10 @@ enum BetterlinkWindow {
 
     private static var sheetRoom: CGSize? {
         if let window = (NSApp?.delegate as? AppDelegate)?.window {
-            return window.contentRect(forFrameRect: window.frame).size
+            // The window grows to its new smallest size just after the text
+            // size changes, so a sheet open then is sized for that already.
+            let content = window.contentRect(forFrameRect: window.frame).size, least = minSize
+            return CGSize(width: max(content.width, least.width), height: max(content.height, least.height))
         }
         return screenRoom.map { CGSize(width: $0.width - 40, height: $0.height - 80) }
     }

@@ -47,11 +47,13 @@ struct RulesEditor: View {
             List {
                 if rules.isEmpty, let profileName {
                     Text("No rules for \(profileName). Add one, or Done removes this profile from Link Rules.")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
                 } else if rules.isEmpty {
                     Text("No rules. Every link opens in \(model.fallbackProfile?.name ?? model.browserName(model.fallback.browser)).")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
@@ -122,14 +124,14 @@ private struct RuleRow: View {
             HStack(spacing: DS.Space.space2) {
                 Image(systemName: "line.3.horizontal").foregroundStyle(DS.Palette.textPlaceholder)
                     .accessibilityHidden(true)
-                Text("Open").foregroundStyle(DS.Palette.textSecondary)
+                Text("Open").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 DSPicker(accessibility: "Match type", selection: $rule.kind, options: Rule.Kind.allCases) { $0.label }
                     .frame(width: DS.scaled(164))
                 DSTextField(label: "Pattern", text: $rule.pattern, prompt: placeholder,
                             invalid: !rule.pattern.isEmpty && rule.problem != nil)
                     .frame(minWidth: DS.scaled(150))
                     .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { fieldLeading = $0 }
-                Text("in").foregroundStyle(DS.Palette.textSecondary)
+                Text("in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
                             width: DS.scaled(236))
@@ -141,7 +143,7 @@ private struct RuleRow: View {
             ForEach(rule.backups.indices, id: \.self) { i in
                 HStack(spacing: DS.Space.space2) {
                     Spacer(minLength: 0)
-                    Text("or in").foregroundStyle(DS.Palette.textSecondary)
+                    Text("or in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                     ProfileMenu(selection: Binding(get: { rule.backup(i) },
                                                    set: { if rule.backups.indices.contains(i) { rule.backups[i] = $0 } }),
                                 width: DS.scaled(236))
@@ -164,9 +166,6 @@ private struct RuleRow: View {
         }
         .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
-        // A List gives its rows a font of its own: the row's words are body
-        // text at the chosen size, as on the Link Rules page.
-        .font(DS.TextStyle.body)
     }
 
     private static let row = "rule row"
