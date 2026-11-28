@@ -1264,11 +1264,16 @@ struct RuleCheck {
         // sidebar's width out on the far side, isn't counted; the frame at rest is.
         let left = rig.side == .left, out = rig.sidebarWidth + 2
         let level = displays.filter { $0.frame.minY < before.maxY - 1 && $0.frame.maxY > before.minY + 1 }
-        let screenRight = max(before.maxX, level.map(\.frame.maxX).max() ?? before.maxX)
-        let screenLeft = min(before.minX, level.map(\.frame.minX).min() ?? before.minX)
+        let screenRight = level.map(\.frame.maxX).max() ?? before.maxX
+        let screenLeft = level.map(\.frame.minX).min() ?? before.minX
+        // Measured from the screens' edge, or from where the window already was past it.
         func far(_ f: CGRect) -> CGRect {
-            if left, f.maxX > screenRight, f.maxX - screenRight <= out { return CGRect(x: f.minX, y: f.minY, width: max(0, screenRight - f.minX), height: f.height) }
-            if !left, f.minX < screenLeft, screenLeft - f.minX <= out { return CGRect(x: screenLeft, y: f.minY, width: max(0, f.maxX - screenLeft), height: f.height) }
+            for r in [screenRight, max(screenRight, before.maxX)] where left && f.maxX > r && f.maxX - r <= out {
+                return CGRect(x: f.minX, y: f.minY, width: max(0, r - f.minX), height: f.height)
+            }
+            for l in [screenLeft, min(screenLeft, before.minX)] where !left && f.minX < l && l - f.minX <= out {
+                return CGRect(x: l, y: f.minY, width: max(0, f.maxX - l), height: f.height)
+            }
             return f
         }
         let checked = (replays || b.widensBack) ? [rig.fake.frame] : frames.map(far) + [rig.fake.frame]
@@ -1563,6 +1568,12 @@ struct RuleCheck {
         let want = far(pair)
         // A window's first glide probes its sets with the size alone (`WindowGlide.probeStep`), for a tick or two.
         let probe = s.filter { abs(far($0.browser) - want) > Self.farEdgeTolerance }
+        // A hide on the left of a window short of its screens' right edge by less than a frame's step, not against
+        // it: no order keeps the far edge from coming in for a frame there (a size is cut at the edge, and its far
+        // edge is in view), and the position goes first, as before.
+        let level = displays.filter { $0.frame.minY < pair.maxY - 1 && $0.frame.maxY > pair.minY + 1 }
+        let gap = (level.map(\.frame.maxX).max() ?? want) - want
+        let nearEdge = left && rig.askedOpen == false && gap > 0.5 && gap <= Self.nearEdge
         let probed = !probe.isEmpty && probe.allSatisfy { abs(far($0.browser) - want) <= WindowGlide.probeStep + 1 }
             && (probe.last!.t - probe.first!.t) <= Self.probeTicks / 120
         if !probed, let x = probe.first {
@@ -1576,7 +1587,7 @@ struct RuleCheck {
         // 29-39 pt for 1-3 frames in each motion; MINI-24 on 0.3.37: a show's far edge in by 47 pt, median). Out
         // is past the screen's edge for a window that fills it.
         // A window's first glide probes its sets with a size alone: that first set may be in by `probeStep`.
-        for (i, h) in rig.fake.history.dropFirst(rig.historyAtPress).filter({ !$0.byPerson }).enumerated() {
+        for (i, h) in rig.fake.history.dropFirst(rig.historyAtPress).filter({ !$0.byPerson }).enumerated() where !nearEdge {
             let inward = left ? want - h.frame.maxX : h.frame.minX - want
             if inward > (i == 0 ? WindowGlide.probeStep + 0.5 : 0.5) {
                 problems.append(String(format: "%@: a set put the browser's far edge %.0f pt in (browser %@)", step, Double(inward), "\(h.frame)"))
@@ -1608,6 +1619,9 @@ struct RuleCheck {
     /// position then a size, and the far edge can be one step in for one
     /// frame (16 pt at most at 120 ticks a second; measured live).
     static let farEdgeTolerance: CGFloat = 2
+    /// A far edge within this of its screens' edge is near it: more than a
+    /// glide frame's step (the 280 pt slide's eased step is 40 pt at most).
+    static let nearEdge: CGFloat = 60
     /// A window's first glide (its sets not yet seen to land at once) sends
     /// its first frame's size alone: the far edge is `WindowGlide.probeStep`
     /// in for as long as that takes to show, at most this many ticks.

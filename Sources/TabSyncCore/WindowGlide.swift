@@ -186,9 +186,16 @@ public struct WindowGlide: Sendable {
         near(seen.minX, e.minX) && near(seen.width, e.width) && near(seen.maxY, e.maxY) && near(seen.height, e.height)
     }
 
-    /// How far past the far edge a left frame puts the window: a point while
-    /// it is kept past its screens' right edge (`pastEdge`), but not at the end.
-    private var shift: CGFloat { side == .left && pastEdge && !final ? 1 : 0 }
+    /// Where a frame at width `w` puts the window's left edge: its far edge
+    /// where the frame has it; on the left, while the window is kept past its
+    /// screens' right edge (`pastEdge`), but not at the end, at least a point
+    /// past that edge.
+    private func farX(_ f: CGRect, width w: CGFloat) -> CGFloat {
+        guard side == .left else { return f.minX }
+        let x = f.maxX - w
+        guard pastEdge, !final, let r = right else { return x }
+        return max(x, r + 1 - w)
+    }
 
     /// The frame at progress `q`, in whole points.
     public func frame(at q: Double) -> CGRect {
@@ -327,7 +334,7 @@ public struct WindowGlide: Sendable {
             if abs(f.width - going.width) > abs(b.width - going.width) + 0.5 {
                 // Ahead of the slide (the first frame or the probe went out with the press): it waits there, its far
                 // edge where the slide has it (a probe, a size alone, moved it): that position goes now.
-                let far = side == .left ? f.maxX + shift - b.width : f.minX
+                let far = farX(f, width: b.width)
                 guard !Self.near(b.minX, far, 0.5), Self.near(b.height, f.height, 0.5) else { return nil }
                 final = false
                 resent = false
@@ -380,7 +387,9 @@ public struct WindowGlide: Sendable {
             plan = [.positionFirst, .size, .fix]
         } else if f.width < b.width || right.map({ b.minX + f.width <= $0 + 0.5 || b.maxX > $0 + 0.5 }) ?? false {
             plan = [.size, .place]
-        } else if side == .left {
+        } else if side == .left, let r = right, b.maxX >= r - 0.5 {
+            // Against its screens' right edge (a window that fills its screen): a point past it first. Short of that
+            // edge by less than the frame's step, the window's far edge is in view: the position first, as on the right.
             plan = [.nudge, .size, .place]
         } else {
             plan = [.positionFirst, .size, .fix]
@@ -431,8 +440,8 @@ public struct WindowGlide: Sendable {
                 movedFirst = true
                 return .position(at)
             case .nudge:
-                // Against its screens' right edge: a point past it, so it can grow past it (a browser keeps a window
-                // wholly on screen from growing past the edge).
+                // A point past its screens' right edge, so it can grow past it (a browser keeps a window wholly on
+                // screen from growing past the edge).
                 let at = CGRect(x: b.minX + 1, y: b.minY, width: b.width, height: b.height)
                 topLeftX = at.minX
                 pastEdge = true
@@ -448,7 +457,7 @@ public struct WindowGlide: Sendable {
                     return nil
                 }
                 let w = took ?? f.width
-                let x = side == .left ? f.maxX + shift - w : f.minX
+                let x = farX(f, width: w)
                 let at = CGRect(x: x, y: f.maxY - f.height, width: w, height: f.height)
                 expect = at
                 // After a size, the window's top left is where it was, or where a position first sent it.
@@ -502,6 +511,12 @@ public struct WindowGlide: Sendable {
         if stoppedAtSize, widening, !landedLast {
             guard let c = lastCall, case .size(let f) = c.call, f.width > c.from.width + 0.5 else { return .none }
             return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at, own: !takenOver && !foreign))
+        }
+        // A frame's position and size both sent and nothing shown yet (a busy browser): on their way, they are
+        // waited for, the last of them (calls land in order) never sent again. Started afresh, the steps would see
+        // the window where it is and send nothing, and the two would land after them.
+        if !moved, movedFirst, !landedLast, let c = lastCall {
+            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: false))
         }
         guard moved else { return .none }
         let resume = WindowSteps.Resume(from: start, seen: seen, at: sentAt, changed: changedAt)
