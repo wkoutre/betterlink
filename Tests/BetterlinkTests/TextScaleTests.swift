@@ -100,18 +100,24 @@ import Testing
 
     /// Changing the size reaches a view that is already showing: nothing has
     /// to be closed and opened again. It ends up as a view made at that size.
+    ///
+    /// Measured by asking SwiftUI itself (`sizeThatFits`), which draws what
+    /// has changed before it answers. An `NSHostingView`'s `fittingSize` is
+    /// AppKit's, and keeps its last answer until the next turn of the run
+    /// loop, which this test must not wait for (see the suite's note).
     @Test func aShowingViewChangesWithTheSize() {
-        let showing = NSHostingView(rootView: Row().frame(width: 300))
-        let before = showing.fittingSize
+        let room = CGSize(width: 300, height: 10_000)
+        let showing = NSHostingController(rootView: Row().frame(width: 300))
+        let before = showing.sizeThatFits(in: room)
         #expect(before.height == 30)
         for size in [TextSize.largest, .small, .larger] {
             let (changed, fresh) = at(size) {
-                (showing.fittingSize, fitting(Row().frame(width: 300)))
+                (showing.sizeThatFits(in: room), NSHostingController(rootView: Row().frame(width: 300)).sizeThatFits(in: room))
             }
             #expect(changed == fresh, "\(size)")
             #expect(changed.height == CGFloat(size.length(30)), "\(size)")
         }
-        #expect(showing.fittingSize == before)
+        #expect(showing.sizeThatFits(in: room) == before)
     }
 
     /// A tour step still fits the window it is read in at every text size
