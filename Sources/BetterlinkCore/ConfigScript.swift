@@ -157,13 +157,30 @@ public final class ConfigScript: LinkScript, @unchecked Sendable {
                           ? "took too long" : thrown)
         }
         guard let result, !result.isUndefined, !result.isNull else { return .noOpinion }
-        if result.isString, let name = result.toString() { return .profile(name) }
-        // { browser: "Google Chrome", profile: "Work" }
-        if result.isObject, let profile = result.objectForKeyedSubscript("profile"), profile.isString,
-           let browser = result.objectForKeyedSubscript("browser"), browser.isString || browser.isUndefined {
-            return .profile(profile.toString(), browser: browser.isUndefined ? nil : browser.toString())
+        // ["Work", { browser: "Brave", profile: "Work" }]: the first one this Mac has.
+        if result.isArray {
+            let count = Int(result.objectForKeyedSubscript("length")?.toInt32() ?? 0)
+            var list: [ScriptTarget] = []
+            for i in 0..<count {
+                guard let item = result.objectAtIndexedSubscript(i), let t = Self.target(item) else {
+                    return .error("each entry of the list route() returns must be a profile name or { browser, profile }")
+                }
+                list.append(t)
+            }
+            return .firstOf(list)
         }
-        return .error("route() must return a profile name, { browser, profile }, or undefined")
+        if let t = Self.target(result) { return .profile(t.name, browser: t.browser) }
+        return .error("route() must return a profile name, { browser, profile }, a list of them, or undefined")
+    }
+
+    /// "Work", or { browser: "Google Chrome", profile: "Work" }.
+    private static func target(_ v: JSValue) -> ScriptTarget? {
+        if v.isString, let name = v.toString() { return ScriptTarget(name) }
+        if v.isObject, !v.isArray, let profile = v.objectForKeyedSubscript("profile"), profile.isString,
+           let browser = v.objectForKeyedSubscript("browser"), browser.isString || browser.isUndefined {
+            return ScriptTarget(profile.toString(), browser: browser.isUndefined ? nil : browser.toString())
+        }
+        return nil
     }
 
     /// JavaScriptCore's per-context-group execution time limit. Exported by
@@ -211,8 +228,13 @@ public func configDeclarations(catalog: ProfileCatalog) -> String {
     /** A browser, as betterlink names it. */
     type BrowserName = \(union(browsers));
 
-    /** Where to open a link: a profile name, or a profile in one browser. */
-    type Target = ProfileName | { browser: BrowserName; profile: \(union(catalog.profiles.map(\.name))) };
+    /** One profile: a profile name, or a profile in one browser. */
+    type OneTarget = ProfileName | { browser: BrowserName; profile: \(union(catalog.profiles.map(\.name))) };
+
+    /** Where to open a link: one profile, or a list of them, first choice
+     *  first. A list opens in the first profile this Mac has, so it may name
+     *  profiles and browsers that only another Mac has. */
+    type Target = OneTarget | readonly (string | { browser?: string; profile: string })[];
 
     /** The link being opened, parsed the way the browser parses it. */
     interface Link {

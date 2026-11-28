@@ -27,7 +27,7 @@ enum TestCommand {
         }
         let fallback = Agent.effectiveFallback(stored.fallback, installed: installed)
         let d = Router(rules: rules, modifierRules: stored.modifierRules ?? [], script: script, catalog: catalog,
-                       fallback: fallback).decide(link, modifiers: keys)
+                       fallback: fallback, installed: Set(installed.map(\.bundleId))).decide(link, modifiers: keys)
         switch d.action {
         case .refuse: print("refuse\t\(d.reason)")
         case .open(let p, let arg): print("\(p.browser)\t\(p.directory)\t\(p.name)\t\(arg)\t\(d.reason)")
