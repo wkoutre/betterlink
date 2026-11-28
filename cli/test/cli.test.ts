@@ -213,6 +213,28 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'rules', 'list', '--browser', browser).code).not.toBe(0)
   })
 
+  test('a rule can name more than one profile, and opens in the first this Mac has', () => {
+    const d = home()
+    const browser = chromium(d)
+    expect(run(d, 'profiles', 'add', '--browser', browser, '--directory', 'Profile 1', '--name', 'Work').code).toBe(0)
+    expect(run(d, 'profiles', 'add', '--browser', browser, '--directory', 'Default', '--name', 'Personal').code).toBe(0)
+    // A profile in a browser this Mac doesn't have, as a rule synced from another Mac names it.
+    const installed = run(d, 'browsers', 'list').json.map((b: any) => b.name)
+    const missing = ['Wavebox', 'Yandex', 'Helium', 'Comet'].find((b) => !installed.includes(b))!
+    expect(run(d, 'profiles', 'add', '--browser', missing, '--directory', 'Default', '--name', 'Home').code).toBe(0)
+    expect(run(d, 'rules', 'add', '--kind', 'domain', '--pattern', 'example.com', '--profile', 'Home',
+      '--then', `${browser}:Work`, '--then', 'Personal').code).toBe(0)
+    const [rule] = run(d, 'rules', 'list').json
+    expect(rule.profileName).toBe('Home')
+    expect(rule.backups.map((b: any) => b.profileName)).toEqual(['Work', 'Personal'])
+    expect(rule.opensIn.profileName).toBe('Work')
+    expect(run(d, 'rules', 'profiles').json.map((g: any) => g.profileName)).toEqual(['Work'])
+    expect(run(d, 'test', 'https://example.com/').json.profileName).toBe('Work')
+
+    expect(run(d, 'rules', 'update', rule.id, '--then', 'none').code).toBe(0)
+    expect(run(d, 'rules', 'list').json[0].backups).toEqual([])
+  })
+
   test('modifier keys pick a profile for the held keys only', () => {
     const d = home()
     const browser = chromium(d)

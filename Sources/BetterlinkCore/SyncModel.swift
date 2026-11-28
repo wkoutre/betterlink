@@ -82,6 +82,10 @@ public enum SyncModel {
                 let id = ruleID(r.id)
                 out[id] = target(id, r.target, .rule).merging(["kind": .string(r.kind.rawValue), "pattern": .string(r.pattern),
                                                                "position": .string(pos[id]!)]) { a, _ in a }
+                // A rule that never had backups sends no field, so its entity reads as it did before backups.
+                if !r.backups.isEmpty || (state.value(id, "backups") ?? .null) != .null {
+                    out[id]!["backups"] = backupsField(id, r.backups, state: state, applied: applied, identity: identity)
+                }
             }
             let mods = rules.modifierRules ?? []
             let mids = mods.map { modID($0.id) }
@@ -135,6 +139,45 @@ public enum SyncModel {
     /// `applied` for "no profile": a synced fallback this Mac couldn't match
     /// while it had none of its own.
     static let noProfile = ProfileRef(browser: "", directory: "")
+
+    /// A rule's backup profile as it syncs: like a rule's own target, the
+    /// browser and folder plus the name and account that find it on another Mac.
+    struct SyncedTarget: Codable, Equatable {
+        var browser: String
+        var profile: String
+        var profileName: String?
+        var profileAccount: String?
+    }
+
+    /// `applied` for a rule's backup, counted from 1.
+    static func backupKey(_ id: String, _ n: Int) -> String { "\(id)#\(n)" }
+
+    static func syncedBackups(_ v: SyncValue?) -> [SyncedTarget] {
+        guard let s = v?.string, let d = s.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([SyncedTarget].self, from: d)) ?? []
+    }
+
+    /// The "backups" field: a JSON list. Each backup still equal to the
+    /// profile sync put in place for one of the synced backups goes out as
+    /// that synced entry, unchanged (as `target` does for the first choice),
+    /// so a Mac without a profile never erases what another Mac knows about it.
+    static func backupsField(_ id: String, _ backups: [ProfileRef], state: SyncState, applied: [String: ProfileRef],
+                             identity: (ProfileRef) -> ProfileIdentity) -> SyncValue {
+        guard !backups.isEmpty else { return .null }
+        let synced = syncedBackups(state.value(id, "backups"))
+        var used = Set<Int>()
+        let list = backups.map { ref -> SyncedTarget in
+            if let j = synced.indices.first(where: { !used.contains($0) && applied[backupKey(id, $0 + 1)] == ref }) {
+                used.insert(j)
+                return synced[j]
+            }
+            let who = identity(ref)
+            return SyncedTarget(browser: ref.browser, profile: ref.directory, profileName: who.name, profileAccount: who.account)
+        }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        return (try? enc.encode(list)).flatMap { String(data: $0, encoding: .utf8) }.map(SyncValue.string) ?? .null
+    }
 
     struct TargetKeys {
         let browser, directory, name, account: String
@@ -224,7 +267,29 @@ public enum SyncModel {
             }
             rules.rules = live("rule:").compactMap { id, f in
                 guard let u = uuid(id), let kind = f["kind"]?.value.string.flatMap(Rule.Kind.init(rawValue:)),
-                      let pattern = f["pattern"]?.value.string, f["browser"]?.value.string != nil else { return nil }
+                      let pattern = f["pattern"]?.value.string, let browser = f["browser"]?.value.string else { return nil }
+                let synced = syncedBackups(f["backups"]?.value)
+                if !synced.isEmpty {
+                    // A profile this Mac doesn't have keeps its browser with no
+                    // folder, which never opens: the next profile gets the link.
+                    func here(_ key: String, _ b: String, _ dir: String, _ who: ProfileIdentity) -> ProfileRef {
+                        let ref = resolve(b, dir, who).map { ProfileRef(browser: b, directory: $0) } ?? ProfileRef(browser: b, directory: "")
+                        applied[key] = ref
+                        return ref
+                    }
+                    let first = here(id, browser, state.value(id, "profile")?.string ?? "",
+                                     ProfileIdentity(name: state.value(id, "profileName")?.string, account: state.value(id, "profileAccount")?.string))
+                    let backups = synced.enumerated().map { j, t in
+                        here(backupKey(id, j + 1), t.browser, t.profile, ProfileIdentity(name: t.profileName, account: t.profileAccount))
+                    }
+                    if ([first] + backups).allSatisfy({ $0.directory.isEmpty && Browser.known(bundleId: $0.browser)?.family != .plain }) {
+                        notes.unresolvedRules.append(u)
+                        let wanted = [state.value(id, TargetKeys.rule.name)?.string, state.value(id, TargetKeys.rule.account)?.string,
+                                      state.value(id, TargetKeys.rule.directory)?.string].compactMap { $0 }.first { !$0.isEmpty }
+                        if let wanted { notes.missingProfiles[u] = wanted }
+                    }
+                    return Rule(id: u, kind: kind, pattern: pattern, browser: first.browser, profile: first.directory, backups: backups)
+                }
                 if place(id) == nil {
                     notes.unresolvedRules.append(u)
                     let wanted = [state.value(id, TargetKeys.rule.name)?.string, state.value(id, TargetKeys.rule.account)?.string,
