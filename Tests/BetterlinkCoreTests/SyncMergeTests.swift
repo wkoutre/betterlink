@@ -97,7 +97,8 @@ struct SyncMergeTests {
         b.saveSelection = { sel in
             saved = sel
             // Not written yet when the selection is saved.
-            #expect(!(try SidebarStore(folder: b.settings).load().profiles.contains { $0.id == work }))
+            let here = (try? SidebarStore(folder: b.settings).load().profiles.map(\.id)) ?? []
+            #expect(!here.contains(work))
         }
         try SyncLocalStore(folder: b.settings).update { $0.adding = [work] }
         try b.pull(now: t(3))
