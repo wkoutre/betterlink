@@ -204,13 +204,19 @@ public struct WindowPairing: Sendable {
 
     /// Whether a window titled `window` (Accessibility's) shows a tab titled
     /// `tab`. Chrome starts the window's title with the tab's and adds after
-    /// it ("Inbox - Google Chrome - Work"); Dia puts the profile's name first
-    /// ("Primary: Inbox"). So the tab's title starts the window's, or starts
-    /// what follows the window's first ": ".
+    /// it ("Inbox - Google Chrome - Work"). Dia puts the profile's name first
+    /// and cuts the tab's title to its first 15 characters and "…"
+    /// ("Primary: Longest word in…", Dia 1.58). So the tab's title starts
+    /// the window's, or what follows the window's first ": "; or that part
+    /// ends in "…" and what comes before it starts the tab's title.
     public static func titled(_ window: String, by tab: String) -> Bool {
         if window.hasPrefix(tab) { return true }
         guard let colon = window.range(of: ": ") else { return false }
-        return window[colon.upperBound...].hasPrefix(tab)
+        let shown = window[colon.upperBound...]
+        if shown.hasPrefix(tab) { return true }
+        guard shown.hasSuffix("…") else { return false }
+        let stem = shown.dropLast()
+        return !stem.isEmpty && tab.hasPrefix(stem)
     }
 
     /// One process's windows. True while a word on the focus is waited on.
