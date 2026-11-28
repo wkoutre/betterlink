@@ -31,7 +31,10 @@ struct SidebarView: View {
     @FocusState private var profileNameFocused: Bool
     /// The row a drag is over, and where in it.
     @State private var dropTarget: DropTarget?
-    @State private var rowSizes: [UUID: CGSize] = [:]
+    /// The rows' sizes, for telling where in a row a drag is. Beside the
+    /// view, not in its state: a size arriving draws nothing again (every row
+    /// that came in used to redraw the whole sidebar once more).
+    @State private var rowSizes = RowSizes()
     /// The last delete, for Undo: which profile, what went and from where.
     @State private var undo: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)?
     /// A folder with things in it waiting for its delete to be confirmed.
@@ -94,13 +97,14 @@ struct SidebarView: View {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
                 let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
                 let rows = SidebarRows.visible(profile, active: m.activeLinks, tabs: loose.map(\.id))
+                let tree = Tree(profile)
                 ScrollViewReader { scroller in
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
                             favorites(profile, m, windowTabs)
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 ForEach(profile.items) { item in
-                                    node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
+                                    node(item, depth: 0, m, tree).transition(Motion.reveal(reduceMotion))
                                 }
                             }
                             // A closed folder shows the active tab when it holds it,
@@ -115,7 +119,7 @@ struct SidebarView: View {
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
-                                    SkipUnchanged(key: rowKey(tab, profile, m, order)) {
+                                    SkipUnchanged(key: rowKey(tab, m, order, tree)) {
                                         SidebarTabRow(tab: tab, title: sidebar.title(of: tab), canMute: m.session.can(.mute),
                                                       focused: isCursor(.tab(tab.id))) {
                                             tabs.activate(tab, in: m.session)
@@ -128,7 +132,7 @@ struct SidebarView: View {
                                         .onDrag { drag(tabKeyPrefix + String(tab.id)) }
                                         // Drop a tab before or after another to reorder the window's tabs.
                                         .modifier(tabDropRow(tab, m, windowTabs))
-                                        .contextMenu { tabMenu(tab, profile, m, windowTabs) }
+                                        .contextMenu { tabMenu(tab, tree, m, windowTabs) }
                                     }
                                     .equatable()
                                     .id(SidebarRowID.tab(tab.id))
@@ -142,7 +146,7 @@ struct SidebarView: View {
                         .padding(.bottom, DS.Space.space4)
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .contentShape(Rectangle())
-                        .contextMenu { Button("New Folder") { newFolder(in: nil, profile) } }
+                        .contextMenu { Button("New Folder") { newFolder(in: nil, profile.id) } }
                     }
                     // One stop for the keyboard: the arrows move the cursor
                     // through the rows, Return opens, Delete closes or removes.
@@ -185,7 +189,7 @@ struct SidebarView: View {
         .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
                             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
             Button("Delete Folder", role: .destructive) {
-                if let d = confirmDelete, let p = profile { deleteWithUndo(d.id, d.name, p) }
+                if let d = confirmDelete, let p = profile { deleteWithUndo(d.id, d.name, p.id) }
                 confirmDelete = nil
             }
         }
@@ -276,7 +280,7 @@ struct SidebarView: View {
                 .buttonStyle(PressStyle())
                 .help("Find a Tab (\(SidebarController.shared.findShortcut.display))")
                 .accessibilityLabel("Find a Tab")
-            Button { if let p = profile { newFolder(in: nil, p) } } label: { headerIcon("plus") }
+            Button { if let p = profile { newFolder(in: nil, p.id) } } label: { headerIcon("plus") }
                 .buttonStyle(PressStyle())
                 .disabled(match == nil || profile == nil)
                 .help("New Folder")
@@ -411,7 +415,7 @@ struct SidebarView: View {
                 }
                 .id(SidebarRowID.favorite(link.id))
                 .onDrag { drag(Self.savedKey(link.id)) }
-                .modifier(dropRow(link.id, horizontal: true, canHold: false, p, open) { zone in
+                .modifier(dropRow(link.id, horizontal: true, canHold: false) { zone, p in
                     let i = p.favorites.firstIndex { $0.id == link.id } ?? p.favorites.count
                     return .favorites(zone == .before ? i : i + 1)
                 })
@@ -419,10 +423,12 @@ struct SidebarView: View {
                 .help(link.title)
                 .accessibilityLabel(isOpen ? "\(link.title), open" : link.title)
                 .contextMenu {
-                    heldMenu(link, tab, p, m)
-                    moveMenu(link.id, isFolder: false, inFavorites: true, p)
+                    heldMenu(link, tab, away: tab != nil && m.links.isAway(link.id), p.id, m)
+                    moveMenu(link.id, inFavorites: true, p.id,
+                             place: .init(parent: nil, index: p.favorites.firstIndex { $0.id == link.id } ?? 0, count: p.favorites.count),
+                             folders: Self.folders(p.items, prefix: ""))
                     Divider()
-                    Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p) }
+                    Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p.id) }
                 }
             }
         }
@@ -435,50 +441,37 @@ struct SidebarView: View {
 
     // MARK: - Folders
 
-    private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> AnyView {
+    /// One saved item and, for an open folder, what is in it. The row itself
+    /// is drawn again only when what it shows changes (`SavedRowKey`): opening
+    /// one folder used to draw every row on screen again, two or three times.
+    private func node(_ item: SidebarItem, depth: Int, _ m: Match, _ tree: Tree) -> AnyView {
         // Counted at every depth, timed at the top one (which holds the rest).
         let began = PerfTrace.began()
         defer { PerfTrace.ended("node", began, timed: depth == 0) }
         switch item {
         case .folder(let f):
+            let inside = Self.folders(f.items, prefix: "").map(\.id)
             return AnyView(VStack(alignment: .leading, spacing: 1) {
-                SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)),
-                           editing: renaming == f.id || iconEditing?.id == f.id,
-                           label: "Folder \(f.name), \(f.expanded ? "open" : "closed")") {
-                    toggleFolder(f, all: NSEvent.modifierFlags.contains(.option), p)
-                } content: {
-                    if let editing = iconEditing, editing.id == f.id {
-                        iconField(f, editing.kind, p)
-                    } else {
-                        FolderGlyph(icon: f.icon, expanded: f.expanded)
-                        nameOrField(f.id, f.name, p)
-                    }
+                SkipUnchanged(key: savedKey(.folder(id: f.id, name: f.name, icon: f.icon, expanded: f.expanded, inside: inside),
+                                            depth: depth, tab: nil, away: false, m, tree)) {
+                    folderRow(f, depth: depth, inside: inside, tree)
                 }
+                .equatable()
                 .id(SidebarRowID.folder(f.id))
-                .onDrag { drag(Self.savedKey(f.id)) }
-                .modifier(dropRow(f.id, canHold: true, p, open) { zone in spot(for: f.id, zone, p) })
-                .contextMenu {
-                    Button("New Folder Inside") { newFolder(in: f.id, p) }
-                    Button("Rename") { startRename(f.id, f.name) }
-                    iconMenu(f, p)
-                    moveMenu(f.id, isFolder: true, inFavorites: false, p)
-                    Divider()
-                    Button("Delete Folder", role: .destructive) { deleteFolder(f, p) }
-                }
                 if let editing = iconEditing, editing.id == f.id, editing.kind == .emoji {
-                    emojiGrid(f, p, indent: CGFloat(depth) * Self.indent)
+                    emojiGrid(f, tree.profile, indent: CGFloat(depth) * Self.indent)
                         .transition(Motion.reveal(reduceMotion))
                 }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
-                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                        ForEach(f.items) { child in node(child, depth: depth + 1, m, tree) }
                     }
                     .transition(Motion.reveal(reduceMotion))
                 } else {
                     // Closed, it still shows the tab you are on when that tab is
                     // inside it, as Dia does; its other tabs fold away with it.
                     ForEach(SidebarRows.peek(f, active: m.activeLinks)) { l in
-                        node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
+                        node(.link(l), depth: depth + 1, m, tree).transition(Motion.reveal(reduceMotion))
                     }
                 }
             }
@@ -487,47 +480,106 @@ struct SidebarView: View {
             let tab = m.tab(for: l)
             // Like Arc: the link's tab has moved on to another page.
             let away = tab != nil && m.links.isAway(l.id)
-            return AnyView(SidebarRow(indent: CGFloat(depth) * Self.indent, selected: tab?.active == true,
-                                      focused: isCursor(.link(l.id)), editing: renaming == l.id,
-                                      label: tab == nil ? l.title : (away ? "\(l.title), open on another page" : "\(l.title), open")) {
-                openOrSwitch(l, m)
-            } content: {
-                SavedIcon(icons: [tab?.favIconUrl, l.icon], title: l.title)
-                // Dim while closed, full strength while open.
-                nameOrField(l.id, l.title, p)
-                    .foregroundStyle(tab == nil ? pal.textSecondary : pal.text)
-                if away, let tab, renaming != l.id {
-                    TabTitleText(title: sidebar.title(of: tab), url: tab.url, before: "/ ")
-                        .font(DS.TextStyle.body).lineLimit(1)
-                        .foregroundStyle(pal.textTertiary)
-                        .layoutPriority(-1)
-                }
-            } trailing: {
-                if let tab {
-                    TabSpeaker(tab: tab, name: l.title, canMute: m.session.can(.mute)) {
-                        tabs.setMuted(!tab.muted, tab, in: m.session)
-                    }
-                }
-                if away, let tab, m.session.can(.navigate) {
-                    Button { backToSaved(l, tab, m) } label: { RowIcon("arrow.uturn.backward") }
-                        .buttonStyle(PressStyle())
-                        .foregroundStyle(pal.textSecondary)
-                        .help("Back to \(l.title)")
-                        .accessibilityLabel("Back to \(l.title)")
+            return AnyView(SkipUnchanged(key: savedKey(.link(l), depth: depth, tab: tab, away: away, m, tree)) {
+                linkRow(l, depth: depth, tab: tab, away: away, m.session, tree)
+            }
+            .equatable()
+            .id(SidebarRowID.link(l.id)))
+        }
+    }
+
+    /// A folder's row. Drawn only when `SavedRowKey` changes, so nothing here
+    /// may read the profile or the window's tabs as they were then: its
+    /// actions read them when they run (`profileNow`, `now`).
+    private func folderRow(_ f: SidebarFolder, depth: Int, inside: [UUID], _ tree: Tree) -> some View {
+        SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)),
+                   editing: renaming == f.id || iconEditing?.id == f.id,
+                   label: "Folder \(f.name), \(f.expanded ? "open" : "closed")") {
+            toggleFolder(f.id, all: NSEvent.modifierFlags.contains(.option), tree.profile)
+        } content: {
+            if let editing = iconEditing, editing.id == f.id {
+                iconField(f, editing.kind, tree.profile)
+            } else {
+                FolderGlyph(icon: f.icon, expanded: f.expanded)
+                nameOrField(f.id, f.name, tree.profile)
+            }
+        }
+        .onDrag { drag(Self.savedKey(f.id)) }
+        .modifier(dropRow(f.id, canHold: true) { zone, p in spot(for: f.id, zone, p) })
+        .contextMenu {
+            Button("New Folder Inside") { newFolder(in: f.id, tree.profile) }
+            Button("Rename") { startRename(f.id, f.name) }
+            iconMenu(f, tree.profile)
+            moveMenu(f.id, inFavorites: false, tree.profile, place: tree.places[f.id], folders: tree.folders, inside: inside)
+            Divider()
+            Button("Delete Folder", role: .destructive) { deleteFolder(f.id, f.name, tree.profile) }
+        }
+    }
+
+    /// A saved link's row, drawn only when `SavedRowKey` changes (see `folderRow`).
+    private func linkRow(_ l: SavedLink, depth: Int, tab: BrowserTab?, away: Bool, _ session: BrowserSession, _ tree: Tree) -> some View {
+        SidebarRow(indent: CGFloat(depth) * Self.indent, selected: tab?.active == true,
+                   focused: isCursor(.link(l.id)), editing: renaming == l.id,
+                   label: tab == nil ? l.title : (away ? "\(l.title), open on another page" : "\(l.title), open")) {
+            // The link and its tab as they are now.
+            if let n = now, let l = n.p.savedLink(l.id) { openOrSwitch(l, n.m) }
+        } content: {
+            SavedIcon(icons: [tab?.favIconUrl, l.icon], title: l.title)
+            // Dim while closed, full strength while open.
+            nameOrField(l.id, l.title, tree.profile)
+                .foregroundStyle(tab == nil ? pal.textSecondary : pal.text)
+            if away, let tab, renaming != l.id {
+                TabTitleText(title: sidebar.title(of: tab), url: tab.url, before: "/ ")
+                    .font(DS.TextStyle.body).lineLimit(1)
+                    .foregroundStyle(pal.textTertiary)
+                    .layoutPriority(-1)
+            }
+        } trailing: {
+            if let tab {
+                TabSpeaker(tab: tab, name: l.title, canMute: session.can(.mute)) {
+                    tabs.setMuted(!tab.muted, tab, in: session)
                 }
             }
-            .id(SidebarRowID.link(l.id))
-            .onDrag { drag(Self.savedKey(l.id)) }
-            .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
-            .contextMenu {
-                Button("Rename") { startRename(l.id, l.title) }
-                Button("New Folder") { newFolder(in: p.parent(of: l.id), p) }
-                heldMenu(l, tab, p, m)
-                moveMenu(l.id, isFolder: false, inFavorites: false, p)
-                Divider()
-                Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, p) }
-            })
+            if away, let tab, session.can(.navigate) {
+                Button { backToSaved(l, tab, session) } label: { RowIcon("arrow.uturn.backward") }
+                    .buttonStyle(PressStyle())
+                    .foregroundStyle(pal.textSecondary)
+                    .help("Back to \(l.title)")
+                    .accessibilityLabel("Back to \(l.title)")
+            }
         }
+        .onDrag { drag(Self.savedKey(l.id)) }
+        .modifier(dropRow(l.id, canHold: false) { zone, p in spot(for: l.id, zone, p) })
+        .contextMenu {
+            Button("Rename") { startRename(l.id, l.title) }
+            Button("New Folder") { if let p = profileNow { newFolder(in: p.parent(of: l.id), p.id) } }
+            heldMenu(l, tab, away: away, tree.profile, session)
+            moveMenu(l.id, inFavorites: false, tree.profile, place: tree.places[l.id], folders: tree.folders)
+            Divider()
+            Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, tree.profile) }
+        }
+    }
+
+    /// The Sidebar Profile this window shows, as it is now.
+    private var profileNow: SidebarProfile? { lib.library.profile(for: sidebar.look.match?.profile?.ref) }
+
+    /// The Sidebar Profile and this window's tabs as they are now, for what a
+    /// row does when it is used: a row is drawn again only when what it shows
+    /// changes, so what it was drawn with may be older.
+    private var now: (p: SidebarProfile, m: Match, open: [BrowserTab])? {
+        guard let p = profileNow, let m = sidebar.look.match?.resolving(p) else { return nil }
+        return (p, m, m.window?.tabs ?? [])
+    }
+
+    /// Everything a saved row shows or its menus are built from.
+    private func savedKey(_ item: SavedRowKey.Item, depth: Int, tab: BrowserTab?, away: Bool, _ m: Match, _ tree: Tree) -> SavedRowKey {
+        let id = item.id
+        var draft: String?
+        if let editing = iconEditing, editing.id == id { draft = "\(editing.kind) \(iconDraft)" }
+        return SavedRowKey(item: item, depth: depth, profile: tree.profile, place: tree.places[id], folders: tree.folders,
+                           tab: tab, away: away, session: m.session.socketPath, ops: m.session.ops,
+                           focused: isCursor(item.isFolder ? .folder(id) : .link(id)), renaming: renaming == id, iconDraft: draft,
+                           drop: dropTarget?.id == id ? dropTarget?.zone : nil, palette: sidebar.palette, reduceMotion: reduceMotion)
     }
 
     @ViewBuilder
