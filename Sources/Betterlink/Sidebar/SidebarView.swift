@@ -1493,6 +1493,13 @@ private struct SidebarRow<Content: View, Trailing: View>: View {
             } else {
                 Button(action: action) { inside }
                     .buttonStyle(.plain)
+                    // Not a stop for Tab: the keyboard's way into the rows is
+                    // the list's one stop and its arrow keys, with Full
+                    // Keyboard Access too. With every row in the key-view
+                    // loop, AppKit rebuilt that loop on each layout, nearly a
+                    // fifth of the main thread while a folder opened.
+                    // VoiceOver still finds and presses every row.
+                    .focusable(false)
                     .accessibilityLabel(label)
                     .accessibilityAddTraits(selected ? .isSelected : [])
             }
