@@ -22,6 +22,8 @@ final class SyncController: ObservableObject {
     @Published private(set) var offered: [SyncOffer] = []
     /// Offers whose Add or Merge waits for the next sync.
     @Published private(set) var pendingOffers: Set<UUID> = []
+    /// Other Macs whose betterlink doesn't know merges yet: a Merge waits for them.
+    @Published private(set) var mergeWaitsFor: [String] = []
     /// Sync held back instead of deleting many synced items at once
     /// (SyncGuard); nil while syncing.
     @Published private(set) var held: SyncHold?
@@ -210,6 +212,9 @@ final class SyncController: ObservableObject {
         session = SyncSession(settings: settings, folder: f, device: device, name: deviceName, selection: selection,
                               identity: { [weak self] in self?.identity($0) ?? ProfileIdentity(name: nil, account: nil) },
                               resolve: { [weak self] b, d, who in self?.resolve(b, d, who) })
+        // An Add or Merge saves the selection before the sidebar it describes.
+        let d = defaults
+        session?.saveSelection = { SyncDefaults.setSelection($0, in: d) }
         // Another Mac's file landing, or a local settings change: sync.
         if let w = PathWatcher(url: f.devices, debounce: 0.3, onChange: { [weak self] in
             MainActor.assumeIsolated { self?.schedulePull() }
@@ -236,7 +241,12 @@ final class SyncController: ObservableObject {
     private func pull() {
         guard let session else { return }
         let wasHeld = held?.ids
-        defer { refreshNotes() }
+        defer {
+            refreshNotes()
+            // Whatever the outcome, a selection the sync saved is this Mac's now.
+            if session.selection != selection { selection = session.selection }
+            mergeWaitsFor = session.mergeWaitsFor
+        }
         do {
             let r = try session.pull()
             if !r.recorded.isEmpty {
@@ -262,8 +272,6 @@ final class SyncController: ObservableObject {
             let others = Set(session.otherDevices)
             peers = session.peers
             status = "Synced \(Date().formatted(date: .omitted, time: .shortened))" + (others.isEmpty ? "" : " with \(others.count) other Mac\(others.count == 1 ? "" : "s")")
-            // An Add or Merge, or another Mac's merge, changed what this Mac syncs.
-            if r.selectionChanged, session.selection != selection { selection = session.selection }
             offered = session.offers()
             pendingOffers = []
         } catch let e as SyncSession.Held {

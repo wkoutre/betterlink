@@ -315,6 +315,13 @@ enum AgentCommand {
                 guard offer.sameNameAs != nil else {
                     return AgentResponseJSON.failure("No Sidebar Profile on this Mac is named \"\(offer.name)\"; use sync add.")
                 }
+                if let root = SyncDefaults.folder(in: d) {
+                    let me = ProcessInfo.processInfo.environment["BETTERLINK_SYNC_DEVICE"] ?? d.string(forKey: "sync.device")
+                    let old = SyncFolder(root).readAll(except: me).files.filter { !($0.features ?? []).contains(SyncDeviceFile.mergeFeature) }
+                    if !old.isEmpty {
+                        return AgentResponseJSON.failure("Merge needs the latest betterlink on \(old.map(\.name).sorted().joined(separator: ", ")) first.")
+                    }
+                }
                 let library = (try? SidebarStore(folder: folder).load()) ?? SidebarLibrary()
                 let group = SyncModel.mergeGroup(offer.id, state: state, selected: Set(SyncDefaults.selection(in: d).profiles.keys), library: library)
                 try store.update { $0.merging = ($0.merging ?? []) + [group] }

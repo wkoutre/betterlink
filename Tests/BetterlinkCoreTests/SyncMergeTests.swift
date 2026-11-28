@@ -72,7 +72,65 @@ struct SyncMergeTests {
         #expect(!b.state.isLive("sp:\(work.uuidString)"))
     }
 
+    /// A crash after the Add saved the selection but before sidebar.json
+    /// was written: the next push must not read the profile as deleted.
+    @Test func aProfileAnAddWaitsOnIsNeverReadAsDeleted() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync, [SidebarProfile(id: work, name: "Work", favorites: [link("w1")])], synced: [work])
+        let b = try mac("B", sync: sync, [SidebarProfile(id: pb, name: "Home")], synced: [pb])
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        try SyncLocalStore(folder: b.settings).update { $0.adding = [work] }
+        b.selection.profiles[work] = .init()
+        try b.push(now: t(3))
+        #expect(b.state.isLive("sp:\(work.uuidString)"))
+        try b.pull(now: t(4))
+        #expect(try lib(b).profiles.first { $0.id == work }?.favorites.map(\.title) == ["w1"])
+        #expect(SyncLocalStore(folder: b.settings).load().adding == nil)
+    }
+
+    @Test func addingSavesTheSelectionBeforeTheSidebar() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync, [SidebarProfile(id: work, name: "Work")], synced: [work])
+        let b = try mac("B", sync: sync, [SidebarProfile(id: pb, name: "Home")], synced: [pb])
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        var saved: SyncSelection?
+        b.saveSelection = { sel in
+            saved = sel
+            // Not written yet when the selection is saved.
+            #expect(!(try SidebarStore(folder: b.settings).load().profiles.contains { $0.id == work }))
+        }
+        try SyncLocalStore(folder: b.settings).update { $0.adding = [work] }
+        try b.pull(now: t(3))
+        #expect(saved?.profiles[work] != nil)
+    }
+
     // MARK: Merge
+
+    /// A Mac on a betterlink from before merges would delete the merged
+    /// profile outright, so a Merge waits for it.
+    @Test func aMergeWaitsForAMacThatDoesntKnowMerges() throws {
+        let sync = tempDir()
+        let a = try mac("A", sync: sync, [SidebarProfile(id: pa, name: "Primary", favorites: [link("a1")])], synced: [pa])
+        let b = try mac("B", sync: sync, [SidebarProfile(id: pb, name: "Primary", favorites: [link("b1")])], synced: [pb])
+        try a.pull(now: t(1)); try b.pull(now: t(2))
+        // A's file as an older betterlink writes it: no features.
+        let f = SyncFolder(sync)
+        let d = JSONDecoder(); d.dateDecodingStrategy = .iso8601
+        var old = try d.decode(SyncDeviceFile.self, from: Data(contentsOf: f.file(for: "A")))
+        old.features = nil
+        try f.write(old)
+        try SyncLocalStore(folder: b.settings).update { $0.merging = [[pa, pb]] }
+        try b.pull(now: t(3))
+        #expect(b.mergeWaitsFor == ["Mac A"])
+        #expect(try lib(b).profiles.map(\.id) == [pb])
+        #expect(b.state.isLive("sp:\(pa.uuidString)"))
+        #expect(SyncLocalStore(folder: b.settings).load().merging == [[pa, pb]])  // still asked for
+        // A updates and relaunches: it rewrites its file with the feature, and the merge goes ahead.
+        let a2 = SyncSession(settings: a.settings, folder: f, device: "A", name: "Mac A", selection: a.selection)
+        try a2.pull(now: t(4)); try b.pull(now: t(5))
+        #expect(b.mergeWaitsFor.isEmpty)
+        #expect(try lib(b).profiles.map(\.id) == [pa])
+    }
 
     @Test func offersNameASameNamedProfileHere() throws {
         let sync = tempDir()

@@ -155,7 +155,9 @@ extension SyncModel {
             sel.profiles[p.id] = nil
             sel.profiles[t] = union(sel.profiles[t], parts)
             if let j = lib.profiles.firstIndex(where: { $0.id == t }) {
-                lib.profiles[j].fold(lib.profiles[i])
+                // Only one profile shows every unlinked browser profile.
+                let otherCatchAll = lib.profiles.contains { $0.id != p.id && $0.id != t && $0.browserProfiles.isEmpty }
+                lib.profiles[j].fold(lib.profiles[i], catchAll: !otherCatchAll)
                 lib.profiles.remove(at: i)
             } else {
                 lib.profiles[i].id = t
@@ -174,13 +176,14 @@ extension SidebarProfile {
     /// Takes in another profile: its favorites and items that aren't here
     /// already (by id) go after this one's, and its browser profiles show this
     /// one. When either showed every browser profile not linked to another
-    /// (no links), this one still does.
-    mutating func fold(_ other: SidebarProfile) {
+    /// (no links), this one does, unless `catchAll` is false (another
+    /// profile already does).
+    mutating func fold(_ other: SidebarProfile, catchAll: Bool = true) {
         let mine = allLinks.map(\.id) + SidebarProfile.allFolders(in: items).map(\.id)
         var have = Set(mine)
         for f in other.favorites where !have.contains(f.id) { favorites.append(f); have.insert(f.id) }
         for item in other.items where !have.contains(item.id) { items.append(item); have.insert(item.id) }
-        if browserProfiles.isEmpty || other.browserProfiles.isEmpty { browserProfiles = [] }
+        if catchAll, browserProfiles.isEmpty || other.browserProfiles.isEmpty { browserProfiles = [] }
         else { for r in other.browserProfiles where !browserProfiles.contains(r) { browserProfiles.append(r) } }
     }
 }

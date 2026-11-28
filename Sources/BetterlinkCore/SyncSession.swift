@@ -16,10 +16,16 @@ public struct SyncDeviceFile: Codable, Equatable, Sendable {
     /// The browser profile this Mac put in place for each synced target
     /// (SyncModel.project). This Mac's own; other Macs ignore it.
     public var applied: [String: ProfileRef]?
+    /// What this Mac's betterlink knows that older ones don't
+    /// (`mergeFeature`). Missing: a betterlink from before any.
+    public var features: [String]?
+    /// The feature a Merge needs on every Mac.
+    public static let mergeFeature = "merge"
 
     public init(device: String, name: String, written: Date, state: SyncState, applied: [String: ProfileRef]? = nil) {
         self.format = Self.format; self.device = device; self.name = name; self.written = written; self.state = state
         self.applied = applied
+        self.features = [Self.mergeFeature]
     }
 }
 
@@ -81,6 +87,12 @@ public final class SyncSession {
     public var selection: SyncSelection
     public var identity: (ProfileRef) -> ProfileIdentity
     public var resolve: (String, String, ProfileIdentity) -> String?
+    /// Saves a selection an Add or a Merge changed (the app's settings),
+    /// before the sidebar it describes is written.
+    public var saveSelection: ((SyncSelection) throws -> Void)?
+    /// The other Macs whose betterlink doesn't know merges yet; a Merge
+    /// waits for them.
+    public private(set) var mergeWaitsFor: [String] = []
     public private(set) var state = SyncState()
     /// The other Macs whose files the last pull read, by name.
     public private(set) var otherDevices: [String] = []
@@ -95,6 +107,8 @@ public final class SyncSession {
     /// daily even when nothing changed, so other Macs can tell this one is
     /// still syncing (SyncPeer's warning).
     private var writtenAt: Date?
+    /// This Mac's file was written by an older betterlink.
+    private var stale = false
     /// How often an unchanged file is rewritten anyway.
     public static let heartbeat: TimeInterval = 86_400
     /// What materialize last put in place for each synced target.
@@ -150,6 +164,8 @@ public final class SyncSession {
             writtenAt = mine.written
             applied = mine.applied ?? [:]
             writtenApplied = mine.applied
+            // Written by a betterlink that knew less: rewritten, so other Macs see what this one knows.
+            stale = !(mine.features ?? []).contains(SyncDeviceFile.mergeFeature)
             if let m = state.maxStamp { clock.observe(m) }
         }
     }
@@ -209,8 +225,22 @@ public final class SyncSession {
         var local = SyncModel.project(rules: snap.rules, library: snap.library, selection: selection,
                                       identity: identity, state: state, applied: applied)
         if selection.global { local[SyncModel.configID] = ["text": .of(snap.config)] }
-        let scope = SyncModel.scope(selection, state: state)
         let notes = localNotes.load()
+        // A profile an Add or Merge still waits on (its notes are cleared
+        // only once a push has carried it out) is never read as deleted
+        // while it isn't in sidebar.json: a crash between saving the
+        // selection and writing the sidebar must not delete it everywhere.
+        let waiting = Set((notes.adding ?? []) + (notes.merging ?? []).flatMap { $0 })
+            .subtracting(snap.library.profiles.map(\.id))
+        let selected = SyncModel.scope(selection, state: state)
+        let was = state
+        let scope: (String) -> Bool = { id in
+            guard selected(id) else { return false }
+            if waiting.isEmpty { return true }
+            let owner = id.hasPrefix("sp:") ? SyncModel.uuid(id)
+                : id.hasPrefix("node:") ? was.value(id, "profile")?.string.flatMap(UUID.init(uuidString:)) : nil
+            return owner.map { !waiting.contains($0) && !waiting.contains(SyncModel.mergeTarget($0, in: was)) } ?? true
+        }
         // Kept after a hold: not deleted, and the pull that follows brings them back.
         let keep = Set(notes.decision?.keep ?? [])
         let approved = Set(notes.decision?.delete ?? [])
@@ -288,12 +318,13 @@ public final class SyncSession {
                 if $0.decision?.isEmpty == true { $0.decision = nil }
             }
         }
-        guard state != written || applied != (writtenApplied ?? [:])
+        guard state != written || applied != (writtenApplied ?? [:]) || stale
                 || writtenAt.map({ now.timeIntervalSince($0) >= Self.heartbeat }) ?? false
                 || !FileManager.default.fileExists(atPath: folder.file(for: device).path) else { return false }
         try folder.write(SyncDeviceFile(device: device, name: name, written: now, state: state, applied: applied))
         written = state
         writtenAt = now
+        stale = false
         writtenApplied = applied
         return true
     }
@@ -327,6 +358,14 @@ public final class SyncSession {
         try saveNotes(found, report, now: now, done: true)
         report.recorded = found.values.sorted { $0.entity < $1.entity }
         try push(now: now)
+        // The Adds and Merges carried out are in this Mac's file now; one
+        // asked for since this sync read the notes waits for the next.
+        if !report.added.isEmpty || !report.merged.isEmpty {
+            try localNotes.update { notes in
+                notes.adding = notes.adding.map { a in a.filter { !report.added.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
+                notes.merging = notes.merging.map { m in m.filter { !report.merged.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
+            }
+        }
         return report
     }
 
@@ -341,8 +380,7 @@ public final class SyncSession {
         let unresolved = report.notes.unresolvedRules.sorted { $0.uuidString < $1.uuidString }
         let missing = Dictionary(uniqueKeysWithValues: report.notes.missingProfiles.map { ($0.key.uuidString, $0.value) })
         let before = localNotes.load()
-        let requests = done && (!report.added.isEmpty || !report.merged.isEmpty)
-        guard !recorded.isEmpty || !restored.isEmpty || keepDone || requests
+        guard !recorded.isEmpty || !restored.isEmpty || keepDone
                 || (done && (!before.restore.isEmpty || (before.unresolvedRules ?? []) != unresolved
                              || (before.missingProfiles ?? [:]) != missing)) else { return }
         try localNotes.update { notes in
@@ -352,9 +390,6 @@ public final class SyncSession {
                 // Asked for and done, or no longer in the history: either way, settled.
                 let known = Set(notes.history.map(\.id))
                 notes.restore.removeAll { restored.contains($0) || !known.contains($0) }
-                // Done; one asked for since this sync read the notes waits for the next.
-                notes.adding = notes.adding.map { a in a.filter { !report.added.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
-                notes.merging = notes.merging.map { m in m.filter { !report.merged.contains($0) } }.flatMap { $0.isEmpty ? nil : $0 }
             }
             notes.history.removeAll { restored.contains($0.id) }
             notes.record(recorded, now: now)
@@ -412,9 +447,16 @@ public final class SyncSession {
         var requested: Set<UUID> = []
         report.added = notes.adding ?? []
         report.merged = notes.merging ?? []
-        for id in report.added where merged.isLive(SyncModel.profileID(id)) && sel.profiles[id] == nil {
-            sel.profiles[SyncModel.mergeTarget(id, in: merged)] = .init()
+        for id in report.added {
+            // One merged into another meanwhile: its survivor is what is added.
+            let t = SyncModel.mergeTarget(id, in: merged)
+            if merged.isLive(SyncModel.profileID(t)), sel.profiles[t] == nil { sel.profiles[t] = .init() }
         }
+        // A Mac on a betterlink from before merges would delete a merged
+        // profile outright (and offer its survivor with the old Add): merges
+        // wait until every Mac's file says it knows them.
+        mergeWaitsFor = read.files.filter { !($0.features ?? []).contains(SyncDeviceFile.mergeFeature) }.map(\.name).sorted()
+        if !mergeWaitsFor.isEmpty { report.merged = [] }
         for group in report.merged {
             if SyncModel.requestMerge(group, state: &merged, library: snap.library, selection: &sel, clock: &clock, now: Self.ms(now)) != nil {
                 requested.formUnion(group)
@@ -427,14 +469,20 @@ public final class SyncSession {
             // kept to itself until the merge, and what a fold brought in) is
             // stamped now, or rebuilding the profile from the state below
             // would leave it out.
+            // That is what this Mac syncs now and didn't before, as this Mac
+            // has it: the state may hold an older copy of it, from before
+            // it was kept to this Mac. Nothing is marked deleted here.
             let local = SyncModel.project(rules: snap.rules, library: followed.library, selection: sel,
                                           identity: identity, state: merged, applied: applied)
+            let before = SyncModel.scope(selection, state: state), after = SyncModel.scope(sel, state: merged)
             for (id, fields) in local.sorted(by: { $0.key < $1.key })
-            where (id.hasPrefix("node:") || id.hasPrefix("sp:")) && merged.entities[id] == nil {
-                for (k, v) in fields.sorted(by: { $0.key < $1.key }) {
+            where (id.hasPrefix("node:") || id.hasPrefix("sp:")) && after(id) && !(merged.entities[id] != nil && before(id)) {
+                for (k, v) in fields.sorted(by: { $0.key < $1.key }) where merged.entities[id]?[k]?.value != v {
                     merged.entities[id, default: [:]][k] = Stamped(v, clock.tick(now: Self.ms(now)))
                 }
-                merged.entities[id, default: [:]]["deleted"] = Stamped(.bool(false), clock.tick(now: Self.ms(now)))
+                if merged.entities[id]?["deleted"]?.value != .bool(false) {
+                    merged.entities[id, default: [:]]["deleted"] = Stamped(.bool(false), clock.tick(now: Self.ms(now)))
+                }
             }
         }
 
@@ -457,9 +505,16 @@ public final class SyncSession {
         applied = r.applied
         adopt(Self.isRules)
 
+        // The new selection is saved before the sidebar it describes: with
+        // the request still in the notes, a profile in it that isn't in
+        // sidebar.json yet is never read as deleted (push), while a merged
+        // profile still selected after its sidebar entry went would be.
+        if sel != selection {
+            try saveSelection?(sel)
+            selection = sel; report.selectionChanged = true
+        }
         try replace(snap.library, with: r.library, in: sidebar.update, &report)
         adopt(Self.isLibrary)
-        if sel != selection { selection = sel; report.selectionChanged = true }
 
         if selection.global, let synced = merged.value(SyncModel.configID, "text"), synced.string != snap.config {
             let stamp = ISO8601DateFormatter().string(from: now).replacingOccurrences(of: ":", with: "-")

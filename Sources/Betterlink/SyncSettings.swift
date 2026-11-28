@@ -139,6 +139,11 @@ struct SyncSettingsSection: View {
             Spacer()
             if sync.pendingOffers.contains(o.id) {
                 Text("Adding").font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+            } else if o.sameNameAs != nil, !sync.mergeWaitsFor.isEmpty {
+                Button("Add Separately") { sync.add(o) }
+                Text("Merge needs the latest betterlink on \(sync.mergeWaitsFor.joined(separator: ", ")).")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             } else if o.sameNameAs != nil {
                 Button("Add Separately") { sync.add(o) }
                     .help("Add it as a second profile named \u{201C}\(name)\u{201D}.")

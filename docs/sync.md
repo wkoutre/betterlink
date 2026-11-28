@@ -25,6 +25,8 @@ Every Mac starts with its own Sidebar Profile "Primary", each with its own id, s
 - A merge keeps one of the profiles, the survivor: the lowest id, so two Macs merging at once pick the same one. Each other one gets `mergedInto: <survivor>` and `deleted: true`, and its saved links and folders move into the survivor (their `profile` field), after the survivor's own. The survivor syncs every part of every profile merged into it.
 - Every Mac that syncs a merged profile follows on its next sync: its copy is folded into the survivor, or becomes the survivor when that Mac doesn't have it, keeping its browser profile links and anything it kept to itself. A profile a Mac keeps to itself is never touched by another Mac's merge.
 - Nothing is deleted. A merged profile's own entry going isn't listed under Recently changed by sync, and neither are its items moving.
+- A Merge waits until every other Mac's file lists the `merge` feature (`features` in the device file), because a betterlink from before merges would read the merged profile as deleted and drop what that Mac kept to itself. Sync settings names the Macs it waits for; `sync merge` refuses until then.
+- Until the push that carries it out succeeds, an Add or Merge stays in this Mac's notes, and a profile it names that isn't in sidebar.json yet is never read as deleted. The new selection is saved before the sidebar is written.
 - Folders with the same name aren't combined, and duplicate saved links aren't removed: both stay, to tidy by hand.
 
 New Sidebar Profiles, from the sidebar's ⚙ or `betterlink sidebar profiles add`, ask for a name, and refuse one another profile here already has.

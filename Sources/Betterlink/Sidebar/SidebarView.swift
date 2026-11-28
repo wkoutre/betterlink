@@ -74,6 +74,7 @@ struct SidebarView: View {
         VStack(alignment: .leading, spacing: 0) {
             header(match: match, profile: profile, open: windowTabs)
                 // Another profile now: an open rename belonged to the last one.
+                .onChange(of: look.match?.profile?.ref) { creatingProfileFor = nil }
                 .onChange(of: profile?.id) { renamingProfile = nil; profileNameProblem = nil }
             if let m = match, let profile {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
