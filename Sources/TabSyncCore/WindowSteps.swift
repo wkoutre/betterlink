@@ -211,12 +211,19 @@ public struct WindowSteps: Sendable {
     /// `own`: the steps that take over treat it as theirs (sent again if
     /// dropped or held partway), though it isn't what they ask: a glide's
     /// probe of a widening (`WindowGlide`), of the same motion.
-    public static func inFlight(_ call: Call, at: Double, from: CGRect, seen: CGRect, changed: Double, moved: Bool, own: Bool = false) -> WindowSteps {
+    public static func inFlight(_ call: Call, at: Double, from: CGRect, seen: CGRect, changed: Double, moved: Bool, own: Bool = false,
+                                then: Call? = nil) -> WindowSteps {
         var w = WindowSteps(target: seen, keep: nil)
         w.sent = (call, at, seen, changed, from, moved, nil, false)
         w.lends = own
+        w.then = then
         return w
     }
+
+    /// A call sent right after the one in flight, in the same go (a glide
+    /// frame's size after its position): once that one has landed, this one
+    /// is waited for the same way, before anything of these steps' own.
+    private var then: Call?
 
     /// Its call in flight is the taking-over steps' own (`inFlight(own:)`).
     private var lends = false
@@ -238,6 +245,7 @@ public struct WindowSteps: Sendable {
         // Its call in flight is waited for first, as one of these.
         if let earlier, !earlier.done {
             sent = earlier.sent
+            then = earlier.then
             inherited = sent != nil
             foreign = earlier.lends ? false : sent.map { !Self.reached($0.call, target) } ?? false
             startLag = earlier.startLag
@@ -290,6 +298,17 @@ public struct WindowSteps: Sendable {
         let checks = watches
         let capped = deadline != nil
         if var s = sent {
+            if seen != s.last, let n = then, !Self.can(s.call, from: s.last, to: seen, slack: slack) {
+                // Its frame's next call already showing (the two shown at once, or one after the other between two
+                // looks): the one in flight has landed, and that one is under way.
+                var landed = s.last
+                if case .position(let t) = s.call { landed.origin = CGPoint(x: t.minX, y: t.maxY - landed.height) }
+                if Self.can(n, from: landed, to: seen, slack: slack) {
+                    then = nil
+                    s = (n, s.at, landed, s.changed, landed, true, nil, false)
+                    sent = s
+                }
+            }
             if seen != s.last {
                 guard !checks || Self.can(s.call, from: s.last, to: seen, slack: slack) else {
                     interrupted = true
@@ -346,6 +365,13 @@ public struct WindowSteps: Sendable {
                     sent = s
                     return s.call
                 }
+            }
+            if let n = then {
+                // Its frame's next call, sent with it: waited for in turn, from where this one left the window.
+                then = nil
+                if s.moved { slowest = max(slowest, s.changed - s.at); moves += 1 }
+                sent = (n, s.at, seen, s.changed, seen, false, nil, false)
+                return nil
             }
             sent = nil
             if s.moved { slowest = max(slowest, s.changed - s.at); moves += 1 }

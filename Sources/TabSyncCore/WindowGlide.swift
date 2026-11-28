@@ -97,6 +97,9 @@ public struct WindowGlide: Sendable {
     /// nudge): with the size unanswered, both are on their way, and the frame
     /// is waited for whole, as widening.
     private var movedFirst = false
+    /// That position, when, and the window when it was sent.
+    private var firstMove: (call: Call, at: Double, from: CGRect)?
+
     /// The narrowest this browser's window was seen to take in this glide (a
     /// size taken short: its minimum). A left show at it sends nothing more.
     private var minimum: CGFloat?
@@ -368,6 +371,7 @@ public struct WindowGlide: Sendable {
         landedLast = false
         topLeftX = b.minX
         movedFirst = false
+        firstMove = nil
         if !proven, !(Self.near(f.width, b.width) && Self.near(f.height, b.height)) {
             // The probe: the size alone, at least `probeStep` from where the window is (an animation's first
             // step is under a point, and must not pass for having landed), never past where the slide ends.
@@ -415,7 +419,10 @@ public struct WindowGlide: Sendable {
             return nil
         }
         let c = plan(width: width)
-        if let c, let b = before { lastCall = (c, sentAt, b) }
+        if let c, let b = before {
+            lastCall = (c, sentAt, b)
+            if movedFirst, firstMove == nil, case .position = c { firstMove = (c, sentAt, b) }
+        }
         return c
     }
 
@@ -515,8 +522,8 @@ public struct WindowGlide: Sendable {
         // A frame's position and size both sent and nothing shown yet (a busy browser): on their way, they are
         // waited for, the last of them (calls land in order) never sent again. Started afresh, the steps would see
         // the window where it is and send nothing, and the two would land after them.
-        if !moved, movedFirst, !landedLast, let c = lastCall {
-            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: false))
+        if !moved, movedFirst, !landedLast, let c = inFlight(seen: seen) {
+            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: false, then: c.then))
         }
         guard moved else { return .none }
         let resume = WindowSteps.Resume(from: start, seen: seen, at: sentAt, changed: changedAt)
@@ -525,7 +532,21 @@ public struct WindowGlide: Sendable {
         // A size the browser didn't show at once, narrowing: checked as after the steps' own size (its minimum, a
         // stop short).
         if stoppedAtSize { return .holds(resume) }
-        guard let c = lastCall else { return .none }
-        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at))
+        guard let c = inFlight(seen: seen) else { return .none }
+        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at, then: c.then))
+    }
+
+    /// The call of the frame in flight the steps that take over wait for:
+    /// its last; but for a frame whose position went before its size, that
+    /// position until the window shows it (calls land in order), the size
+    /// waited for after it (`then`); once the position shows, the size, from
+    /// where the position put the window. Waiting for the size
+    /// from the start, the position landing would pass for someone else's
+    /// change (a size keeps the top left; review of adddb77, F1).
+    private func inFlight(seen: CGRect) -> (call: Call, at: Double, from: CGRect, then: Call?)? {
+        guard let c = lastCall else { return nil }
+        guard movedFirst, let m = firstMove, case .position(let t) = m.call, case .size = c.call else { return (c.call, c.at, c.from, nil) }
+        if !Self.near(seen.minX, t.minX, 0.5) { return (m.call, m.at, m.from, c.call) }
+        return (c.call, c.at, CGRect(x: t.minX, y: t.maxY - m.from.height, width: m.from.width, height: m.from.height), nil)
     }
 }

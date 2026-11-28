@@ -179,4 +179,36 @@ import Testing
         #expect(g.step(seen: w, now: t, progress: slide.progress(at: t), end: false, deadline: 3) == nil)
         #expect(g.done && g.interrupted)
     }
+
+    /// A busy browser: a left show's position and size both sent, the size's
+    /// read unanswered, nothing shown, and a press takes over (review of
+    /// adddb77, F1). Whichever lands first, the glide's position and then its
+    /// size, neither passes for someone else's change: the steps that take
+    /// over wait for the one still to come and go on to the frame asked.
+    @Test func aBusyLeftShowsCallsInFlightAreWaitedForInOrder() {
+        // Shown one after the other, or both at once.
+        for (sizeLandsToo, together) in [(false, false), (true, false), (true, true)] {
+            var g = WindowGlide(closed: closed, open: leftOpen, side: .left, right: 2056, proven: true)
+            var calls: [WindowSteps.Call] = []
+            var c = g.step(seen: closed, now: 0, progress: 0, end: false, deadline: 3)
+            while let call = c {
+                calls.append(call)
+                if case .size = call { c = g.next(width: nil, unanswered: true) } else { c = g.next(width: nil) }
+            }
+            g.sent(at: 0.001)
+            guard case .position(let p) = calls.first, case .size(let f) = calls.last, calls.count == 2 else { Issue.record("\(calls)"); return }
+            guard case .waits(let w) = g.handover(seen: closed, takenOver: true) else { Issue.record("not waited for"); return }
+            var s = WindowSteps(target: closed, keep: .left, deadline: 3, after: w)
+            _ = s.step(seen: closed, now: 0.02)
+            let moved = CGRect(x: p.minX, y: 0, width: closed.width, height: closed.height)
+            if !together {
+                _ = s.step(seen: moved, now: 0.03)
+                #expect(!s.interrupted, "the glide's own position landing passed for someone else's change")
+            }
+            if sizeLandsToo {
+                _ = s.step(seen: CGRect(x: p.minX, y: 0, width: f.width, height: closed.height), now: 0.05)
+                #expect(!s.interrupted, "the glide's own size landing passed for someone else's change")
+            }
+        }
+    }
 }

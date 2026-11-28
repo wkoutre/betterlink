@@ -1261,7 +1261,9 @@ struct RuleCheck {
         let replays = b.timing == .busy || b.stall > 0 || (b.timing == .late && b.lateBy > 2 * WindowSteps.timeout)
         // Mid-motion, a glide's set puts the browser's far edge out past where it was, never in, for as long as the
         // next call takes (`WindowGlide`): past the screen's edge for a window that fills it. That much, at most the
-        // sidebar's width out on the far side, isn't counted; the frame at rest is.
+        // sidebar's width out on the far side, isn't counted; the frame at rest is. A frame's step is the slide's
+        // progress since the last frame landed, which after a late one is most of the slide (seed 6221202 case 373:
+        // 195 pt at once); never more than the whole of it.
         let left = rig.side == .left, out = rig.sidebarWidth + 2
         let level = displays.filter { $0.frame.minY < before.maxY - 1 && $0.frame.maxY > before.minY + 1 }
         let screenRight = level.map(\.frame.maxX).max() ?? before.maxX
