@@ -41,10 +41,19 @@ struct ProfileLabel: View {
     var body: some View {
         let p = model.catalog.profile(ref)
         let browser = model.browserName(ref.browser)
+        let installed = model.browsers.contains { $0.bundleId == ref.browser }
+        let plain = Browser.known(bundleId: ref.browser)?.family == .plain
         HStack(spacing: DS.Space.space1 + 2) {
             ProfileDot(color: p?.swiftUIColor ?? DS.Palette.textPlaceholder)
             // One Text, so a Menu label shows all of it.
-            if let p {
+            if !installed {
+                // A rule's profile in a browser another Mac has (a synced rule).
+                let name = p?.name ?? (ref.directory.isEmpty || ref.directory == "Default" ? nil : ref.directory)
+                Text("\(browser)\(name.map { " \($0)" } ?? "") (not installed)").foregroundStyle(DS.Palette.textTertiary)
+            } else if p == nil && ref.directory.isEmpty && !plain {
+                // A synced rule's profile this Mac's browser doesn't have.
+                Text("\(browser) profile not on this Mac").foregroundStyle(DS.Palette.textTertiary)
+            } else if let p {
                 if showBrowser && !ref.directory.isEmpty {
                     Text("\(Text(browser).foregroundStyle(DS.Palette.textSecondary)) \(Text(p.name).fontWeight(.medium))")
                 } else {

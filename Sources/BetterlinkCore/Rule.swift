@@ -1,6 +1,9 @@
 import Foundation
 
-/// One row of the Link Rules editor: "Open <kind> <pattern> in <profile>".
+/// One row of the Link Rules editor: "Open <kind> <pattern> in <profile>",
+/// optionally "or in <profile>" more times: the profiles to use, in order,
+/// on a Mac that doesn't have the ones before (another browser on a work
+/// laptop, say). The link opens in the first one this Mac has.
 public struct Rule: Codable, Equatable, Identifiable, Sendable {
     public enum Kind: String, Codable, CaseIterable, Sendable {
         case contains     // "URLs containing"
@@ -15,13 +18,35 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
     public var browser: String
     /// The profile within that browser (`BrowserProfile.directory`).
     public var profile: String
+    /// Where the link opens when this Mac has neither the first profile nor
+    /// any backup before this one. Empty for most rules.
+    public var backups: [ProfileRef]
+    /// The first choice: the profile the rule was written for.
     public var target: ProfileRef { ProfileRef(browser: browser, directory: profile) }
+    /// Every profile the rule names, first choice first.
+    public var targets: [ProfileRef] { [target] + backups }
 
-    public init(id: UUID = UUID(), kind: Kind, pattern: String, browser: String = Browser.brave.bundleId, profile: String) {
+    public init(id: UUID = UUID(), kind: Kind, pattern: String, browser: String = Browser.brave.bundleId, profile: String,
+                backups: [ProfileRef] = []) {
         self.id = id; self.kind = kind; self.pattern = pattern; self.browser = browser; self.profile = profile
+        self.backups = backups
     }
 
-    private enum CodingKeys: String, CodingKey { case id, kind, pattern, browser, profile }
+    /// The first of the rule's profiles that `available` accepts, or nil
+    /// when this Mac has none of them.
+    public func opensIn(_ available: (ProfileRef) -> Bool) -> ProfileRef? { targets.first(where: available) }
+
+    /// Replaces every profile the rule names, first choice first. A profile
+    /// named twice keeps only its first place. Does nothing for an empty list.
+    public mutating func setTargets(_ list: [ProfileRef]) {
+        var seen = Set<ProfileRef>()
+        let unique = list.filter { seen.insert($0).inserted }
+        guard let first = unique.first else { return }
+        browser = first.browser; profile = first.directory
+        backups = Array(unique.dropFirst())
+    }
+
+    private enum CodingKeys: String, CodingKey { case id, kind, pattern, browser, profile, backups }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
@@ -30,6 +55,19 @@ public struct Rule: Codable, Equatable, Identifiable, Sendable {
         // Before 0.2 betterlink only knew Brave, so a rule without a browser is Brave's.
         browser = try c.decodeIfPresent(String.self, forKey: .browser) ?? Browser.brave.bundleId
         profile = try c.decode(String.self, forKey: .profile)
+        // Rules written before backups had one profile.
+        backups = try c.decodeIfPresent([ProfileRef].self, forKey: .backups) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(pattern, forKey: .pattern)
+        try c.encode(browser, forKey: .browser)
+        try c.encode(profile, forKey: .profile)
+        // Left out when empty, so a rules.json without backups reads the same to an older betterlink.
+        if !backups.isEmpty { try c.encode(backups, forKey: .backups) }
     }
 
 

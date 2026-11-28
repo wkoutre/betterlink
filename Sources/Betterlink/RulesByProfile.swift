@@ -112,8 +112,8 @@ struct ProfileRulesDetail: View {
 
     var body: some View {
         let rules = model.rules
-        let crossings = RuleGroups.crossings(rules)
-        let mine = rules.indices.filter { rules[$0].target == target }
+        let crossings = RuleGroups.crossings(rules, key: model.ruleKey)
+        let mine = rules.indices.filter { model.ruleKey(rules[$0]) == target }
         let profile = model.catalog.profile(target)
         let name = profile?.name ?? target.directory
         VStack(alignment: .leading, spacing: DS.Space.space6) {
@@ -128,7 +128,7 @@ struct ProfileRulesDetail: View {
             .padding(.bottom, DS.Space.space2)
             DSSection {
                 ForEach(mine, id: \.self) { i in
-                    ProfileRuleRow(index: i, rules: rules,
+                    ProfileRuleRow(index: i, rules: rules, target: target,
                                    crossings: crossings.filter { $0.earlier == i || $0.later == i })
                 }
             } footer: {
@@ -151,6 +151,8 @@ private struct ProfileRuleRow: View {
     @EnvironmentObject var model: AppModel
     let index: Int
     let rules: [Rule]
+    /// The profile whose page this is.
+    let target: ProfileRef
     let crossings: [RuleGroups.Crossing]
 
     var body: some View {
@@ -163,6 +165,7 @@ private struct ProfileRuleRow: View {
                 Spacer(minLength: 0)
             }
             .accessibilityElement(children: .combine)
+            OtherProfilesNote(rule: rule, here: target)
             // A synced rule whose profile this Mac lacks (docs/sync.md, Rules on another Mac).
             UnresolvedRuleNote(rule: rule.id)
             ForEach(crossings, id: \.self) { x in
@@ -176,7 +179,7 @@ private struct ProfileRuleRow: View {
     @ViewBuilder private func note(_ x: RuleGroups.Crossing, rule: Rule) -> some View {
         let isLater = x.later == index
         let other = isLater ? x.earlier : x.later
-        let them = Text("rule \(other + 1) for \(profileText(rules[other].target))")
+        let them = Text("rule \(other + 1) for \(profileText(model.ruleKey(rules[other])))")
         let link = Text(Self.short(x.example)).font(DS.TextStyle.code)
         HStack(alignment: .firstTextBaseline, spacing: DS.Space.space2) {
             switch (isLater, x.hidesLater) {
@@ -218,6 +221,42 @@ private struct ProfileRuleRow: View {
         if s.hasPrefix("https://") { s.removeFirst(8) }
         if s.hasSuffix("/"), s.firstIndex(of: "/") == s.index(before: s.endIndex) { s.removeLast() }
         return s
+    }
+}
+
+/// Under a rule with more than one profile, on the page of the one it uses
+/// here: which profiles come first on a Mac that has them, and which take
+/// over on a Mac that doesn't have this one.
+private struct OtherProfilesNote: View {
+    @EnvironmentObject var model: AppModel
+    let rule: Rule
+    let here: ProfileRef
+    var body: some View {
+        let targets = rule.targets
+        if targets.count > 1, let at = targets.firstIndex(of: here) {
+            let before = targets[..<at], after = targets[(at + 1)...]
+            VStack(alignment: .leading, spacing: 2) {
+                if !before.isEmpty {
+                    line("arrow.uturn.up", "Opens here because this Mac doesn't have", Array(before))
+                }
+                if !after.isEmpty {
+                    line("arrow.turn.right.down", "On a Mac without this profile, opens in", Array(after))
+                }
+            }
+            .padding(.leading, DS.Space.space6)
+        }
+    }
+
+    private func line(_ symbol: String, _ lead: String, _ refs: [ProfileRef]) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: DS.Space.space2) {
+            Image(systemName: symbol).foregroundStyle(DS.Palette.textTertiary)
+            Text(lead).foregroundStyle(DS.Palette.textSecondary)
+            ForEach(Array(refs.enumerated()), id: \.element) { i, ref in
+                if i > 0 { Text("or").foregroundStyle(DS.Palette.textSecondary) }
+                ProfileLabel(ref: ref)
+            }
+        }
+        .font(DS.TextStyle.caption)
     }
 }
 

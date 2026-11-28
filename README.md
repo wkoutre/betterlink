@@ -78,6 +78,8 @@ The Link Rules page lists the profiles that have rules. Click one to see and edi
 - **URLs starting with** `https://app.example.com/billing` needs exactly that host, then that path, ending at a `/`, `?` or `#` (so it doesn't match `/billingx`); a prefix that reaches into the query (`?tab=`) is matched as plain text. Leave the scheme out to match both http and https.
 - **URLs containing** `text` matches the text anywhere in the link, so a link to any site can match it.
 
+A rule can name more than one profile, in order: "Open domains matching example.com in Dia Primary, or in Brave Primary". The **+** beside a rule's profile in **Edit Rules** adds another. Each Mac opens the link in the first of the rule's profiles it has (the profile is listed and its browser is installed), so one rule synced to a Mac with Dia and a Mac with only Brave does the right thing on both. A rule is listed under the profile it uses on this Mac, with a note naming the others. Add the profiles a Mac doesn't have from a Mac that does: each Mac can only pick its own. From the command line, `--then` adds them, repeated in order: `betterlink rules add --kind domain --pattern example.com --profile Primary --browser Dia --then Brave:Primary`, and `betterlink rules update <id> --then none` removes them. `rules list` gives each rule its `backups` and `opensIn`, the profile it uses here.
+
 Rules and profiles are stored in `rules.json` in betterlink's settings folder, readable only by you.
 
 ## Modifier keys
@@ -111,7 +113,7 @@ export default function route(link: Link): Target | undefined {
 }
 ```
 
-Return a profile name on its own (`"Work"`) when only one profile has that name, or `{ browser, profile }`. A name more than one profile uses is left out of `ProfileName`, so returning it bare fails the type check. That means adding a same-named profile to another browser (or installing Firefox Developer Edition next to Firefox, which share profiles) stops a config.ts that returns that name until you add the browser. Two profiles with the same name in one browser can't be told apart at all: rename one in the browser. Without browser data access you can rename it under **Profiles › Edit Profiles…** instead; with access, betterlink takes names from the browser, so a rename there wouldn't stick.
+Return a profile name on its own (`"Work"`) when only one profile has that name, or `{ browser, profile }`. Return a list of them, first choice first, for a config.ts that syncs to Macs with different browsers: `[{ browser: "Dia", profile: "Primary" }, { browser: "Brave", profile: "Primary" }]` opens in the first one this Mac has. Entries in a list aren't limited to this Mac's profile names, so the same file type-checks on every Mac. A name more than one profile uses is left out of `ProfileName`, so returning it bare fails the type check. That means adding a same-named profile to another browser (or installing Firefox Developer Edition next to Firefox, which share profiles) stops a config.ts that returns that name until you add the browser. Two profiles with the same name in one browser can't be told apart at all: rename one in the browser. Without browser data access you can rename it under **Profiles › Edit Profiles…** instead; with access, betterlink takes names from the browser, so a rename there wouldn't stick.
 
 How it's checked and run:
 - betterlink type-checks it with its own copy of the TypeScript compiler, 6.0.3, the last release written in JavaScript. Nothing needs to be installed.

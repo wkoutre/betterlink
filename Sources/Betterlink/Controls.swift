@@ -80,15 +80,17 @@ extension ButtonStyle where Self == DSButtonStyle {
 struct DSIconButton: View {
     let symbol: String
     let label: String
+    /// Red on hover, for a button that removes something.
+    var destructive = true
     let action: () -> Void
     @State private var hovering = false
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
                 .font(.system(size: DS.text(10), weight: .bold))
-                .foregroundStyle(hovering ? DS.Palette.danger : DS.Palette.textTertiary)
+                .foregroundStyle(hovering ? (destructive ? DS.Palette.danger : DS.Palette.accentText) : DS.Palette.textTertiary)
                 .frame(width: DS.scaled(22), height: DS.scaled(22))
-                .background(Circle().fill(hovering ? DS.Palette.dangerTint : DS.Palette.hover))
+                .background(Circle().fill(hovering && destructive ? DS.Palette.dangerTint : DS.Palette.hover))
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }

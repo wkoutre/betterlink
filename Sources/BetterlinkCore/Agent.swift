@@ -155,6 +155,32 @@ public enum Agent {
         Browser.known.first { $0.bundleId == s || $0.name.caseInsensitiveCompare(s) == .orderedSame }
     }
 
+    /// Whether this Mac has the profile: listed, in an installed browser. The
+    /// first of a rule's profiles that it has is where the rule opens links.
+    private static func has(_ cat: ProfileCatalog, _ env: AgentEnvironment) -> (ProfileRef) -> Bool {
+        let installed = Set(env.installed.map(\.bundleId))
+        return { cat.profile($0) != nil && installed.contains($0.browser) }
+    }
+
+    /// A rule's other profiles, from `then`: a list of "Profile" or
+    /// "Browser:Profile" (as `--profile` and `--browser` name them). nil when
+    /// `then` wasn't given; an empty list removes them.
+    private static func backups(_ input: [String: Any], in cat: ProfileCatalog) throws -> [ProfileRef]? {
+        guard let v = input["then"], !(v is NSNull) else { return nil }
+        guard let list = v as? [Any] else { throw fail("then must be a list of profiles.") }
+        return try list.map { item -> ProfileRef in
+            guard let raw = (item as? String)?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else {
+                throw fail("Each then must be a profile name, or Browser:Profile.")
+            }
+            // "Brave:Work" names a browser only when the part before ":" is one.
+            if let colon = raw.firstIndex(of: ":"), browser(named: String(raw[..<colon]).trimmingCharacters(in: .whitespaces)) != nil {
+                return try resolveProfile(browser: String(raw[..<colon]).trimmingCharacters(in: .whitespaces),
+                                          profile: String(raw[raw.index(after: colon)...]).trimmingCharacters(in: .whitespaces), in: cat).ref
+            }
+            return try resolveProfile(browser: nil, profile: raw, in: cat).ref
+        }
+    }
+
     /// A profile by name or folder, within a browser when one is given.
     private static func resolveProfile(browser b: String?, profile: String?, in cat: ProfileCatalog) throws -> BrowserProfile {
         guard let profile, !profile.isEmpty else { throw fail("Missing profile: give a profile name or folder, and optionally a browser.") }
@@ -200,24 +226,33 @@ public enum Agent {
         } else if try string(input, "browser") != nil {
             throw fail("--browser narrows --profile: give a profile too.")
         }
-        let crossings = RuleGroups.crossings(c.rules)
+        let key = RuleGroups.opensIn(has(cat, env))
+        let crossings = RuleGroups.crossings(c.rules, key: key)
         // Synced rules whose profile this Mac lacks (the last sync's notes).
         let syncNotes = SyncLocalStore(folder: env.folder).load()
         let unresolved = Set(syncNotes.unresolvedRules ?? [])
         let madeFor = syncNotes.missingProfiles ?? [:]
         func brief(_ i: Int) -> [String: Any] {
             let r = c.rules[i]
+            let k = key(r)
             return ["id": r.id.uuidString, "position": i + 1, "pattern": r.pattern,
-                    "profile": r.profile, "profileName": cat.profile(r.target)?.name ?? NSNull()]
+                    "profile": k.directory, "profileName": cat.profile(k)?.name ?? NSNull()]
         }
+        func target(_ ref: ProfileRef) -> [String: Any] {
+            ["browser": ref.browser, "browserName": Browser.known(bundleId: ref.browser)?.name ?? ref.browser,
+             "profile": ref.directory, "profileName": cat.profile(ref)?.name ?? NSNull()]
+        }
+        let here = has(cat, env)
         return c.rules.enumerated().compactMap { i, r -> [String: Any]? in
-            if let only, r.target != only { return nil }
+            if let only, key(r) != only { return nil }
             let p = cat.profile(r.target)
             let above = crossings.filter { $0.later == i }, below = crossings.filter { $0.earlier == i }
             return ["id": r.id.uuidString, "position": i + 1, "kind": r.kind.rawValue, "kindLabel": r.kind.label,
                     "pattern": r.pattern, "browser": r.browser,
                     "browserName": Browser.known(bundleId: r.browser)?.name ?? r.browser,
                     "profile": r.profile, "profileName": p?.name ?? NSNull(), "problem": r.problem ?? NSNull(),
+                    "backups": r.backups.map(target),
+                    "opensIn": r.opensIn(here).map(target) ?? NSNull(),
                     "unresolved": unresolved.contains(r.id),
                     "madeFor": unresolved.contains(r.id) ? (madeFor[r.id.uuidString] ?? NSNull()) : NSNull(),
                     "hiddenBy": above.first(where: \.hidesLater).map { x -> Any in
@@ -234,8 +269,9 @@ public enum Agent {
     private static func rulesProfiles(_ env: AgentEnvironment) throws -> [[String: Any]] {
         let c = try store(env).load()
         let cat = try catalog(env, c)
-        let hidden = Set(RuleGroups.crossings(c.rules).filter(\.hidesLater).map(\.later))
-        return RuleGroups.groups(c.rules, order: cat.profiles.map(\.ref)).map { g -> [String: Any] in
+        let key = RuleGroups.opensIn(has(cat, env))
+        let hidden = Set(RuleGroups.crossings(c.rules, key: key).filter(\.hidesLater).map(\.later))
+        return RuleGroups.groups(c.rules, order: cat.profiles.map(\.ref), key: key).map { g -> [String: Any] in
             let p = cat.profile(g.target)
             return ["browser": g.target.browser,
                     "browserName": Browser.known(bundleId: g.target.browser)?.name ?? g.target.browser,
@@ -257,8 +293,10 @@ public enum Agent {
         let pattern = try string(input, "pattern") ?? ""
         var added: Rule?
         try store(env).update { c in
-            let p = try resolveProfile(browser: try string(input, "browser"), profile: try string(input, "profile"), in: try catalog(env, c))
-            let rule = Rule(kind: k, pattern: pattern, browser: p.browser, profile: p.directory)
+            let cat = try catalog(env, c)
+            let p = try resolveProfile(browser: try string(input, "browser"), profile: try string(input, "profile"), in: cat)
+            var rule = Rule(kind: k, pattern: pattern, browser: p.browser, profile: p.directory)
+            if let more = try backups(input, in: cat) { rule.setTargets([p.ref] + more) }
             if let problem = rule.problem { throw fail("Not added: \(problem) (kind \(k.rawValue), domain or link pattern).") }
             let at = try position(input, "position").map { max(0, min($0 - 1, c.rules.count)) } ?? c.rules.count
             c.rules.insert(rule, at: at)
@@ -285,6 +323,8 @@ public enum Agent {
                                            profile: newProfile ?? r.profile, in: try catalog(env, c))
                 r.browser = p.browser; r.profile = p.directory
             }
+            if let more = try backups(input, in: try catalog(env, c)) { r.setTargets([r.target] + more) }
+            else { r.setTargets(r.targets) }
             if let problem = r.problem { throw fail("Not updated: \(problem)") }
             c.rules[i] = r
         }
@@ -509,7 +549,7 @@ public enum Agent {
         try store(env).update { c in
             let i = try profileIndex(input, c)
             let p = (c.profiles ?? [])[i]
-            let users = c.rules.enumerated().filter { $0.element.target == p.ref }.map { $0.offset + 1 }
+            let users = c.rules.enumerated().filter { $0.element.targets.contains(p.ref) }.map { $0.offset + 1 }
             if !users.isEmpty {
                 throw fail("\(p.name) is used by rule \(users.map(String.init).joined(separator: ", ")); change or remove that rule first.")
             }
@@ -616,7 +656,8 @@ public enum Agent {
             }
         }
         let router = Router(rules: c.rules, modifierRules: c.modifierRules ?? [], script: script, catalog: try catalog(env, c),
-                            fallback: effectiveFallback(c.fallback, installed: env.installed))
+                            fallback: effectiveFallback(c.fallback, installed: env.installed),
+                            installed: Set(env.installed.map(\.bundleId)))
         let d = router.decide(link, modifiers: held)
         var result: [String: Any]
         switch d.action {

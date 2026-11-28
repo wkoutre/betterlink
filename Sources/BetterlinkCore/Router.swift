@@ -5,10 +5,21 @@ public enum ScriptVerdict: Equatable, Sendable {
     /// Open in the profile with this name, optionally within one browser
     /// (named as betterlink shows it, or by bundle id).
     case profile(String, browser: String? = nil)
+    /// Open in the first of these this Mac has: a list config.ts returned
+    /// so one config.ts works on Macs with different browsers.
+    case firstOf([ScriptTarget])
     /// The script returned nothing: carry on to the editor rules.
     case noOpinion
     /// The script threw, ran too long, or returned something invalid.
     case error(String)
+}
+
+/// One entry of a list config.ts returned: a profile name, optionally
+/// within one browser.
+public struct ScriptTarget: Equatable, Sendable {
+    public var name: String
+    public var browser: String?
+    public init(_ name: String, browser: String? = nil) { self.name = name; self.browser = browser }
 }
 
 /// The part of config.ts the router needs. Implemented by `ConfigScript`.
@@ -71,11 +82,20 @@ public struct Router: Sendable {
     public var catalog: ProfileCatalog
     /// The profile for links no rule claims.
     public var fallback: ProfileRef
+    /// Bundle ids of the browsers installed on this Mac. A rule's profile in
+    /// a browser that isn't installed is passed over for its next one, even
+    /// when the catalog still lists it. nil: every browser in the catalog.
+    public var installed: Set<String>?
 
     public init(rules: [Rule], modifierRules: [ModifierRule] = [], script: (any LinkScript)?,
-                catalog: ProfileCatalog, fallback: ProfileRef) {
+                catalog: ProfileCatalog, fallback: ProfileRef, installed: Set<String>? = nil) {
         self.rules = rules; self.modifierRules = modifierRules; self.script = script
-        self.catalog = catalog; self.fallback = fallback
+        self.catalog = catalog; self.fallback = fallback; self.installed = installed
+    }
+
+    /// Whether this Mac has the profile: the catalog lists it and its browser is installed.
+    public func has(_ ref: ProfileRef) -> Bool {
+        catalog.profile(ref) != nil && (installed?.contains(ref.browser) ?? true)
     }
 
     var fallbackProfile: BrowserProfile {
@@ -143,6 +163,15 @@ public struct Router: Sendable {
     private func decide(_ link: Link, opener: String?, modifiers: ModifierKeys, fallback fb: BrowserProfile) -> Decision {
         if let script {
             switch script.route(link, opener: opener, modifiers: modifiers) {
+            case .firstOf(let list):
+                if let p = list.lazy.compactMap({ self.catalog.profile(named: $0.name, browser: $0.browser) })
+                    .first(where: { self.installed?.contains($0.browser) ?? true }) {
+                    return Decision(action: .open(profile: p, argument: link.href),
+                                    reason: "config.ts chose \(p.name), the first of its profiles this Mac has.", chosenBy: .script)
+                }
+                let names = list.map { t in t.browser.map { "\($0) \(t.name)" } ?? t.name }.joined(separator: ", ")
+                return Decision(action: .open(profile: fb, argument: link.href),
+                                reason: "config.ts chose profiles this Mac doesn't have (\(names.isEmpty ? "an empty list" : names)): opens in \(fb.name).")
             case .profile(let name, let browser):
                 if let p = catalog.profile(named: name, browser: browser) {
                     return Decision(action: .open(profile: p, argument: link.href), reason: "config.ts chose \(p.name).",
@@ -169,12 +198,14 @@ public struct Router: Sendable {
             }
         }
         for (i, rule) in rules.enumerated() where rule.problem == nil && rule.matches(link) {
-            guard let p = catalog.profile(rule.target) else {
+            guard let ref = rule.opensIn(has), let p = catalog.profile(ref) else {
+                let what = rule.backups.isEmpty ? "names a missing profile" : "names no profile this Mac has"
                 return Decision(action: .open(profile: fb, argument: link.href),
-                                reason: "Rule \(i + 1) names a missing profile: opens in \(fb.name).")
+                                reason: "Rule \(i + 1) \(what): opens in \(fb.name).")
             }
+            let which = ref == rule.target ? "" : ", the first of its profiles this Mac has"
             return Decision(action: .open(profile: p, argument: link.href),
-                            reason: "Rule \(i + 1) (\(rule.kind.label) \(rule.pattern)) chose \(p.name).",
+                            reason: "Rule \(i + 1) (\(rule.kind.label) \(rule.pattern)) chose \(p.name)\(which).",
                             chosenBy: .rule(i + 1))
         }
         return Decision(action: .open(profile: fb, argument: link.href), reason: "No rule matched: opens in \(fb.name).")
