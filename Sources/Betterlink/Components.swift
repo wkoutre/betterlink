@@ -46,7 +46,10 @@ struct ProfileLabel: View {
         HStack(spacing: DS.Space.space1 + 2) {
             ProfileDot(color: p?.swiftUIColor ?? DS.Palette.textPlaceholder)
             // One Text, so a Menu label shows all of it.
-            if !installed {
+            if let given = model.groupName(ref) {
+                // A name given on the Link Rules page, then what betterlink calls the profile.
+                Text("\(Text(given).fontWeight(.medium).foregroundStyle(DS.Palette.text)) \(Text(Self.plainName(ref, p: p, browser: browser, installed: installed)).foregroundStyle(DS.Palette.textTertiary))")
+            } else if !installed {
                 // A rule's profile in a browser another Mac has (a synced rule).
                 let name = p?.name ?? (ref.directory.isEmpty || ref.directory == "Default" ? nil : ref.directory)
                 Text("\(browser)\(name.map { " \($0)" } ?? "") (not installed)").foregroundStyle(DS.Palette.textTertiary)
@@ -67,6 +70,17 @@ struct ProfileLabel: View {
             }
         }
         .lineLimit(1)
+    }
+}
+
+extension ProfileLabel {
+    /// The profile in words, without a given name: "Brave Profile 1, not installed".
+    static func plainName(_ ref: ProfileRef, p: BrowserProfile?, browser: String, installed: Bool) -> String {
+        let name = p?.name ?? (ref.directory.isEmpty || ref.directory == "Default" ? nil : ref.directory)
+        let base = "\(browser)\(name.map { " \($0)" } ?? "")"
+        if !installed { return "\(base), not installed" }
+        if p == nil && ref.directory.isEmpty { return "\(browser), profile not on this Mac" }
+        return base
     }
 }
 

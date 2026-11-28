@@ -97,6 +97,10 @@ public enum SyncModel {
             }
             out[globalID] = target(globalID, rules.fallback, .fallback)
                 .merging(["showLog": rules.showLog.map { .bool($0) } ?? .null]) { a, _ in a }
+            // A Mac that never named a group sends no field, so the entity reads as it did before names.
+            if !(rules.groupNames ?? []).isEmpty || (state.value(globalID, "groupNames") ?? .null) != .null {
+                out[globalID]!["groupNames"] = groupNamesField(rules.groupNames ?? [], state: state, applied: applied, identity: identity)
+            }
         }
         for p in library.profiles {
             guard let parts = selection.profiles[p.id] else { continue }
@@ -174,6 +178,53 @@ public enum SyncModel {
             let who = identity(ref)
             return SyncedTarget(browser: ref.browser, profile: ref.directory, profileName: who.name, profileAccount: who.account)
         }
+        let enc = JSONEncoder()
+        enc.outputFormatting = [.sortedKeys]
+        return (try? enc.encode(list)).flatMap { String(data: $0, encoding: .utf8) }.map(SyncValue.string) ?? .null
+    }
+
+    /// A group name as it syncs: the profile as a rule's target syncs, plus the name.
+    struct SyncedGroupName: Codable, Equatable {
+        var browser: String
+        var profile: String
+        var profileName: String?
+        var profileAccount: String?
+        var name: String
+    }
+
+    /// `applied` for the n-th synced group name, counted from 1.
+    static func groupNameKey(_ n: Int) -> String { "\(globalID)#name:\(n)" }
+
+    static func syncedGroupNames(_ v: SyncValue?) -> [SyncedGroupName] {
+        guard let s = v?.string, let d = s.data(using: .utf8) else { return [] }
+        return (try? JSONDecoder().decode([SyncedGroupName].self, from: d)) ?? []
+    }
+
+    /// The "groupNames" field: a JSON list. A synced name whose profile this
+    /// Mac couldn't find is kept as it is, so a Mac without Brave never drops
+    /// the name another Mac gave a Brave profile; one for a profile sync put
+    /// in place here keeps its synced identity with this Mac's name for it.
+    static func groupNamesField(_ names: [GroupName], state: SyncState, applied: [String: ProfileRef],
+                                identity: (ProfileRef) -> ProfileIdentity) -> SyncValue {
+        let synced = syncedGroupNames(state.value(globalID, "groupNames"))
+        var covered = Set<ProfileRef>()
+        var list: [SyncedGroupName] = []
+        for (j, entry) in synced.enumerated() {
+            guard let ref = applied[groupNameKey(j + 1)], ref != noProfile else { list.append(entry); continue }
+            guard !covered.contains(ref) else { continue }
+            covered.insert(ref)
+            // Removed here: the name goes for every Mac.
+            guard let local = names.first(where: { $0.target == ref }) else { continue }
+            var e = entry
+            e.name = local.name
+            list.append(e)
+        }
+        for n in names where !covered.contains(n.target) {
+            covered.insert(n.target)
+            let who = identity(n.target)
+            list.append(SyncedGroupName(browser: n.browser, profile: n.profile, profileName: who.name, profileAccount: who.account, name: n.name))
+        }
+        guard !list.isEmpty else { return .null }
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys]
         return (try? enc.encode(list)).flatMap { String(data: $0, encoding: .utf8) }.map(SyncValue.string) ?? .null
@@ -257,6 +308,23 @@ public enum SyncModel {
                     rules.fallback = nil
                 }
                 if let v = g["showLog"]?.value { rules.showLog = v.bool }
+                if let v = g["groupNames"]?.value {
+                    // Each name labels the profile it finds here; one it can't find is
+                    // kept in the synced list (groupNamesField) but names nothing here.
+                    var names: [GroupName] = []
+                    for (j, e) in syncedGroupNames(v).enumerated() {
+                        guard let dir = resolve(e.browser, e.profile, ProfileIdentity(name: e.profileName, account: e.profileAccount)) else {
+                            applied[groupNameKey(j + 1)] = noProfile
+                            continue
+                        }
+                        let ref = ProfileRef(browser: e.browser, directory: dir)
+                        applied[groupNameKey(j + 1)] = ref
+                        if !names.contains(where: { $0.target == ref }) {
+                            names.append(GroupName(browser: e.browser, profile: dir, name: e.name))
+                        }
+                    }
+                    rules.groupNames = names.isEmpty && local.groupNames == nil ? nil : names
+                }
             }
             func place(_ id: String) -> ProfileRef? {
                 guard let browser = state.value(id, "browser")?.string else { return nil }

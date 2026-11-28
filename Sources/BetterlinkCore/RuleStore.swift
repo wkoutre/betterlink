@@ -22,10 +22,26 @@ public struct RuleStore: Sendable {
         public var showLog: Bool?
         /// "Holding ⌃⌘ opens links in Work". Absent in files written by 0.2.
         public var modifierRules: [ModifierRule]?
+        /// Names a person gave groups on the Link Rules page ("Uniswap" for
+        /// Brave Profile 1). Absent until one is named.
+        public var groupNames: [GroupName]?
         public init(rules: [Rule] = [], profiles: [BrowserProfile]? = nil, fallback: ProfileRef? = nil, showLog: Bool? = nil,
-                    modifierRules: [ModifierRule]? = nil) {
+                    modifierRules: [ModifierRule]? = nil, groupNames: [GroupName]? = nil) {
             self.rules = rules; self.profiles = profiles; self.fallback = fallback; self.showLog = showLog
-            self.modifierRules = modifierRules
+            self.modifierRules = modifierRules; self.groupNames = groupNames
+        }
+
+        /// The name given to a profile's group of rules, if any.
+        public func groupName(_ ref: ProfileRef) -> String? {
+            groupNames?.first { $0.target == ref }?.name
+        }
+
+        /// Names a profile's group; an empty name removes it.
+        public mutating func setGroupName(_ name: String, for ref: ProfileRef) {
+            let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            var list = (groupNames ?? []).filter { $0.target != ref }
+            if !name.isEmpty { list.append(GroupName(browser: ref.browser, profile: ref.directory, name: name)) }
+            groupNames = list.isEmpty && groupNames == nil ? nil : list
         }
     }
 

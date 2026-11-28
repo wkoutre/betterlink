@@ -123,6 +123,15 @@ const rules = Cli.create('rules', { description: 'Link Rules: the first rule tha
     args: z.object({ id: z.string().describe('Rule id from rules list') }),
     run: (c) => core('rules.remove', { id: c.args.id }),
   })
+  .command('name', {
+    description: 'Name a profile\'s group of rules, as the Link Rules page shows it (such as Uniswap for Brave Profile 1). The name syncs',
+    args: z.object({ name: z.string().describe('The new name; "" removes it') }),
+    options: z.object({
+      profile: z.string().describe('The profile: its name, folder, or current group name, as rules profiles lists it'),
+      browser: z.string().optional().describe('Browser name or bundle id, when two browsers have the profile'),
+    }),
+    run: (c) => core('rules.name', { name: c.args.name, ...c.options }),
+  })
   .command('move', {
     description: 'Move a rule to a new position',
     args: z.object({ id: z.string().describe('Rule id from rules list') }),

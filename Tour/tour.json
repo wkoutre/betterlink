@@ -386,6 +386,14 @@
           "covers": {
             "settings": ["RulesEditor.rule.backup"]
           }
+        },
+        {
+          "id": "rule-group-names",
+          "revision": 1,
+          "title": "Name a group of rules",
+          "body": "Link Rules lists your rules by profile, and a group can have a name of your own, such as Uniswap for a profile another Mac calls Brave Profile 1. Open the group and click Rename. The name syncs, and shows wherever betterlink names that profile.",
+          "control": "firstRule",
+          "cli": "betterlink rules name Uniswap --profile \"Profile 1\" --browser Brave"
         }
       ]
     },

@@ -26,6 +26,8 @@ final class AppModel: ObservableObject {
     @Published private(set) var rules: [Rule] = []
     /// "Holding ⌃⌘ opens links in Work" (Link Rules › Modifier keys).
     @Published private(set) var modifierRules: [ModifierRule] = []
+    /// Names given to groups on the Link Rules page (rules.json's groupNames).
+    @Published private(set) var groupNames: [GroupName] = []
     @Published private(set) var rulesError: String?
     @Published private(set) var catalog = ProfileCatalog(profiles: [])
     @Published private(set) var configStatus: ConfigStatus = .loading
@@ -313,6 +315,7 @@ final class AppModel: ObservableObject {
         defer { applyingFromDisk = false }
         rules = c.rules
         modifierRules = c.modifierRules ?? []
+        groupNames = c.groupNames ?? []
         fallback = Agent.effectiveFallback(c.fallback, installed: browsers)
         showLog = c.showLog ?? false
         setCatalog(ProfileCatalog(profiles: c.profiles ?? []))
@@ -361,6 +364,15 @@ final class AppModel: ObservableObject {
             let to = c.rules.firstIndex(where: { $0.id == other }) ?? from
             c.rules.insert(r, at: to)
         }
+    }
+
+    /// The name given to a profile's group of rules, if any.
+    func groupName(_ ref: ProfileRef) -> String? { groupNames.first { $0.target == ref }?.name }
+
+    /// Names a profile's group of rules; an empty name removes it.
+    func setGroupName(_ name: String, for ref: ProfileRef) {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        save(note: trimmed.isEmpty ? "Group name removed." : "Group named \(trimmed).") { $0.setGroupName(trimmed, for: ref) }
     }
 
     func saveModifierRules(_ new: [ModifierRule], from base: [ModifierRule]) {

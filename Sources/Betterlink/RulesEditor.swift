@@ -31,7 +31,7 @@ struct RulesEditor: View {
     }
 
     private var profileName: String? {
-        profile.map { model.catalog.profile($0)?.name ?? $0.directory }
+        profile.map { model.groupName($0) ?? model.catalog.profile($0)?.name ?? $0.directory }
     }
 
     var body: some View {

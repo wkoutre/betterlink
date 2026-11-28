@@ -109,6 +109,13 @@ struct ProfileRulesDetail: View {
     let back: () -> Void
     let edit: () -> Void
     let showAll: () -> Void
+    @State private var renaming = false
+    @State private var draft = ""
+
+    private func saveName() {
+        model.setGroupName(draft, for: target)
+        renaming = false
+    }
 
     var body: some View {
         let rules = model.rules
@@ -116,12 +123,23 @@ struct ProfileRulesDetail: View {
         let mine = rules.indices.filter { model.ruleKey(rules[$0]) == target }
         let profile = model.catalog.profile(target)
         let name = profile?.name ?? target.directory
+        let given = model.groupName(target)
         VStack(alignment: .leading, spacing: DS.Space.space6) {
             VStack(alignment: .leading, spacing: 4) {
-                BackHeader(title: name, back: back) {
-                    ProfileDot(color: profile?.swiftUIColor ?? DS.Palette.textPlaceholder)
+                if renaming {
+                    GroupNameField(draft: $draft, placeholder: name, save: saveName, cancel: { renaming = false })
+                } else {
+                    HStack(spacing: DS.Space.space2) {
+                        BackHeader(title: given ?? name, back: back) {
+                            ProfileDot(color: profile?.swiftUIColor ?? DS.Palette.textPlaceholder)
+                        }
+                        Button("Rename…") { draft = given ?? ""; renaming = true }
+                            .buttonStyle(.dsSecondary)
+                            .disabled(model.rulesError != nil)
+                            .help("Give this group a name of your own, such as the profile's name on your other Mac. The name syncs.")
+                    }
                 }
-                Text("Links that match one of these rules open in \(model.browserName(target.browser)) \(name). Each number is the rule's place in the full order: a rule for another profile with a lower number is checked first.")
+                Text("Links that match one of these rules open in \(model.browserName(target.browser)) \(name)\(given == nil ? "" : " (\(given!))"). Each number is the rule's place in the full order: a rule for another profile with a lower number is checked first.")
                     .foregroundStyle(DS.Palette.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
@@ -142,6 +160,31 @@ struct ProfileRulesDetail: View {
                 }
             }
         }
+    }
+}
+
+/// The group's name being edited: Return saves (empty removes it), Escape cancels.
+private struct GroupNameField: View {
+    @Binding var draft: String
+    let placeholder: String
+    let save: () -> Void
+    let cancel: () -> Void
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        HStack(spacing: DS.Space.space2) {
+            TextField("Group name", text: $draft, prompt: Text(placeholder))
+                .textFieldStyle(.roundedBorder)
+                .font(DS.TextStyle.title2)
+                .focused($focused)
+                .onAppear { focused = true }
+                .onSubmit(save)
+                .onExitCommand(perform: cancel)
+                .accessibilityLabel("Group name")
+            Button("Cancel", action: cancel).buttonStyle(.dsSecondary)
+            Button("Save", action: save).buttonStyle(.dsPrimary)
+        }
+        .help("Leave it empty to use the profile's own name again.")
     }
 }
 

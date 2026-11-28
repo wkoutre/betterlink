@@ -45,7 +45,7 @@ public struct AgentResponse {
 public enum Agent {
     public static let commands: [String] = [
         "status", "browsers.list",
-        "rules.list", "rules.profiles", "rules.add", "rules.update", "rules.remove", "rules.move",
+        "rules.list", "rules.profiles", "rules.add", "rules.update", "rules.remove", "rules.move", "rules.name",
         "keys.list", "keys.add", "keys.update", "keys.remove",
         "fallback.get", "fallback.set",
         "profiles.list", "profiles.add", "profiles.update", "profiles.remove", "profiles.import",
@@ -65,6 +65,7 @@ public enum Agent {
             case "rules.update": return try rulesUpdate(input, env)
             case "rules.remove": return try rulesRemove(input, env)
             case "rules.move": return try rulesMove(input, env)
+            case "rules.name": return try rulesName(input, env)
             case "keys.list": return try .success(keysList(env))
             case "keys.add": return try keysAdd(input, env)
             case "keys.update": return try keysUpdate(input, env)
@@ -276,6 +277,7 @@ public enum Agent {
             return ["browser": g.target.browser,
                     "browserName": Browser.known(bundleId: g.target.browser)?.name ?? g.target.browser,
                     "profile": g.target.directory, "profileName": p?.name ?? NSNull(), "color": hex(p?.color),
+                    "name": c.groupName(g.target) ?? NSNull(),
                     "rules": g.positions.count, "positions": g.positions.map { $0 + 1 },
                     "hidden": g.positions.filter(hidden.contains).count]
         }
@@ -344,6 +346,41 @@ public enum Agent {
             c.rules.insert(r, at: max(0, min(to - 1, c.rules.count)))
         }
         return .success()
+    }
+
+    /// Names a profile's group on the Link Rules page; an empty name removes
+    /// it. The profile may be one only another Mac has (a synced rule's), so
+    /// besides the profile list it matches the folders rules name, and a
+    /// group's current name.
+    private static func rulesName(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
+        guard let name = try string(input, "name") else { throw fail("Missing name: the group's new name, or \"\" to remove it.") }
+        guard let profile = try string(input, "profile"), !profile.isEmpty else {
+            throw fail("Missing profile: give the profile name or folder, as rules profiles lists it.")
+        }
+        var named: ProfileRef?
+        try store(env).update { c in
+            let cat = try catalog(env, c)
+            var only: String?
+            if let b = try string(input, "browser"), !b.isEmpty {
+                guard let br = browser(named: b) else { throw fail("Unknown browser \"\(b)\". See browsers.list.") }
+                only = br.bundleId
+            }
+            var refs: [ProfileRef] = []
+            for ref in cat.profiles.map(\.ref) + c.rules.flatMap(\.targets) where !refs.contains(ref) && (only == nil || ref.browser == only) {
+                refs.append(ref)
+            }
+            let matches = refs.filter { ref in
+                cat.profile(ref)?.name == profile || ref.directory == profile || c.groupName(ref) == profile
+            }
+            guard let ref = matches.first else {
+                throw fail("No profile \"\(profile)\"\(only.map { " in \(Browser.known(bundleId: $0)?.name ?? $0)" } ?? ""). See rules profiles.")
+            }
+            if matches.count > 1 { throw fail("More than one profile matches \"\(profile)\"; give the browser too.") }
+            c.setGroupName(name, for: ref)
+            named = ref
+        }
+        return .success(["browser": named!.browser, "profile": named!.directory,
+                         "name": name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? NSNull() : name.trimmingCharacters(in: .whitespacesAndNewlines)])
     }
 
     // MARK: Modifier keys

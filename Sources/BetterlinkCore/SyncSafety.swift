@@ -233,6 +233,7 @@ public enum SyncSafety {
         case "backups": return "other profiles"
         case "fallbackBrowser", "fallbackProfile", "fallbackName", "fallbackAccount": return "fallback"
         case "showLog": return "Show log"
+        case "groupNames": return "Link Rule group names"
         default: return k
         }
     }

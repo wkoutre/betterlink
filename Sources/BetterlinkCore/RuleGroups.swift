@@ -10,6 +10,16 @@ import Foundation
 /// this Mac (`key`): the first of its profiles this Mac has, so the same
 /// synced rule is under Dia Primary on one Mac and Brave Primary on another.
 /// The default key is the rule's first choice.
+/// A name for one profile's group of Link Rules, such as "Uniswap" for
+/// Brave Profile 1. It labels that profile wherever betterlink shows it.
+public struct GroupName: Codable, Equatable, Sendable {
+    public var browser: String
+    public var profile: String
+    public var name: String
+    public var target: ProfileRef { ProfileRef(browser: browser, directory: profile) }
+    public init(browser: String, profile: String, name: String) { self.browser = browser; self.profile = profile; self.name = name }
+}
+
 public enum RuleGroups {
     public typealias Key = (Rule) -> ProfileRef
 
