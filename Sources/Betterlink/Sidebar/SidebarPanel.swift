@@ -211,9 +211,12 @@ final class SidebarPanel: NSPanel {
     var onClick: (() -> Void)?
 
     override func sendEvent(_ event: NSEvent) {
+        PerfTrace.mouse(event)
         super.sendEvent(event)
         switch event.type {
-        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp: onClick?()
+        case .leftMouseDown, .leftMouseUp, .rightMouseDown, .rightMouseUp:
+            PerfTrace.mark("event handled")
+            onClick?()
         default: break
         }
     }

@@ -65,6 +65,14 @@ struct SidebarView: View {
     @FocusState private var nameFocused: Bool
 
     var body: some View {
+        let began = PerfTrace.began()
+        let view = content
+        PerfTrace.ended("SidebarView.body", began)
+        return view
+    }
+
+    @ViewBuilder
+    private var content: some View {
         let look = sidebar.look
         let profile = lib.library.profile(for: look.match?.profile?.ref)
         // Which tab each saved link stands for, worked out once for this redraw.
@@ -422,6 +430,9 @@ struct SidebarView: View {
     // MARK: - Folders
 
     private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> AnyView {
+        // Counted at every depth, timed at the top one (which holds the rest).
+        let began = PerfTrace.began()
+        defer { PerfTrace.ended("node", began, timed: depth == 0) }
         switch item {
         case .folder(let f):
             return AnyView(VStack(alignment: .leading, spacing: 1) {
@@ -720,8 +731,10 @@ struct SidebarView: View {
     /// Opens or closes a folder. With Option held (`all`), every folder in the
     /// Sidebar Profile goes the way this one goes, as in Finder and Dia.
     private func toggleFolder(_ f: SidebarFolder, all: Bool, _ p: SidebarProfile) {
-        edit(p.id) { profile in
-            if all { profile.setAllExpanded(!f.expanded) } else { profile.toggleExpanded(f.id) }
+        PerfTrace.span("toggleFolder") {
+            edit(p.id) { profile in
+                if all { profile.setAllExpanded(!f.expanded) } else { profile.toggleExpanded(f.id) }
+            }
         }
     }
 
@@ -797,7 +810,7 @@ struct SidebarView: View {
                          spot: @escaping (DropZone) -> SidebarProfile.Spot) -> some ViewModifier {
         DropRowModifier(id: id, horizontal: horizontal, canHold: canHold, color: pal.accent,
                         size: rowSizes[id] ?? .zero, target: $dropTarget,
-                        measured: { rowSizes[id] = $0 },
+                        measured: { PerfTrace.count("rowSizes set"); rowSizes[id] = $0 },
                         allowed: { zone in allowed(spot(zone), p) }) { keys, zone in
             dragging = nil
             _ = apply(keys, at: spot(zone), p, open)
@@ -1145,7 +1158,7 @@ struct SidebarView: View {
         func dragged() -> BrowserTab? { dragging.flatMap { tab(forDragKey: $0, in: open) } }
         return DropRowModifier(id: id, horizontal: false, canHold: false, color: pal.accent,
                                size: rowSizes[id] ?? .zero, target: $dropTarget,
-                               measured: { rowSizes[id] = $0 },
+                               measured: { PerfTrace.count("rowSizes set"); rowSizes[id] = $0 },
                                allowed: { zone in
                                    // Chrome keeps pinned tabs first: no drop across that line (review F1).
                                    guard m.session.can(.move), let t = dragged(), t.pinned == target.pinned else { return false }
@@ -1375,6 +1388,7 @@ private struct SidebarRow<Content: View, Trailing: View>: View {
     @ViewBuilder let trailing: Trailing
 
     var body: some View {
+        let _ = PerfTrace.count("SidebarRow.body")
         let inside = HStack(spacing: DS.Space.space2) { content }
             .padding(.leading, DS.Space.space2 + indent)
             .frame(maxWidth: .infinity, minHeight: DS.Size.sizeRow, alignment: .leading)

@@ -18,11 +18,17 @@ final class SidebarLibraryModel: ObservableObject {
     /// Reads sidebar.json again (for example after the settings folder changed).
     func reload(folder: SettingsFolder? = nil) {
         if let folder { store = SidebarStore(folder: folder) }
-        do { library = try store.load(); problem = nil } catch { problem = error.localizedDescription }
+        PerfTrace.span("library reload") {
+            do { library = try store.load(); problem = nil } catch { problem = error.localizedDescription }
+        }
     }
 
     func change(_ body: (inout SidebarLibrary) -> Void) {
-        do { library = try store.update(body); problem = nil } catch { problem = error.localizedDescription }
+        do {
+            library = try PerfTrace.span("store.update") { try store.update(body) }
+            PerfTrace.published()
+            problem = nil
+        } catch { problem = error.localizedDescription }
     }
 
     func change(profile id: UUID, _ body: (inout SidebarProfile) -> Void) {

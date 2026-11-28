@@ -232,13 +232,16 @@ final class SyncController: ObservableObject {
     }
 
     private func schedulePull() {
+        PerfTrace.mark("sync pull scheduled")
         pending?.cancel()
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.pull() } }
         pending = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
     }
 
-    private func pull() {
+    private func pull() { PerfTrace.span("sync pull") { pullNow() } }
+
+    private func pullNow() {
         guard let session else { return }
         let wasHeld = held?.ids
         defer {

@@ -589,6 +589,10 @@ final class SidebarController: ObservableObject {
     /// when windows and Spaces have stopped moving. Reads the window list once
     /// for all of them, and only on an event.
     func arrange(settled: Bool = false) {
+        PerfTrace.span(settled ? "arrange, settled" : "arrange") { arrangeNow(settled: settled) }
+    }
+
+    private func arrangeNow(settled: Bool) {
         if !instances.isEmpty {
             let onScreen = WindowServer.onScreen()
             for i in instances.values { i.present(onScreen: onScreen, settled: settled) }
