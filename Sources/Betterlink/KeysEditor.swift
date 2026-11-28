@@ -85,7 +85,7 @@ struct KeysEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: DS.scaled(720), height: DS.scaled(420))
+        .frame(width: BetterlinkWindow.sheet(720, 420).width, height: BetterlinkWindow.sheet(720, 420).height)
         .background(DS.Palette.canvas)
         .font(DS.TextStyle.body)
     }
@@ -119,7 +119,7 @@ private struct KeysRow: View {
                 DSIconButton(symbol: "xmark", label: "Remove", action: remove)
             }
             if let problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 40)
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, DS.scaled(40))
             }
         }
         .padding(.vertical, DS.Space.space1)

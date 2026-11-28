@@ -86,7 +86,7 @@ struct RulesEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: DS.scaled(800), height: DS.scaled(480))
+        .frame(width: BetterlinkWindow.sheet(800, 480).width, height: BetterlinkWindow.sheet(800, 480).height)
         .background(DS.Palette.canvas)
         .toggleStyle(.ds)
         .font(DS.TextStyle.body)
@@ -154,7 +154,7 @@ private struct RuleRow: View {
                     .padding(.trailing, DS.scaled(22) + DS.Space.space2)
             }
             if !rule.pattern.isEmpty, let problem = rule.problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 62)
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, DS.scaled(62))
             }
             UnresolvedRuleNote(rule: rule.id, leading: 62)
         }

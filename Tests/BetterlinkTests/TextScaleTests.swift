@@ -58,15 +58,38 @@ import Testing
     /// Larger text gets a larger window, so the page list fits without
     /// scrolling. Smaller text keeps the window as it was.
     @Test func theWindowGrowsForLargerTextOnly() {
+        let smallest = BetterlinkWindow.standardMinSize, opens = BetterlinkWindow.standardDefaultSize
         at(.largest) {
-            #expect(BetterlinkWindow.minSize == CGSize(width: 1080, height: 748))
+            // With no screen in the way.
+            #expect(BetterlinkWindow.fitted(smallest, within: nil) == CGSize(width: 1080, height: 748))
+            #expect(BetterlinkWindow.fitted(opens, within: nil) == CGSize(width: 1218, height: 886))
             #expect(BetterlinkWindow.defaultSize.width >= BetterlinkWindow.minSize.width)
+            #expect(BetterlinkWindow.defaultSize.height >= BetterlinkWindow.minSize.height)
             // The tour's column still fits the smallest window.
-            #expect(TourLayout.column + 2 * DS.Space.space8 <= BetterlinkWindow.minSize.width)
+            #expect(TourLayout.column + 2 * DS.Space.space8 <= BetterlinkWindow.fitted(smallest, within: nil).width)
         }
         at(.small) {
-            #expect(BetterlinkWindow.minSize == CGSize(width: 780, height: 540))
-            #expect(BetterlinkWindow.defaultSize == CGSize(width: 880, height: 640))
+            #expect(BetterlinkWindow.minSize == smallest)
+            #expect(BetterlinkWindow.defaultSize == opens)
+        }
+    }
+
+    /// The window never asks for more than its screen has: on a small display
+    /// the largest text would otherwise put its edges out of reach. It never
+    /// goes under its standard size either, as before.
+    @Test func theWindowStaysOnASmallScreen() {
+        let smallest = BetterlinkWindow.standardMinSize
+        let laptop = CGSize(width: 1280, height: 700)
+        #expect(BetterlinkWindow.fitted(smallest, scale: TextSize.largest.scale, within: laptop) == CGSize(width: 1080, height: 700))
+        #expect(BetterlinkWindow.fitted(smallest, scale: TextSize.larger.scale, within: laptop) == CGSize(width: 960, height: 665))
+        let tiny = CGSize(width: 700, height: 500)
+        #expect(BetterlinkWindow.fitted(smallest, scale: TextSize.largest.scale, within: tiny) == smallest)
+        #expect(BetterlinkWindow.fitted(smallest, scale: TextSize.standard.scale, within: tiny) == smallest)
+        // A sheet follows the same rule.
+        at(.largest) {
+            let sheet = BetterlinkWindow.sheet(800, 480)
+            #expect(sheet.width >= 800 && sheet.width <= 1108)
+            #expect(sheet.height >= 480 && sheet.height <= 665)
         }
     }
 
@@ -127,7 +150,8 @@ import Testing
     @Test func tourStepsFitTheWindowAtEverySize() {
         for size in TextSize.allCases where size != .standard {
             at(size) {
-                let window = BetterlinkWindow.defaultSize
+                // The window as it opens with no small screen in the way.
+                let window = BetterlinkWindow.fitted(BetterlinkWindow.standardDefaultSize, within: nil)
                 let room = window.height - TourLayout.header - TourLayout.footer
                 for topic in TourRegistry.topics {
                     for step in topic.steps {

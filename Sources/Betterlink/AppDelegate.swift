@@ -15,7 +15,7 @@ private let kLaunchedAsLoginItem = OSType(0x6C676974)       // 'lgit'
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     let model = AppModel()
     private var statusItem: NSStatusItem?
-    private var window: NSWindow?
+    private(set) var window: NSWindow?
     private var routedAtLaunch = false
     private var menuBarSetting: AnyCancellable?
     private var textSizeSetting: AnyCancellable?
