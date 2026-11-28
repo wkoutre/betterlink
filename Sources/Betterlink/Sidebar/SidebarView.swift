@@ -97,7 +97,12 @@ struct SidebarView: View {
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
                             favorites(profile, m, windowTabs)
-                            LazyVStack(alignment: .leading, spacing: 1) {
+                            // Every row is made, not only those in view: a lazy stack
+                            // makes the rows that come into view as a folder opens or
+                            // closes where they end up, at once, so they were seen drawn
+                            // over the rows still moving, at the start of an opening and
+                            // the end of a closing.
+                            VStack(alignment: .leading, spacing: 1) {
                                 ForEach(profile.items) { item in
                                     node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
                                 }
@@ -111,7 +116,8 @@ struct SidebarView: View {
                             } line: {
                                 newTabField(m)
                             }
-                            LazyVStack(alignment: .leading, spacing: 1) {
+                            // Every tab row is made too, for the same reason.
+                            VStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
                                     SkipUnchanged(key: rowKey(tab, profile, m, order)) {
@@ -404,6 +410,8 @@ struct SidebarView: View {
                         .modifier(FocusRing(on: isCursor(.favorite(link.id)), radius: DS.Radius.radiusMd))
                 }
                 .buttonStyle(PressStyle())
+                // Not a Tab stop, as the rows aren't (`SidebarRow`).
+                .focusable(false)
                 // Its tab plays sound (or is silenced): the speaker sits on the
                 // tile's corner, a button of its own.
                 .overlay(alignment: .topTrailing) {
