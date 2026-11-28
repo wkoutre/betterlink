@@ -190,7 +190,7 @@ public struct WindowPairing: Sendable {
         var title: String
 
         /// Nil when there is no title to compare (a page still loading).
-        func titles(_ w: Window) -> Bool? { w.title.isEmpty || title.isEmpty ? nil : w.title.hasPrefix(title) }
+        func titles(_ w: Window) -> Bool? { w.title.isEmpty || title.isEmpty ? nil : WindowPairing.titled(w.title, by: title) }
         func isAt(_ w: Window) -> Bool? {
             guard let f = w.frame, let b = window.bounds else { return nil }
             return b.distance(to: f) <= tolerance
@@ -201,6 +201,17 @@ public struct WindowPairing: Sendable {
         func isNot(_ w: Window) -> Bool { titles(w) == false && isAt(w) == false }
     }
     private static let tolerance = 40.0
+
+    /// Whether a window titled `window` (Accessibility's) shows a tab titled
+    /// `tab`. Chrome starts the window's title with the tab's and adds after
+    /// it ("Inbox - Google Chrome - Work"); Dia puts the profile's name first
+    /// ("Primary: Inbox"). So the tab's title starts the window's, or starts
+    /// what follows the window's first ": ".
+    public static func titled(_ window: String, by tab: String) -> Bool {
+        if window.hasPrefix(tab) { return true }
+        guard let colon = window.range(of: ": ") else { return false }
+        return window[colon.upperBound...].hasPrefix(tab)
+    }
 
     /// One process's windows. True while a word on the focus is waited on.
     private mutating func pair(_ windows: [Window], others: [WindowBounds], with entries: [Entry], pid: Int, now: Double) -> Bool {

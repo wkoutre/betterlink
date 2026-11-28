@@ -50,6 +50,26 @@ struct WindowPairingTests {
         #expect(look(&p, 0, [ours(100, "New Tab", at: 900), ours(101, "New Tab")], [theirs(1, "New Tab"), theirs(2, "New Tab", at: 900)]) == [100: hit("/a", 2), 101: hit("/a", 1)])
     }
 
+    /// Dia titles a window "<profile>: <active tab's title>" (Dia 1.58,
+    /// read on a Mac mini): its windows were never paired, so every Dia
+    /// sidebar said it couldn't see the window's tabs.
+    @Test func diaWindowTitledWithItsProfileFirstIsPaired() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Primary: Example Domain")], [theirs(1, "Example Domain")]) == [100: hit("/a", 1)])
+        var q = WindowPairing()
+        #expect(look(&q, 0, [ours(100, "Primary: Docs"), ours(101, "Primary: Inbox")], [theirs(1, "Inbox"), theirs(2, "Docs")]) == [100: hit("/a", 2), 101: hit("/a", 1)])
+    }
+
+    @Test func titledAcceptsTheTabTitleFirstOrAfterTheFirstColon() {
+        #expect(WindowPairing.titled("Inbox - Google Chrome - Work", by: "Inbox"))
+        #expect(WindowPairing.titled("Primary: Inbox", by: "Inbox"))
+        #expect(WindowPairing.titled("Primary: Re: Lunch", by: "Re: Lunch"))
+        #expect(WindowPairing.titled("Re: Lunch - Google Chrome", by: "Re: Lunch"))
+        #expect(!WindowPairing.titled("Primary: Docs", by: "Inbox"))
+        #expect(!WindowPairing.titled("Docs - Google Chrome", by: "Inbox"))
+        #expect(!WindowPairing.titled("Primary: Re: Inbox", by: "Inbox"))
+    }
+
     @Test func sameFrameAndTitleIsNeverGuessed() {
         var p = WindowPairing()
         let entries = [theirs(1, "New Tab"), theirs(2, "New Tab")]
