@@ -233,13 +233,18 @@ private nonisolated(unsafe) var made: String?
 
     /// A list long enough to scroll has no scroll bar, and is as wide as one
     /// that fits. With macOS set to always show scroll bars (or with a mouse
-    /// plugged in) the bar took 15 pt of the width once the list scrolled,
+    /// plugged in) the bar took 17 pt of the width once the list scrolled,
     /// and the Favorites went from five in a row to four.
     @Test func aListThatScrollsHasNoScrollBarAndKeepsItsWidth() throws {
         var long = profile(favorites: 7)
         for i in 0..<40 { long.addLink(SavedLink(title: "Link \(i)", url: "https://link\(i).example/")) }
         try show(long)
         let host = hosted()
+        // In a window, never shown: outside one the list's content is given
+        // no height, and a list with nothing to scroll gets no bar anyway.
+        let offscreen = NSWindow(contentRect: CGRect(origin: .zero, size: size), styleMask: .borderless, backing: .buffered, defer: false)
+        offscreen.contentView = host
+        defer { offscreen.contentView = nil }
         _ = try drawing(host)
         let found = scrollViews(in: host)
         try #require(found.count == 1, "\(found)")

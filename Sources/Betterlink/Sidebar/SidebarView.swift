@@ -131,7 +131,7 @@ struct SidebarView: View {
                         .contextMenu { Button("New Folder") { newFolder(in: nil, profile) } }
                     }
                     // No scroll bar, however macOS is set: with "Show scroll
-                    // bars: Always", or a mouse plugged in, it took 15 pt of
+                    // bars: Always", or a mouse plugged in, it took 17 pt of
                     // the width as soon as the list was long enough to scroll,
                     // and the Favorites went from five in a row to four.
                     // .never, not .hidden, which a mouse overrides.
