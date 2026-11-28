@@ -81,7 +81,7 @@ private func script(_ ts: String) throws -> ConfigScript {
 
     @Test func nonStringResultIsAnError() throws {
         let s = try script("export default function route(link: Link): any { return 42; }")
-        #expect(s.route(web("https://a.com"), opener: nil) == .error("route() must return a profile name, { browser, profile }, or undefined"))
+        #expect(s.route(web("https://a.com"), opener: nil) == .error("route() must return a profile name, { browser, profile }, a list of them, or undefined"))
     }
 
     @Test func canNameABrowserAndProfile() throws {
@@ -95,7 +95,23 @@ private func script(_ ts: String) throws -> ConfigScript {
 
     @Test func declarationsNameBrowsersAndATargetType() {
         #expect(decls.contains(#"type BrowserName = "Brave";"#))
-        #expect(decls.contains(#"type Target = ProfileName | { browser: BrowserName; profile: "Primary" | "Work" };"#))
+        #expect(decls.contains(#"type OneTarget = ProfileName | { browser: BrowserName; profile: "Primary" | "Work" };"#))
+        #expect(decls.contains(#"type Target = OneTarget | readonly (string | { browser?: string; profile: string })[];"#))
+    }
+
+    /// A list opens in the first profile this Mac has, so it may name
+    /// profiles only another Mac has and still type-check.
+    @Test func canReturnAListOfProfiles() throws {
+        let s = try script("""
+        export default function route(link: Link): Target | undefined {
+          return [{ browser: "Dia", profile: "Primary" }, "Work", { profile: "Home" }];
+        }
+        """)
+        #expect(s.route(web("https://a.com"), opener: nil)
+                == .firstOf([ScriptTarget("Primary", browser: "Dia"), ScriptTarget("Work"), ScriptTarget("Home")]))
+        let bad = try script("export default function route(link: Link): any { return [\"Work\", 3]; }")
+        #expect(bad.route(web("https://a.com"), opener: nil)
+                == .error("each entry of the list route() returns must be a profile name or { browser, profile }"))
     }
 
     @Test func missingDefaultExportIsRejected() {

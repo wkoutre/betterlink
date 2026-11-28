@@ -104,7 +104,20 @@ final class AppModel: ObservableObject {
     }
 
     var router: Router {
-        Router(rules: rules, modifierRules: modifierRules, script: script, catalog: catalog, fallback: fallback)
+        Router(rules: rules, modifierRules: modifierRules, script: script, catalog: catalog, fallback: fallback,
+               installed: Set(browsers.map(\.bundleId)))
+    }
+
+    /// Whether this Mac has the profile: betterlink knows it and its browser is installed.
+    func has(_ ref: ProfileRef) -> Bool {
+        catalog.profile(ref) != nil && browsers.contains { $0.bundleId == ref.browser }
+    }
+
+    /// The profile a rule belongs to on the Link Rules page: the first of its
+    /// profiles this Mac has (where its links open here), else its first choice.
+    var ruleKey: RuleGroups.Key {
+        let catalog = catalog, installed = Set(browsers.map(\.bundleId))
+        return RuleGroups.opensIn { catalog.profile($0) != nil && installed.contains($0.browser) }
     }
     var fallbackProfile: BrowserProfile? { catalog.profile(fallback) }
 

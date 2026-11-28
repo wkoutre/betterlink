@@ -230,6 +230,7 @@ public enum SyncSafety {
         case "pattern": return "pattern"
         case "parent": return "folder"
         case "browser", "profile", "profileName", "profileAccount": return "profile"
+        case "backups": return "other profiles"
         case "fallbackBrowser", "fallbackProfile", "fallbackName", "fallbackAccount": return "fallback"
         case "showLog": return "Show log"
         default: return k
