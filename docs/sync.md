@@ -1,12 +1,12 @@
 # Sync (design)
 
-Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession, SyncSafety, SyncPeers; the app's SyncController, General › Sync and the Link Rules page's mark).
+Status: built (BetterlinkCore SyncCore, SyncModel, SyncSession, SyncSafety, SyncPeers; the app's SyncController, the Sync page and the Link Rules page's mark).
 
 betterlink syncs your settings between Macs through a folder that Dropbox, Google Drive or iCloud Drive already keeps in sync. There's no account, server or API key. You choose what syncs. Two Macs editing at the same time always end up identical, and nothing is lost silently.
 
 ## What you choose
 
-Settings › Sync, per Mac:
+The Sync page, per Mac:
 
 1. **Sync folder**: any folder (for example `~/Dropbox/betterlink`). Off until one is picked.
 2. **Global settings**: one switch. Covers Link Rules, modifier rules, the fallback profile, Show log, and config.ts.

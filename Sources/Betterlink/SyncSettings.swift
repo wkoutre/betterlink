@@ -2,7 +2,20 @@ import AppKit
 import BetterlinkCore
 import SwiftUI
 
-/// General › Sync: the folder, and what this Mac syncs (docs/sync.md).
+/// The Sync page: sharing settings between Macs (docs/sync.md), and the
+/// settings folder, the other way to keep a copy of them.
+struct SyncPage: View {
+    var body: some View {
+        PageForm {
+            PageHeader(title: "Sync",
+                       subtitle: "Share your Link Rules and Sidebar Profiles with your other Macs through a folder your cloud drive keeps in sync.")
+            SyncSettingsSection()
+            SettingsFolderSection()
+        }
+    }
+}
+
+/// Sync: the folder, and what this Mac syncs (docs/sync.md).
 struct SyncSettingsSection: View {
     @ObservedObject private var sync = SyncController.shared
     @ObservedObject private var lib = SidebarLibraryModel.shared
@@ -59,8 +72,6 @@ struct SyncSettingsSection: View {
                 ForEach(sync.offered) { o in offerRow(o) }
                 if !sync.history.isEmpty { recentlyChanged }
             }
-        } header: {
-            Text("Sync")
         } footer: {
             Text("Pick a folder Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes only its own file there and reads the others', so edits made on two Macs at once both land; when both change the same thing, the later change wins and the Log says so. Which Sidebar Profile each Chrome profile shows stays on each Mac.")
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
@@ -199,5 +210,45 @@ private struct SyncPartChip: View {
         .accessibilityValue(isOn ? "Syncs" : "Doesn't sync")
         .accessibilityAddTraits(isOn ? .isSelected : [])
         .help(isOn ? "\(label) syncs. Click to keep it on this Mac." : "\(label) stays on this Mac. Click to sync it.")
+    }
+}
+
+/// Where rules.json and config.ts live on this Mac.
+struct SettingsFolderSection: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        DSSection {
+            LabeledContent("Settings folder") {
+                Text(model.paths.directory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
+                    .font(DS.TextStyle.code).foregroundStyle(DS.Palette.textSecondary).textSelection(.enabled)
+                    .lineLimit(1).truncationMode(.middle)
+            }
+            HStack(spacing: DS.Space.space2) {
+                Spacer()
+                Button("Show in Finder") { model.revealSettingsFolder() }
+                Button("Use Standard Folder") { model.useSettingsFolder(nil) }
+                    .disabled(model.folderFromEnvironment || model.paths.directory == SettingsFolder.defaultDirectory)
+                Button("Change…") { chooseFolder() }.disabled(model.folderFromEnvironment)
+            }
+        } header: {
+            Text("Settings folder")
+        } footer: {
+            Text(model.folderFromEnvironment
+                 ? "Set by BETTERLINK_HOME, so it can't be changed here."
+                 : "rules.json (your Link Rules and profiles) and config.ts live here. Pick a folder you back up, or keep with your dotfiles; betterlink copies them over and leaves the old folder as it is. To share settings between Macs, Sync above is the simpler way.")
+                .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private func chooseFolder() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.canCreateDirectories = true
+        panel.prompt = "Use This Folder"
+        panel.message = "Choose where betterlink keeps rules.json and config.ts."
+        if panel.runModal() == .OK, let url = panel.url { model.useSettingsFolder(url) }
     }
 }

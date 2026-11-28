@@ -435,15 +435,6 @@ struct PermissionsPage: View {
                 Text(fullDiskAccessNote)
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
             }
-            DSSection {
-                PermissionRow(title: "Open at login",
-                              why: "Starts betterlink when you log in, so the first link after a restart opens without a pause. Optional.",
-                              badge: model.opensAtLogin ? StatusBadge(text: "On", kind: .success, symbol: "checkmark")
-                                                        : StatusBadge(text: "Off", kind: .neutral)) {
-                    Toggle("Open at login", isOn: Binding(get: { model.opensAtLogin }, set: { model.setOpensAtLogin($0) }))
-                        .labelsHidden().fixedSize()
-                }
-            }
         }
         .onAppear { model.refreshPermissions() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -561,31 +552,16 @@ struct GeneralPage: View {
     @ObservedObject private var updater = Updater.shared
     var body: some View {
         PageForm {
-            PageHeader(title: "General", subtitle: "Where betterlink keeps its settings, and what it shows.")
-            DSSection {
-                LabeledContent("Settings folder") {
-                    Text(model.paths.directory.path.replacingOccurrences(of: NSHomeDirectory(), with: "~"))
-                        .font(DS.TextStyle.code).foregroundStyle(DS.Palette.textSecondary).textSelection(.enabled)
-                        .lineLimit(1).truncationMode(.middle)
+            PageHeader(title: "General", subtitle: "How betterlink runs on this Mac, what it shows you, and how it updates.")
+            DSSection("Always running") {
+                Toggle(isOn: Binding(get: { model.opensAtLogin }, set: { model.setOpensAtLogin($0) })) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Open at login")
+                        Text("The first link after a restart opens without a pause, and held keys are seen in time. macOS lists betterlink under Login Items.")
+                            .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
-                HStack(spacing: DS.Space.space2) {
-                    Spacer()
-                    Button("Show in Finder") { model.revealSettingsFolder() }
-                    Button("Use Standard Folder") { model.useSettingsFolder(nil) }
-                        .disabled(model.folderFromEnvironment || model.paths.directory == SettingsFolder.defaultDirectory)
-                    Button("Change…") { chooseFolder() }.disabled(model.folderFromEnvironment)
-                }
-            } header: {
-                Text("Settings")
-            } footer: {
-                Text(model.folderFromEnvironment
-                     ? "Set by BETTERLINK_HOME, so it can't be changed here."
-                     : "rules.json (your Link Rules and profiles) and config.ts live here. Pick a folder you back up or sync; betterlink copies them over and leaves the old folder as it is.")
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            SyncSettingsSection()
-            DSSection("Menu bar") {
                 Toggle("Show betterlink in the menu bar", isOn: $model.showsMenuBarIcon)
                 Text(model.showsMenuBarIcon
                      ? "The icon opens this window and lists recent links. Closing the window (⌘W or the red button) keeps betterlink running."
@@ -613,6 +589,12 @@ struct GeneralPage: View {
                     Button("Preview") { model.previewLinkToast() }.disabled(!model.showsLinkToast)
                 }
             }
+            DSSection("Log") {
+                Toggle("Show the Log page", isOn: $model.showLog)
+                Text("The Log page, under Advanced, lists every link and where it went. It is kept in memory only and cleared when betterlink quits.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             DSSection("Updates") {
                 Toggle("Check for updates automatically", isOn: $updater.automaticallyChecks)
                 Toggle("Install updates automatically", isOn: $updater.installsAutomatically)
@@ -637,22 +619,7 @@ struct GeneralPage: View {
                     }
                 }
             }
-            DSSection("Log") {
-                Toggle("Show the log in the sidebar", isOn: $model.showLog)
-                Text("The log lists every link and where it went. It is kept in memory only and cleared when betterlink quits.")
-                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
-            }
         }
-    }
-
-    private func chooseFolder() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.canCreateDirectories = true
-        panel.prompt = "Use This Folder"
-        panel.message = "Choose where betterlink keeps rules.json and config.ts."
-        if panel.runModal() == .OK, let url = panel.url { model.useSettingsFolder(url) }
     }
 }
 

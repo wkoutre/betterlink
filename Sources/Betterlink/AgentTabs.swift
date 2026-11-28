@@ -522,7 +522,7 @@ extension AgentCommand {
         if let browsers { d.set(browsers, forKey: "sidebar.browsers") }
         d.synchronize()  // the running app reads it as soon as it is notified
         var out = sidebarSettings()
-        out["note"] = "This Mac only. Turning the sidebar on needs Accessibility for betterlink (Permissions page)."
+        out["note"] = "This Mac only. Turning the sidebar on needs Accessibility for betterlink (the Sidebar page asks for it)."
         return AgentResponseJSON.success(out)
     }
 }

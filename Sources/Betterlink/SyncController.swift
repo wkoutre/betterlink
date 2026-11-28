@@ -93,7 +93,7 @@ final class SyncController: ObservableObject {
         restart()
     }
 
-    /// Asks for the sync folder with the system's panel (General › Sync, and the tour).
+    /// Asks for the sync folder with the system's panel (the Sync page, and the tour).
     func chooseFolderWithPanel() {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true

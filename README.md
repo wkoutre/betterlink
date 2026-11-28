@@ -44,13 +44,14 @@ The first time its window opens, betterlink shows a short tour: making it the de
 The same settings are under **Permissions** in the window:
 - **Default browser** (required): click **Make Default Browser**.
 - **Browser data** (optional): lets betterlink read each browser's profile list by itself. macOS calls this Full Disk Access; **Open Privacy Settings** goes straight to it. The page shows, per browser, whether its profiles are readable and, if not, why. Chrome and Brave usually need no grant at all; if a browser shows **Blocked** with Full Disk Access on, something else on the Mac refuses the read (often a work Mac's security software), so add its profiles by hand.
-- **Open at login** (optional).
+
+**Open at login** (optional) is under **General › Always running**, with the menu bar icon.
 
 ### Updates
 
 betterlink updates itself with [Sparkle](https://sparkle-project.org). Once an hour it fetches `appcast.xml` from the latest GitHub release, a plain request that carries nothing about you or your links. When a newer version is out it downloads it in the background, checks it against betterlink's update key, and installs it the next time you leave the Mac alone for two minutes (or when betterlink quits), which restarts betterlink in about a second. The menu bar menu shows **Restart to Update** while one waits. **General › Updates** turns the hourly check or the automatic install off (then it asks first) and has **Check Now**; `betterlink updates set --automatic off` and `--install off` do the same. Only release builds check; a build from source (`make install`) never does.
 
-betterlink runs in the background with no Dock icon. Closing its window (⌘W or the red button) keeps it running. Its menu bar icon opens the window and lists recent links; **General › Menu bar** hides the icon. With the icon hidden, open betterlink from Spotlight or Finder to get the window back.
+betterlink runs in the background with no Dock icon. Closing its window (⌘W or the red button) keeps it running. Its menu bar icon opens the window and lists recent links; **General › Always running** hides the icon. With the icon hidden, open betterlink from Spotlight or Finder to get the window back.
 
 Without browser data access, add profiles under **Profiles › Edit Profiles…**, or copy them in once from Terminal, which macOS lets read other apps' data: `/Applications/betterlink.app/Contents/MacOS/Betterlink --import-profiles`. A Chromium profile's folder is shown at `chrome://version`, at the end of Profile Path.
 
@@ -93,7 +94,7 @@ Test a combination in the link tester on the Link Rules page (the **Holding** ke
 
 ## Settings folder
 
-By default, betterlink keeps `rules.json` and `config.ts` in `~/Library/Application Support/betterlink`, the standard place for a Mac app's files. Under **Settings folder** you can pick another one, for example a folder you sync or back up; betterlink copies your settings there and leaves the old folder untouched. For development and tests, the `BETTERLINK_HOME` environment variable overrides the folder.
+By default, betterlink keeps `rules.json` and `config.ts` in `~/Library/Application Support/betterlink`, the standard place for a Mac app's files. Under **Sync › Settings folder** you can pick another one, for example a folder you sync or back up; betterlink copies your settings there and leaves the old folder untouched. For development and tests, the `BETTERLINK_HOME` environment variable overrides the folder.
 
 A synced settings folder shares everything in `rules.json` across your Macs: the Link Rules, the modifier keys, the profiles, the fallback profile and the Log switch. If the fallback names a browser a Mac doesn't have, that Mac opens unmatched links in the Default profile of the first Chromium browser it has installed, trying them in this order: Brave, Brave Nightly, Chrome, Chrome Beta, Chrome Canary, Chromium, Edge, Dia, Comet, then the rest of the Chromium row in [Browsers](#browsers); or in Safari if it has none. Run 0.2 or later on every Mac that shares the folder: an older betterlink drops the fallback and the Log switch when it saves. Likewise, a betterlink without modifier keys drops them when it saves.
 
@@ -126,7 +127,7 @@ When held keys, config.ts or a Link Rule picks the profile, a small badge fades 
 
 ## Log
 
-Turn on **General › Show the log in the sidebar** to see every link, where it went, and why. The log is kept in memory only:
+Turn on **General › Show the Log page** to see every link, where it went, and why. The log is kept in memory only:
 - it is gone when betterlink quits;
 - links are never written to disk or the system log.
 

@@ -9,11 +9,15 @@ struct RootView: View {
     @State private var pageRaw = ProcessInfo.processInfo.environment["BETTERLINK_PAGE"]
         ?? MenuBarIcon.defaults().string(forKey: "page") ?? Page.rules.rawValue
 
+    /// In the order the navigation column lists them (NavColumn has the groups).
     enum Page: String, CaseIterable, Identifiable {
-        case rules, profiles, permissions, agents
+        case rules, profiles
         /// The sidebar beside the browser. Saved as "tabs", its page's first name.
         case sidebar = "tabs"
-        case config, general, log
+        /// Sharing settings between Macs, and the settings folder (SyncPage).
+        case sync
+        case general, permissions
+        case config, agents, log
         /// Every release and what it changed (ChangelogPage).
         case changelog
         case about
@@ -25,6 +29,7 @@ struct RootView: View {
             case .permissions: "Permissions"
             case .agents: "Agents"
             case .sidebar: "Sidebar"
+            case .sync: "Sync"
             case .config: "config.ts"
             case .general: "General"
             case .log: "Log"
@@ -35,7 +40,7 @@ struct RootView: View {
         /// The tile colour behind the symbol, System Settings style.
         var tile: Color {
             switch self {
-            case .rules: DS.Palette.accent
+            case .rules, .sync: DS.Palette.accent
             case .profiles: DS.Palette.coral
             case .permissions: DS.Palette.success
             case .agents: DS.Palette.tileViolet
@@ -52,6 +57,7 @@ struct RootView: View {
             case .permissions: "lock.fill"
             case .agents: "terminal.fill"
             case .sidebar: "sidebar.left"
+            case .sync: "arrow.triangle.2.circlepath"
             case .config: "chevron.left.forwardslash.chevron.right"
             case .general: "gearshape.fill"
             case .log: "list.bullet"
@@ -59,6 +65,8 @@ struct RootView: View {
             case .about: "info"
             }
         }
+        /// Still a preview: its row carries a badge that says so.
+        var isPreview: Bool { self == .sidebar }
     }
 
     private var page: Binding<Page?> {
@@ -107,6 +115,7 @@ struct RootView: View {
         case .permissions: PermissionsPage()
         case .agents: AgentsPage()
         case .sidebar: SidebarPage()
+        case .sync: SyncPage()
         case .config: ConfigPage()
         case .general: GeneralPage()
         case .log: LogPage()
@@ -132,18 +141,21 @@ private struct NavTile: View {
 }
 
 /// The navigation column, drawn from tokens: groups of size-row rows, space-1 apart,
-/// space-6 between groups, a caption title space-1 above its rows.
+/// space-4 between groups, a caption title space-1 above its rows. Every row,
+/// the Log's included, fits the window's minimum height without scrolling.
 private struct NavColumn: View {
     @EnvironmentObject var model: AppModel
     @Binding var selection: RootView.Page?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.space6) {
+            VStack(alignment: .leading, spacing: DS.Space.space4) {
                 NavHeader()
-                group(nil, [.rules, .profiles, .permissions, .agents])
-                group("Preview", [.sidebar])
-                group("Advanced", [.config, .general] + (model.showLog ? [.log] : []))
+                // What betterlink does, then how it runs on this Mac, then
+                // the parts for people who write code, then the app itself.
+                group(nil, [.rules, .profiles, .sidebar, .sync])
+                group(nil, [.general, .permissions])
+                group("Advanced", [.config, .agents] + (model.showLog ? [.log] : []))
                 group(nil, [.changelog, .about])
             }
             .padding(.horizontal, DS.Space.space3)
@@ -186,6 +198,13 @@ private struct NavRow: View {
                     .font(selected ? DS.TextStyle.bodyStrong : DS.TextStyle.body)
                     .foregroundStyle(DS.Palette.text)
                 Spacer(minLength: 0)
+                if page.isPreview {
+                    Text("Preview")
+                        .font(DS.TextStyle.caption.weight(.semibold))
+                        .foregroundStyle(DS.Palette.textTertiary)
+                        .padding(.horizontal, 6).padding(.vertical, 1)
+                        .background(Capsule().strokeBorder(DS.Palette.borderSubtle, lineWidth: 1))
+                }
                 if attention {
                     Circle().fill(DS.Palette.warning).frame(width: 7, height: 7)
                         .accessibilityLabel("Needs attention")

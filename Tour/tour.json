@@ -206,9 +206,10 @@
         },
         {
           "id": "open-at-login",
-          "revision": 1,
+          "revision": 2,
           "title": "Open betterlink at login",
           "body": "Start betterlink when you log in, so the first link after a restart opens without a pause and held keys are seen in time. macOS lists it under Login Items.",
+          "changed": "Open at login moved from Permissions to General, next to the menu bar icon.",
           "status": "openAtLogin",
           "control": "openAtLogin",
           "cli": "betterlink login set --enabled on",
@@ -350,18 +351,19 @@
       "symbol": "arrow.triangle.2.circlepath",
       "tile": "accent",
       "tier": "more",
-      "page": "general",
+      "page": "sync",
       "steps": [
         {
           "id": "sync-folder",
-          "revision": 3,
+          "revision": 4,
           "title": "Sync your setup between Macs",
           "body": "Pick a folder that Dropbox, Google Drive or iCloud Drive keeps in sync. Each Mac writes its own file there and reads the others', so edits made on two Macs both land. Permissions, and which browser profile shows which Sidebar Profile, stay on each Mac.",
-          "changed": "Sync settings now lists your other Macs and when each last synced, and Link Rules marks a rule whose profile isn't on this Mac.",
+          "changed": "Sync has a page of its own in the window now, instead of a section of General, and the settings folder moved there with it.",
           "status": "syncFolder",
           "control": "chooseSyncFolder",
           "cli": "betterlink sync set --folder ~/Dropbox/betterlink",
           "covers": {
+            "pages": ["sync"],
             "commands": ["sync"],
             "permissions": ["files-and-folders"],
             "settings": ["SyncSettings.sync.selection.global", "SyncSettings.on"]
@@ -371,7 +373,7 @@
           "id": "sync-merge",
           "revision": 1,
           "title": "Make your Primary profiles one",
-          "body": "Each Mac starts with its own Primary Sidebar Profile, so sync keeps them apart. When another Mac shares a profile with the same name as one here, Sync settings offers Merge, which makes them one profile on every Mac with the favorites and folders of both.",
+          "body": "Each Mac starts with its own Primary Sidebar Profile, so sync keeps them apart. When another Mac shares a profile with the same name as one here, the Sync page offers Merge, which makes them one profile on every Mac with the favorites and folders of both.",
           "cli": "betterlink sync merge --profile Primary"
         }
       ]
@@ -491,7 +493,7 @@
     "commands": {
       "status": "A read-only overview of what the other steps set up.",
       "browsers": "A read-only list of installed browsers.",
-      "folder": "Moving the settings folder is for people who manage their own dotfiles; General explains it, and Sync is the guided way to share settings.",
+      "folder": "Moving the settings folder is for people who manage their own dotfiles; the Sync page explains it, below Sync, the guided way to share settings.",
       "tour": "The tour's own commands."
     },
     "settings": {}
