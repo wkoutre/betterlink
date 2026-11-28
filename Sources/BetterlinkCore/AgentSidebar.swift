@@ -10,6 +10,8 @@ import Foundation
 // is the only one there is. A favorite, folder or saved link is named by its
 // id, or by the start of its id when that start is unique (`id`). Positions
 // count from 1. A folder's icon is an emoji or a built-in symbol's name.
+// Move and remove take several at once (`ids`), and a new folder can take
+// things with it (`with`): what the sidebar does for several picked rows.
 extension Agent {
     static let sidebarCommands: [String] = [
         "sidebar.list",
@@ -153,6 +155,23 @@ extension Agent {
         throw fail(hits.isEmpty ? "\(key): nothing in \"\(p.name)\" has an id starting \(s)." : "\(key): more than one id starts \(s); give more of it.")
     }
 
+    /// The favorites, folders and saved links `input` names: several under
+    /// `list` (ids, or starts of ids) and one under `one`, each once, in the
+    /// order given.
+    static func itemIDs(_ input: [String: Any], list: String = "ids", one: String? = "id", in p: SidebarProfile) throws -> [UUID] {
+        var out: [UUID] = []
+        if let v = input[list], !(v is NSNull) {
+            guard let items = v as? [Any], !items.isEmpty else { throw fail("\(list) must be a list of ids (sidebar list).") }
+            for item in items {
+                guard let id = try itemID([list: item], list, in: p) else { throw fail("\(list) must be a list of ids (sidebar list).") }
+                out.append(id)
+            }
+        }
+        if let one, let id = try itemID(input, one, in: p) { out.append(id) }
+        var seen = Set<UUID>()
+        return out.filter { seen.insert($0).inserted }
+    }
+
     static func isFolder(_ id: UUID, in p: SidebarProfile) -> Bool {
         if case .folder = SidebarProfile.find(id, in: p.items) { return true }
         return false
@@ -247,13 +266,24 @@ extension Agent {
             let p = lib.profiles.first { $0.id == pid }!
             let target = try spot(input, in: p)
             guard case .items(let parent, let index) = target else { throw fail("A folder can't go in Favorites.") }
-            lib.update(pid) { p in
-                let id = p.addFolder(name, in: parent)
-                if index != .max { p.place(id, at: .items(parent: parent, index: index)) }
-                made = id
+            // `with`: what the new folder takes with it, as New Folder with
+            // Selection does. With no `to` or `position`, the folder stands
+            // where the first of them stood.
+            let holding = p.roots(of: try itemIDs(input, list: "with", one: nil, in: p))
+            if !holding.isEmpty, try nonEmpty(input, "to") == nil, input["position"] == nil {
+                lib.update(pid) { made = $0.addFolder(name, holding: holding) }
+                return
             }
+            var after = p
+            let id = after.addFolder(name, in: parent)
+            if index != .max { after.place(id, at: .items(parent: parent, index: index)) }
+            guard after.place(holding, at: .items(parent: id, index: 0)).count == holding.count else {
+                throw fail("A folder can't go inside itself: the new folder would be in one of the folders it takes.")
+            }
+            lib.update(pid) { $0 = after }
+            made = id
         }
-        return made.map { _ in .success(["id": made!.uuidString, "profile": r.data as Any]) } ?? r
+        return made.map { _ in .success(["id": made!.uuidString, "profile": r.data ?? NSNull()]) } ?? r
     }
 
     /// Gives a folder an icon (`emoji`, or `symbol`: a built-in symbol's
@@ -295,7 +325,7 @@ extension Agent {
             }
             lib.update(pid) { $0.insert(link, at: target) }
         }
-        return .success(["id": link.id.uuidString, "profile": r.data as Any])
+        return .success(["id": link.id.uuidString, "profile": r.data ?? NSNull()])
     }
 
     static func itemsUpdate(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
@@ -320,9 +350,24 @@ extension Agent {
     static func itemsMove(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
         try edit(input, env) { lib, pid in
             let p = lib.profiles.first { $0.id == pid }!
-            guard let id = try itemID(input, "id", in: p) else { throw fail("Give id: what to move.") }
+            let ids = try itemIDs(input, in: p)
+            guard let id = ids.first else { throw fail("Give id: what to move (or ids: several).") }
             guard try nonEmpty(input, "to") != nil || input["position"] != nil else {
                 throw fail("Give to (\"favorites\", \"top\" or a folder's id) and/or position.")
+            }
+            if ids.count > 1 {
+                // Several land together, so `to` can't be where each one is now.
+                guard try nonEmpty(input, "to") != nil else {
+                    throw fail("Give to (\"favorites\", \"top\" or a folder's id): where the \(ids.count) go.")
+                }
+                let asked = p.roots(of: ids)
+                var after = p
+                let moved = after.place(asked, at: try spot(input, in: p))
+                guard moved.count == asked.count else {
+                    throw fail("\(asked.count - moved.count) of the \(asked.count) can't go there: a folder can't go in Favorites or inside itself, and a favorite may already have one of the addresses. Nothing was moved.")
+                }
+                lib.update(pid) { $0 = after }
+                return
             }
             // Left out, `to` is where the item is now: a reorder.
             let here: String = p.favorites.contains(where: { $0.id == id }) ? "favorites" : (p.parent(of: id)?.uuidString ?? "top")
@@ -339,11 +384,15 @@ extension Agent {
     static func itemsRemove(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
         try edit(input, env) { lib, pid in
             let p = lib.profiles.first { $0.id == pid }!
-            guard let id = try itemID(input, "id", in: p) else { throw fail("Give id: what to delete.") }
-            if case .folder(let f) = SidebarProfile.find(id, in: p.items), !f.items.isEmpty, try bool(input, "withContents") != true {
-                throw fail("Folder \"\(f.name)\" isn't empty (\(SidebarProfile.links(in: f.items).count) saved links). Give withContents: true to delete it and everything in it.")
+            let ids = p.roots(of: try itemIDs(input, in: p))
+            guard !ids.isEmpty else { throw fail("Give id: what to delete (or ids: several).") }
+            let withContents = try bool(input, "withContents") == true
+            for id in ids {
+                if case .folder(let f) = SidebarProfile.find(id, in: p.items), !f.items.isEmpty, !withContents {
+                    throw fail("Folder \"\(f.name)\" isn't empty (\(SidebarProfile.links(in: f.items).count) saved links). Give withContents: true to delete it and everything in it.")
+                }
             }
-            lib.update(pid) { $0.remove(id) }
+            lib.update(pid) { $0.take(ids) }
         }
     }
 
@@ -362,6 +411,48 @@ extension Agent {
                 throw fail("Give id: a folder's id, or all: true for every folder.")
             }
             if f.expanded != open { lib.update(pid) { $0.toggleExpanded(id) } }
+        }
+    }
+
+    // MARK: Saving open tabs
+
+    /// `tabs save`: saves open tabs' pages as links, as the sidebar's Add to
+    /// Favorites, Save to Folder and New Folder with Selection do for the
+    /// picked tabs. `to` and `position` say where ("favorites", "top" or a
+    /// folder's id), and `folder` names a new folder to make there for them.
+    /// The app target finds the tabs (`links`: one for each, in order).
+    public static func saveTabs(_ links: [SavedLink], _ input: [String: Any], _ env: AgentEnvironment) -> AgentResponse {
+        do {
+            guard !links.isEmpty else { throw fail("Give tabs: the ids of the tabs to save (tabs list).") }
+            let name = try nonEmpty(input, "folder")
+            var saved: [UUID] = []
+            var made: UUID?
+            let r = try edit(input, env) { lib, pid in
+                let p = lib.profiles.first { $0.id == pid }!
+                let target = try spot(input, in: p)
+                var after = p
+                if let name {
+                    guard case .items(let parent, let index) = target else { throw fail("A folder can't go in Favorites.") }
+                    let id = after.addFolder(name, in: parent)
+                    if index != .max { after.place(id, at: .items(parent: parent, index: index)) }
+                    saved = after.place([], adding: links, at: .items(parent: id, index: 0))
+                    made = id
+                } else {
+                    saved = after.place([], adding: links, at: target)
+                    guard !saved.isEmpty else { throw fail("Favorites in \"\(p.name)\" already have these addresses.") }
+                }
+                lib.update(pid) { $0 = after }
+            }
+            var out: [String: Any] = ["saved": saved.map(\.uuidString), "profile": r.data ?? NSNull()]
+            if let made { out["folder"] = made.uuidString }
+            // In Favorites, one for an address: the rest were there already.
+            let skipped = links.filter { !saved.contains($0.id) }.map(\.url)
+            if !skipped.isEmpty { out["alreadyFavorites"] = skipped }
+            return .success(out)
+        } catch let e as AgentError {
+            return .failure(e.message)
+        } catch {
+            return .failure("\(error)")
         }
     }
 
@@ -394,7 +485,7 @@ extension Agent {
             else { throw fail("\(url.lastPathComponent) isn't a bookmarks file this can read.") }
             guard !imported.isEmpty else { throw fail("No bookmarks in \(url.lastPathComponent).") }
             let r = try edit(input, env) { lib, pid in lib.update(pid) { $0.add(imported, inFolder: name) } }
-            return .success(["links": imported.linkCount, "folder": name, "profile": r.data as Any])
+            return .success(["links": imported.linkCount, "folder": name, "profile": r.data ?? NSNull()])
         }
         switch try nonEmpty(input, "from")?.lowercased() {
         case "arc":

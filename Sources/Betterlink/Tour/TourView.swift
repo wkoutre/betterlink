@@ -10,12 +10,12 @@ import SwiftUI
 /// with a control of `controlBudget` under it, and its words alone fit the
 /// smallest window (TourLayoutTests); what is taller scrolls.
 enum TourLayout {
-    static let column: CGFloat = 520
-    static let wideColumn: CGFloat = 640
-    static let header: CGFloat = 44
-    static let footer: CGFloat = 68
-    static let controlBudget: CGFloat = 120
-    static let tile: CGFloat = 56
+    static var column: CGFloat { DS.scaled(520) }
+    static var wideColumn: CGFloat { DS.scaled(640) }
+    static var header: CGFloat { DS.scaled(44) }
+    static var footer: CGFloat { DS.scaled(68) }
+    static var controlBudget: CGFloat { DS.scaled(120) }
+    static var tile: CGFloat { DS.scaled(56) }
 }
 
 extension TourTile {
@@ -241,7 +241,7 @@ struct TourCommandHint: View {
                     copied = true
                     DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
                 } label: {
-                    Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: 10, weight: .semibold))
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc").font(.system(size: DS.text(10), weight: .semibold))
                 }
                 .buttonStyle(.plain)
                 .foregroundStyle(DS.Palette.textTertiary)
@@ -304,7 +304,7 @@ private struct TourTopicCard: View {
     var body: some View {
         Button(action: open) {
             HStack(spacing: DS.Space.space3) {
-                TourTileView(symbol: topic.symbol, tile: topic.tile, size: 28)
+                TourTileView(symbol: topic.symbol, tile: topic.tile, size: DS.scaled(28))
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic.title).font(DS.TextStyle.bodyStrong).foregroundStyle(DS.Palette.text).lineLimit(1)
                     Text(topic.summary).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
@@ -314,16 +314,16 @@ private struct TourTopicCard: View {
                 }
                 Spacer(minLength: 0)
                 Image(systemName: opened ? "checkmark" : "chevron.right")
-                    .font(.system(size: 10, weight: .bold))
+                    .font(.system(size: DS.text(10), weight: .bold))
                     .foregroundStyle(opened ? DS.Palette.success : DS.Palette.textTertiary)
                     // One width for both symbols, so a card's words don't
                     // rewrap or cut off once it has been opened.
-                    .frame(width: 8)
+                    .frame(width: DS.scaled(8))
                     .accessibilityLabel(opened ? "Seen" : "")
             }
             .padding(.horizontal, DS.Space.space3)
             .padding(.vertical, DS.Space.space2)
-            .frame(maxWidth: .infinity, minHeight: 62, alignment: .leading)
+            .frame(maxWidth: .infinity, minHeight: DS.scaled(62), alignment: .leading)
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
                 .fill(hovering ? DS.Palette.hover : DS.Palette.panel))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
@@ -355,7 +355,7 @@ struct TourNewsBanner: View {
                 Spacer(minLength: DS.Space.space2)
                 Button("Show Me") { tour.start(.whatsNew) }.buttonStyle(.dsPrimary)
                 Button { withAnimation(.easeOut(duration: 0.15)) { tour.catchUp() } } label: {
-                    Image(systemName: "xmark").font(.caption.weight(.semibold))
+                    Image(systemName: "xmark").font(.system(size: DS.text(10), weight: .semibold))
                 }
                 .buttonStyle(.plain).foregroundStyle(DS.Palette.textSecondary)
                 .help("Dismiss. The steps stay under About.")
@@ -395,7 +395,7 @@ struct TourAboutSection: View {
                     HStack(spacing: DS.Space.space1) {
                         Text("Open a Topic")
                         Image(systemName: "chevron.down")
-                            .font(.system(size: 9, weight: .bold))
+                            .font(.system(size: DS.text(9), weight: .bold))
                             .foregroundStyle(DS.Palette.textTertiary)
                     }
                 }

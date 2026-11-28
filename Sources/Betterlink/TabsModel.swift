@@ -368,7 +368,7 @@ struct Favicon: View {
         Group {
             if let img = Self.inlineImage(url) { Image(nsImage: img).resizable() }
         }
-        .frame(width: 16, height: 16)
+        .frame(width: DS.scaled(16), height: DS.scaled(16))
         .accessibilityHidden(true)
     }
 

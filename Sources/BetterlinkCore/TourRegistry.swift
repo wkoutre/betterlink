@@ -16,6 +16,7 @@ public enum TourControl: String, CaseIterable, Sendable {
     case showLog
     case menuBarIcon
     case openAtLogin
+    case textSize
     case sidebarBrowsers
     case showExtension
     case allowAccessibility
@@ -154,6 +155,16 @@ public enum TourRegistry {
                      status: .openAtLogin, control: .openAtLogin, requires: nil,
                      cli: "betterlink login set --enabled on", cliWhy: nil),
         ]),
+        TourTopic(id: "appearance", title: "Text size",
+                  summary: "Larger or smaller words in the window and in the sidebar.",
+                  symbol: "textformat.size", tile: .tileNeutral, tier: .more, page: "general", steps: [
+            TourStep(id: "text-size", revision: 1,
+                     title: "Choose how large the words are",
+                     body: "Pick a text size, and this window and the sidebar beside your browser change at once. Rows, buttons and icons are drawn to match the words. The choice is kept on this Mac only.",
+                     changed: nil, symbol: "textformat.size",
+                     status: nil, control: .textSize, requires: nil,
+                     cli: "betterlink text-size set --size large", cliWhy: nil),
+        ]),
         TourTopic(id: "sidebar", title: "Sidebar",
                   summary: "Favorites, folders and live tabs beside your browser window. A preview.",
                   symbol: "sidebar.left", tile: .tileTeal, tier: .more, page: "tabs", steps: [
@@ -209,6 +220,12 @@ public enum TourRegistry {
                      changed: nil, symbol: "arrow.left.arrow.right",
                      status: nil, control: nil, requires: .sidebarBrowser,
                      cli: "betterlink tabs send --tab 12 --to \"Work (Google Chrome)\"", cliWhy: nil),
+            TourStep(id: "sidebar-select", revision: 1,
+                     title: "Act on several rows at once",
+                     body: "Hold Command and click rows in the sidebar to pick several, or hold Shift and click to pick every row from the last one clicked to this one. Right-click one of them, or use Actions at the bottom of the sidebar, and what you choose happens to all of them, such as moving them into a new folder or closing their tabs.",
+                     changed: nil, symbol: "arrow.left.arrow.right",
+                     status: nil, control: nil, requires: .sidebarBrowser,
+                     cli: "betterlink tabs save 12,34 --folder \"Read later\"", cliWhy: nil),
         ]),
         TourTopic(id: "sync", title: "Sync between Macs",
                   summary: "Share rules and Sidebar Profiles through a folder your cloud drive syncs.",

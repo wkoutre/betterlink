@@ -105,6 +105,8 @@ struct RootView: View {
         .buttonStyle(.dsSecondary)
         .toggleStyle(.ds)
         .tint(DS.Palette.accent)
+        // Words with no style of their own are body text, at the chosen text size.
+        .font(DS.TextStyle.body)
         .frame(minWidth: BetterlinkWindow.minSize.width, minHeight: BetterlinkWindow.minSize.height)
     }
 
@@ -132,7 +134,7 @@ private struct NavTile: View {
     let color: Color
     var body: some View {
         Image(systemName: symbol)
-            .font(.system(size: 11, weight: .semibold))
+            .font(.system(size: DS.text(11), weight: .semibold))
             .foregroundStyle(.white)
             .frame(width: DS.Size.sizeTile, height: DS.Size.sizeTile)
             .background(RoundedRectangle(cornerRadius: 5, style: .continuous).fill(color.gradient))
@@ -227,7 +229,7 @@ private struct NavHeader: View {
     @EnvironmentObject var model: AppModel
     var body: some View {
         HStack(spacing: DS.Space.space3) {
-            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 36, height: 36)
+            Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: DS.scaled(36), height: DS.scaled(36))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
                 Text("betterlink").font(DS.TextStyle.headline)
@@ -246,12 +248,57 @@ private struct NavHeader: View {
 /// Opens betterlink's window on a page, from outside it (the sidebar).
 @MainActor
 enum BetterlinkWindow {
+    /// The window's sizes at the standard text size.
+    static let standardMinSize = CGSize(width: 780, height: 540)
+    static let standardDefaultSize = CGSize(width: 880, height: 640)
+
     /// The smallest the window gets. A tour step's words fit it; a step with a
     /// tall control scrolls (TourLayoutTests).
-    static let minSize = CGSize(width: 780, height: 540)
+    static var minSize: CGSize { fitted(standardMinSize, within: screenRoom) }
     /// The size the window opens at. The tour's steps fit it without scrolling
     /// (TourLayoutTests).
-    static let defaultSize = CGSize(width: 880, height: 640)
+    static var defaultSize: CGSize { fitted(standardDefaultSize, within: screenRoom) }
+
+    /// An editor's sheet, drawn `width` by `height` at the standard text
+    /// size: larger for larger text, like the window, but never wider or
+    /// taller than the window it opens on (macOS would move the window to
+    /// make room) or, before there is one, the screen.
+    static func sheet(_ width: CGFloat, _ height: CGFloat) -> CGSize {
+        fitted(CGSize(width: width, height: height), within: sheetRoom)
+    }
+
+    private static var sheetRoom: CGSize? {
+        if let window = (NSApp?.delegate as? AppDelegate)?.window {
+            // The window grows to its new smallest size just after the text
+            // size changes, so a sheet open then is sized for that already.
+            let content = window.contentRect(forFrameRect: window.frame).size, least = minSize
+            return CGSize(width: max(content.width, least.width), height: max(content.height, least.height))
+        }
+        return screenRoom.map { CGSize(width: $0.width - 40, height: $0.height - 80) }
+    }
+
+    /// A size drawn for standard text, at the chosen text size: larger text
+    /// gets a larger window, so the page list still fits without scrolling and
+    /// a page holds as many words to a line. Smaller text keeps the size.
+    /// Never past `room` (the screen the window is on), where a larger size
+    /// would put part of the window out of reach, and never under `size`.
+    static func fitted(_ size: CGSize, scale: Double = TextScale.shared.size.scale, within room: CGSize?) -> CGSize {
+        let by = max(1, CGFloat(scale))
+        var width = (size.width * by).rounded(), height = (size.height * by).rounded()
+        if let room {
+            width = max(size.width, min(width, room.width))
+            height = max(size.height, min(height, room.height))
+        }
+        return CGSize(width: width, height: height)
+    }
+
+    /// The room the window's content has on its screen (the main screen
+    /// before there is a window); nil with no screen at all.
+    private static var screenRoom: CGSize? {
+        let window = (NSApp?.delegate as? AppDelegate)?.window
+        guard let area = (window?.screen ?? NSScreen.main)?.visibleFrame else { return nil }
+        return (window?.contentRect(forFrameRect: area) ?? area).size
+    }
 
     static func open(_ page: RootView.Page) {
         MenuBarIcon.defaults().set(page.rawValue, forKey: "page")

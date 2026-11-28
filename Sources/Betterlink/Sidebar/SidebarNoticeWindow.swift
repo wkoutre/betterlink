@@ -78,10 +78,11 @@ final class SidebarNoticeWindow {
         return host
     }
 
-    /// The panel's size for the note: the capsule's, its text wrapped at 320 pt.
+    /// The panel's size for the note: the capsule's, its text wrapped at 320 pt
+    /// (more at a larger text size, so a note keeps as many words to a line).
     static func size(of text: String) -> CGSize {
         let measure = NSHostingController(rootView: SidebarNoticeView(text: text, pinned: false))
-        let s = measure.sizeThatFits(in: CGSize(width: 368, height: 2000))
+        let s = measure.sizeThatFits(in: CGSize(width: DS.scaled(368), height: 2000))
         return CGSize(width: s.width.rounded(.up), height: s.height.rounded(.up))
     }
 
@@ -117,7 +118,7 @@ struct SidebarNoticeView: View {
             .font(DS.TextStyle.body)
             .foregroundStyle(DS.Palette.text)
             .multilineTextAlignment(.center)
-            .frame(maxWidth: 320)
+            .frame(maxWidth: DS.scaled(320))
             .fixedSize(horizontal: false, vertical: true)
             .padding(.horizontal, DS.Space.space4)
             .padding(.vertical, DS.Space.space3)

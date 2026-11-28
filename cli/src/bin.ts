@@ -268,6 +268,19 @@ const toast = Cli.create('toast', {
     }),
   })
 
+const textSize = Cli.create('text-size', {
+  description: "How large betterlink draws its text, in its window and in the sidebar (this Mac only; 13 pt by default)",
+})
+  .command('get', { description: 'Show the text size, in words and in points, and the sizes there are', run: () => core('text-size.get') })
+  .command('set', {
+    description: 'Choose the text size. An open betterlink window and its sidebars change at once, with rows, buttons and icons to match',
+    options: z.object({
+      size: z.enum(['small', 'default', 'large', 'larger', 'largest'])
+        .describe('small (12 pt), default (13 pt), large (14 pt), larger (16 pt) or largest (18 pt)'),
+    }),
+    run: (c) => core('text-size.set', { size: c.options.size }),
+  })
+
 const updates = Cli.create('updates', { description: 'Automatic updates (this Mac only)' })
   .command('get', {
     description: 'Show the version, whether betterlink checks for updates by itself, and whether it installs them',
@@ -294,6 +307,20 @@ const sidebarProfileOption = {
 const whereOptions = {
   to: z.string().optional().describe('"favorites", "top", or a folder id'),
   position: z.number().int().positive().optional().describe('1 puts it first; default is last'),
+}
+// One id, or several with commas between them: what the sidebar does for
+// several picked rows (Command-click, Shift-click).
+const idList = (text: string) => text.split(',').map((t) => t.trim()).filter(Boolean)
+const oneOrSeveral = (text: string) => {
+  const ids = idList(text)
+  return ids.length > 1 ? { ids } : { id: ids[0] ?? text }
+}
+const tabList = (text: string) => {
+  const ids = idList(text).map(Number)
+  if (ids.length === 0 || ids.some((n) => !Number.isInteger(n))) {
+    throw new Errors.IncurError({ code: 'REFUSED', message: 'Give tab ids from tabs list, comma separated, such as 12,34.' })
+  }
+  return ids
 }
 const browserProfileOptions = {
   browser: z.string().describe('Browser name ("Google Chrome") or bundle id'),
@@ -384,9 +411,18 @@ const sidebar = Cli.create('sidebar', {
   .command('list', { description: 'Every Sidebar Profile with its Favorites and folders (and their icons), with ids', run: () => core('sidebar.list') })
   .command(sidebarProfiles)
   .command('add-folder', {
-    description: 'Make a folder',
-    options: z.object({ name: z.string(), ...sidebarProfileOption, to: z.string().optional().describe('"top" or a folder id to put it in'), position: whereOptions.position }),
-    run: (c) => core('sidebar.folders.add', c.options),
+    description: 'Make a folder, empty or holding things you already saved (--with, the sidebar\'s New Folder with Selection)',
+    options: z.object({
+      name: z.string(),
+      ...sidebarProfileOption,
+      to: z.string().optional().describe('"top" or a folder id to put it in'),
+      position: whereOptions.position,
+      with: z.string().optional().describe('Ids to move into the new folder, comma separated; it then stands where the first of them stood unless --to or --position says otherwise'),
+    }),
+    run: (c) => {
+      const { with: holding, ...rest } = c.options
+      return core('sidebar.folders.add', holding === undefined ? rest : { ...rest, with: idList(holding) })
+    },
   })
   .command('add-link', {
     description: 'Save a link in a folder, at the top level, or as a Favorite',
@@ -400,16 +436,16 @@ const sidebar = Cli.create('sidebar', {
     run: (c) => core('sidebar.items.update', { id: c.args.id, ...c.options }),
   })
   .command('move', {
-    description: 'Move or reorder a Favorite, folder or saved link (into Favorites, a folder, or the top level)',
-    args: z.object({ id: z.string().describe('Id from sidebar list') }),
+    description: 'Move or reorder a Favorite, folder or saved link (into Favorites, a folder, or the top level), or several together with --to',
+    args: z.object({ id: z.string().describe('Id from sidebar list, or several with commas between them') }),
     options: z.object({ ...sidebarProfileOption, ...whereOptions }),
-    run: (c) => core('sidebar.items.move', { id: c.args.id, ...c.options }),
+    run: (c) => core('sidebar.items.move', { ...oneOrSeveral(c.args.id), ...c.options }),
   })
   .command('remove', {
-    description: 'Delete a Favorite, folder or saved link',
-    args: z.object({ id: z.string().describe('Id from sidebar list') }),
+    description: 'Delete a Favorite, folder or saved link, or several at once',
+    args: z.object({ id: z.string().describe('Id from sidebar list, or several with commas between them') }),
     options: z.object({ ...sidebarProfileOption, withContents: z.boolean().optional().describe('Needed to delete a folder that has things in it') }),
-    run: (c) => core('sidebar.items.remove', { id: c.args.id, ...c.options }),
+    run: (c) => core('sidebar.items.remove', { ...oneOrSeveral(c.args.id), ...c.options }),
   })
   .command('expand', {
     description: 'Open or close a folder, or every folder with --all (as Option-click on a folder does)',
@@ -439,6 +475,18 @@ const sidebar = Cli.create('sidebar', {
 const tabId = z.object({
   tab: z.number().int().describe('Tab id from tabs list'),
   browser: z.string().optional().describe('Only when two browsers have a tab with this id'),
+})
+// One tab (--tab) or several (--tabs 12,34), for what the sidebar does to
+// several picked tabs.
+const tabIds = z.object({
+  tab: z.number().int().optional().describe('Tab id from tabs list'),
+  tabs: z.string().optional().describe('Several tab ids, comma separated'),
+  browser: z.string().optional().describe('Only when two browsers have a tab with one of these ids'),
+})
+const severalTabs = (o: { tab?: number; tabs?: string; browser?: string }) => ({
+  tab: o.tab,
+  tabs: o.tabs === undefined ? undefined : tabList(o.tabs),
+  browser: o.browser,
 })
 const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the betterlink Tabs extension: list, open, close, move and more' })
   .command('list', { description: 'Every connected browser window and its tabs', run: () => core('tabs.list') })
@@ -472,13 +520,19 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     description: 'Close tabs',
     args: z.object({ tabs: z.string().describe('Tab ids, comma separated') }),
     options: z.object({ browser: z.string().optional().describe('Only when two browsers have a tab with one of these ids') }),
-    run: (c) => {
-      const ids = c.args.tabs.split(',').map((t) => t.trim()).filter(Boolean).map(Number)
-      if (ids.length === 0 || ids.some((n) => !Number.isInteger(n))) {
-        throw new Errors.IncurError({ code: 'REFUSED', message: 'Give tab ids from tabs list, comma separated, such as 12,34.' })
-      }
-      return core('tabs.close', { tabs: ids, browser: c.options.browser })
-    },
+    run: (c) => core('tabs.close', { tabs: tabList(c.args.tabs), browser: c.options.browser }),
+  })
+  .command('save', {
+    description:
+      "Save open tabs' pages in the sidebar: as Favorites, in a folder, or in a new folder (the sidebar's Add to Favorites, Save to Folder and New Folder with Selection). The tabs stay open",
+    args: z.object({ tabs: z.string().describe('Tab ids, comma separated') }),
+    options: z.object({
+      ...whereOptions,
+      folder: z.string().optional().describe('Name for a new folder to save them in (made at --to, which is then "top" or a folder id)'),
+      ...sidebarProfileOption,
+      browser: z.string().optional().describe('Only when two browsers have a tab with one of these ids'),
+    }),
+    run: (c) => core('tabs.save', { tabs: tabList(c.args.tabs), ...c.options }),
   })
   .command('find', {
     description: 'Find open tabs in every connected browser and profile by words from their title or address (the Find Tab panel); then tabs activate',
@@ -491,10 +545,10 @@ const tabs = Cli.create('tabs', { description: 'Open tabs in browsers with the b
     options: tabId.extend({ position: z.number().int().positive().describe('1 is first'), window: z.number().int().optional() }),
     run: (c) => core('tabs.move', c.options),
   })
-  .command('mute', { description: 'Mute a tab', options: tabId, run: (c) => core('tabs.mute', { ...c.options, muted: true }) })
-  .command('unmute', { description: 'Unmute a tab', options: tabId, run: (c) => core('tabs.mute', { ...c.options, muted: false }) })
+  .command('mute', { description: 'Mute a tab, or several with --tabs', options: tabIds, run: (c) => core('tabs.mute', { ...severalTabs(c.options), muted: true }) })
+  .command('unmute', { description: 'Unmute a tab, or several with --tabs', options: tabIds, run: (c) => core('tabs.mute', { ...severalTabs(c.options), muted: false }) })
   .command('duplicate', { description: 'Open the same page in a second tab', options: tabId, run: (c) => core('tabs.duplicate', c.options) })
-  .command('reload', { description: 'Reload a tab', options: tabId, run: (c) => core('tabs.reload', c.options) })
+  .command('reload', { description: 'Reload a tab, or several with --tabs', options: tabIds, run: (c) => core('tabs.reload', severalTabs(c.options)) })
   .command('navigate', {
     description: 'Send a tab to another page',
     options: tabId.extend({ url: z.string() }),
@@ -651,7 +705,7 @@ const changelog = Cli.create('changelog', {
 export const cli = Cli.create('betterlink', {
   description:
     'Route every link to the right browser and profile. Change everything the betterlink window can: ' +
-    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings; the sidebar\'s Sidebar Profiles, Favorites, folders and their icons, saved links, imports and settings; ' +
+    'Link Rules, modifier keys, the fallback, profiles, config.ts and settings, the text size among them; the sidebar\'s Sidebar Profiles, Favorites, folders and their icons, saved links, imports and settings; ' +
     "and open tabs in browsers with the Tabs extension; Sync between Macs; the tour (the first-run flow and What's New); and read the changelog. " +
     '(The app keeps its log in memory only, so it is not here.)',
   // Set at build time from Info.plist (the Makefile's cli target).
@@ -677,6 +731,7 @@ export const cli = Cli.create('betterlink', {
   .command(login)
   .command(menuBar)
   .command(toast)
+  .command(textSize)
   .command(updates)
   .command(sidebar)
   .command(tabs)

@@ -12,6 +12,14 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SRC = ROOT / "Design/tokens.json"
 OUT = ROOT / "Sources/Betterlink/DesignTokens.swift"
 
+# The text size a person chooses (General › Text size) scales the text styles
+# and the families here: sizes hold text (a row, a button, an icon tile), so
+# they grow with it. Spacing and radii don't. Those tokens are read through
+# DS.text and DS.scaled (Sources/Betterlink/TextScale.swift) each time they
+# are used, so the values in Design/tokens.json are the ones at the standard
+# size.
+SCALED = {"size"}
+
 def ident(name):
     parts = re.split(r"[-_.]", name)
     s = parts[0] + "".join(p[:1].upper() + p[1:] for p in parts[1:])
@@ -43,6 +51,8 @@ def generate(t):
            "// Change the tokens there and run `make tokens`.", "",
            "import AppKit", "import SwiftUI", "",
            "/// betterlink's design tokens. See Design/tokens.json for what each is for.",
+           "/// Text styles and sizes are at the chosen text size (TextScale.swift); the",
+           "/// numbers here are theirs at the standard one.",
            "enum DS {"]
     out.append("    enum Palette {")
     for tok in t["color"]["tokens"]:
@@ -54,7 +64,10 @@ def generate(t):
         out.append(f"    enum {enum} {{")
         for tok in t.get(fam, {"tokens": []})["tokens"]:
             out.append(f"        /// {tok['usage']}")
-            out.append(f"        static let {ident(tok['name'])}: CGFloat = {px(tok['value']):g}")
+            if fam in SCALED:
+                out.append(f"        static var {ident(tok['name'])}: CGFloat {{ DS.scaled({px(tok['value']):g}) }}")
+            else:
+                out.append(f"        static let {ident(tok['name'])}: CGFloat = {px(tok['value']):g}")
         out.append("    }")
     out.append("    enum TextStyle {")
     for g in t["type"]["groups"]:
@@ -62,7 +75,7 @@ def generate(t):
         for s in g["styles"]:
             w = {400: ".regular", 500: ".medium", 600: ".semibold", 700: ".bold"}[int(s["fontWeight"])]
             out.append(f"        /// {s.get('usage', '')}")
-            out.append(f"        static let {ident(s['name'])} = Font.system(size: {px(s['fontSize']):g}, weight: {w}, design: {design})")
+            out.append(f"        static var {ident(s['name'])}: Font {{ Font.system(size: DS.text({px(s['fontSize']):g}), weight: {w}, design: {design}) }}")
             if "letterSpacing" in s:
                 out.append(f"        static let {ident(s['name'])}Tracking: CGFloat = {px(s['letterSpacing']):g}")
     out.append("    }")

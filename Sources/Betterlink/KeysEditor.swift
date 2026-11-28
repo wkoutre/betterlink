@@ -12,7 +12,7 @@ struct KeyChips: View {
                 Button {
                     if on { keys.remove(k.key) } else { keys.insert(k.key) }
                 } label: {
-                    Text(k.symbol).font(.system(size: 13, weight: .semibold)).frame(minWidth: 16)
+                    Text(k.symbol).font(.system(size: DS.text(13), weight: .semibold)).frame(minWidth: DS.scaled(16))
                 }
                 .buttonStyle(DSButtonStyle(kind: on ? .primary : .secondary))
                 .help(k.label)
@@ -51,6 +51,7 @@ struct KeysEditor: View {
             List {
                 if rules.isEmpty {
                     Text("No modifier keys. Links open by your Link Rules whatever keys you hold.")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
@@ -85,8 +86,9 @@ struct KeysEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 720, height: 420)
+        .frame(width: BetterlinkWindow.sheet(720, 420).width, height: BetterlinkWindow.sheet(720, 420).height)
         .background(DS.Palette.canvas)
+        .font(DS.TextStyle.body)
     }
 
     /// A new row starts as ⌃⌘, or the first combination not yet used.
@@ -104,23 +106,29 @@ private struct KeysRow: View {
     @Binding var rule: ModifierRule
     let problem: String?
     let remove: () -> Void
+    /// Where the keys start in the row, so a problem with them is said under them.
+    @State private var keysLeading: CGFloat = 40
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.space1) {
             HStack(spacing: DS.Space.space2) {
-                Text("Hold").foregroundStyle(DS.Palette.textSecondary)
+                Text("Hold").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 KeyChips(keys: $rule.keys)
-                Text("to open links in").foregroundStyle(DS.Palette.textSecondary)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { keysLeading = $0 }
+                Text("to open links in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
-                            width: 236)
+                            width: DS.scaled(236))
                 Spacer(minLength: 0)
                 DSIconButton(symbol: "xmark", label: "Remove", action: remove)
             }
             if let problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 40)
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, keysLeading)
             }
         }
+        .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
     }
+
+    private static let row = "keys row"
 }

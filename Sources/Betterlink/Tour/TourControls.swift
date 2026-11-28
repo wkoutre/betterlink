@@ -111,6 +111,11 @@ struct TourControlView: View {
         case .firstRule: firstRule
         case .editKeys: editKeys
         case .linkToast: linkToast
+        case .textSize:
+            row("The words in this window and in the sidebar.") {
+                DSPicker(accessibility: "Text size", selection: $model.textSize, options: TextSize.allCases) { $0.title }
+                    .frame(width: DS.scaled(180))
+            }
         case .showLog:
             row("Show the Log page in this window.") { toggle("Show the Log page", $model.showLog) }
         case .menuBarIcon:
@@ -178,7 +183,7 @@ struct TourControlView: View {
     }
 
     private var fallbackPicker: some View {
-        row("Everything else opens in") { ProfileMenu(selection: $model.fallback, width: 220) }
+        row("Everything else opens in") { ProfileMenu(selection: $model.fallback, width: DS.scaled(220)) }
     }
 
     private var firstRule: some View {

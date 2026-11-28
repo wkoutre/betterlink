@@ -12,7 +12,7 @@ struct PageForm<Content: View>: View {
                 // The page title lines up with the sidebar's header, below the traffic lights.
                 .padding(.top, 44)
                 .padding(.bottom, DS.Space.space8)
-                .frame(maxWidth: 760, alignment: .leading)
+                .frame(maxWidth: DS.scaled(760), alignment: .leading)
                 .frame(maxWidth: .infinity)
         }
         .background(DS.Palette.canvas)
@@ -567,7 +567,7 @@ struct GeneralPage: View {
     @ObservedObject private var updater = Updater.shared
     var body: some View {
         PageForm {
-            PageHeader(title: "General", subtitle: "How betterlink runs on this Mac, what it shows you, and how it updates.")
+            PageHeader(title: "General", subtitle: "How betterlink runs on this Mac, how it looks, what it shows you, and how it updates.")
             DSSection("Always running") {
                 Toggle(isOn: Binding(get: { model.opensAtLogin }, set: { model.setOpensAtLogin($0) })) {
                     VStack(alignment: .leading, spacing: 2) {
@@ -588,12 +588,22 @@ struct GeneralPage: View {
                     Button("Quit betterlink") { NSApp.terminate(nil) }
                 }
             }
+            DSSection("Appearance") {
+                LabeledContent("Text size") {
+                    DSPicker(accessibility: "Text size", selection: $model.textSize,
+                             options: TextSize.allCases) { $0.title }
+                        .frame(width: DS.scaled(200))
+                }
+                Text("How large the words are in this window and in the sidebar beside your browser. Rows, buttons and icons are drawn to match, and the change shows at once. This Mac only.")
+                    .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             DSSection("Link toast") {
                 Toggle("Show a toast when a rule picks the profile", isOn: $model.showsLinkToast)
                 LabeledContent("Position") {
                     DSPicker(accessibility: "Toast position", selection: $model.linkToastPosition,
                              options: LinkToast.Position.allCases) { $0.label }
-                        .frame(width: 200)
+                        .frame(width: DS.scaled(200))
                 }
                 .disabled(!model.showsLinkToast)
                 HStack {
@@ -680,7 +690,7 @@ struct AboutPage: View {
         PageForm {
             DSSection {
                 HStack(spacing: DS.Space.space4) {
-                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: DS.scaled(72), height: DS.scaled(72))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("betterlink").font(DS.TextStyle.title1).tracking(DS.TextStyle.title1Tracking)
@@ -770,7 +780,7 @@ struct AgentsPage: View {
             DSSection("What agents can do") {
                 ForEach(capabilities, id: \.0) { item in
                     HStack(alignment: .firstTextBaseline, spacing: DS.Space.space3) {
-                        Text(item.0).font(DS.TextStyle.code).foregroundStyle(DS.Palette.text).frame(width: 190, alignment: .leading)
+                        Text(item.0).font(DS.TextStyle.code).foregroundStyle(DS.Palette.text).frame(width: DS.scaled(190), alignment: .leading)
                         Text(item.1).foregroundStyle(DS.Palette.textSecondary).fixedSize(horizontal: false, vertical: true)
                     }
                 }
