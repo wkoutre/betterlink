@@ -15,13 +15,26 @@ import CoreGraphics
 ///
 /// - The frame for the slide's progress, `closed` at 0 and `open` at 1, in
 ///   whole points, its far edge where `closed` and `open` have it.
-/// - Narrowing: the size, the width it took read back at once (a browser at
-///   its minimum takes less), then the position that puts its far edge back
-///   at that width. Widening: the same, size first, where the window can
-///   grow from where it is without passing its screens' right edge (`right`);
-///   else the position first (a window can't grow past its screen's edge),
-///   then the size, then the position once more if it took less. Calls that
-///   change nothing are not sent.
+/// - Each call can show alone for a refresh (live: a size lands 5-31 ms
+///   after a position sent with it, and the read after a size lets the
+///   window server show it), so the calls go in the order that puts the far
+///   edge out, never in: past the screen's edge for a window that fills it
+///   (0.3.37 sent a left show's size first, its far edge in by a step until
+///   the position landed: 47 pt median, 102 at most, on the Mac mini).
+/// - On the left, narrowing (a show): the position first, at the width the
+///   window has, then the size, then, if the width read back isn't the one
+///   asked (a browser at its minimum takes less), the position for the width
+///   it took. Widening (a hide): the size first, then the position for the
+///   width it took, where the window can grow from where it is: without
+///   passing its screens' right edge (`right`), or already past it. Against
+///   the edge, a window wholly on screen can't grow past it (Chromium), so
+///   the first frame moves it a point past it first (`nudge`), and every
+///   frame but the last keeps it a point past (`pastEdge`).
+/// - On the right the far edge is the left, where a size keeps it: the size
+///   alone, then the position once more if it took less. Widening where it
+///   can't grow in place: the position first, then the size, then the
+///   position once more if it took less. Calls that change nothing are not
+///   sent.
 /// - The next frame is sent only once the window server shows this one.
 ///
 /// It gives way to `WindowSteps` (`done`, not `interrupted`), which ends the
@@ -72,8 +85,26 @@ public struct WindowGlide: Sendable {
     /// The least a probe asks of the window's width.
     public static let probeStep: CGFloat = 4
 
-    private enum Next { case size, place, positionFirst, fix }
+    private enum Next { case size, place, positionFirst, fix, nudge }
     private var plan: [Next] = []
+    /// Where the window's top left is once this frame's calls so far land
+    /// (a position first, or the nudge, moves it).
+    private var topLeftX: CGFloat = 0
+    /// A left glide moved the window a point past its screens' right edge
+    /// (`nudge`): every frame but the last keeps it a point past.
+    public private(set) var pastEdge = false
+    /// This frame's position went before its size (a left show's, or the
+    /// nudge): with the size unanswered, both are on their way, and the frame
+    /// is waited for whole, as widening.
+    private var movedFirst = false
+    /// Every call of the frame in flight so far, in order, and the window
+    /// when it began.
+    private var frameCalls: [(call: Call, at: Double)] = []
+    private var frameFrom: CGRect?
+
+    /// The narrowest this browser's window was seen to take in this glide (a
+    /// size taken short: its minimum). A left show at it sends nothing more.
+    private var minimum: CGFloat?
     /// The frame these calls are for, where the window was when they began,
     /// and what they give as far as is known (the width read back).
     private var asked: CGRect?
@@ -160,6 +191,17 @@ public struct WindowGlide: Sendable {
         near(seen.minX, e.minX) && near(seen.width, e.width) && near(seen.maxY, e.maxY) && near(seen.height, e.height)
     }
 
+    /// Where a frame at width `w` puts the window's left edge: its far edge
+    /// where the frame has it; on the left, while the window is kept past its
+    /// screens' right edge (`pastEdge`), but not at the end, at least a point
+    /// past that edge.
+    private func farX(_ f: CGRect, width w: CGFloat) -> CGFloat {
+        guard side == .left else { return f.minX }
+        let x = f.maxX - w
+        guard pastEdge, !final, let r = right else { return x }
+        return max(x, r + 1 - w)
+    }
+
     /// The frame at progress `q`, in whole points.
     public func frame(at q: Double) -> CGRect {
         if q <= 0 { return closed }
@@ -204,8 +246,9 @@ public struct WindowGlide: Sendable {
                     plan = [.place]
                     return next(width: seen.width)
                 }
-                // Not shown at once either: the browser stopped there (its minimum). The steps go on from here,
-                // as after their own size.
+                // Not shown at once either: the browser stopped there (its minimum), or is late. The steps go on
+                // from here, as after their own size: a left show's position went first, and they put the far edge
+                // back at the width it has.
                 if now - sentAt > Self.instant {
                     stoppedAtSize = true
                     done = true
@@ -296,7 +339,7 @@ public struct WindowGlide: Sendable {
             if abs(f.width - going.width) > abs(b.width - going.width) + 0.5 {
                 // Ahead of the slide (the first frame or the probe went out with the press): it waits there, its far
                 // edge where the slide has it (a probe, a size alone, moved it): that position goes now.
-                let far = side == .left ? f.maxX - b.width : f.minX
+                let far = farX(f, width: b.width)
                 guard !Self.near(b.minX, far, 0.5), Self.near(b.height, f.height, 0.5) else { return nil }
                 final = false
                 resent = false
@@ -306,6 +349,12 @@ public struct WindowGlide: Sendable {
         if Self.landed(f, b) {
             // Already where the slide ends: the glide ended where the motion is going.
             if end { final = true; done = true }
+            return nil
+        }
+        // At the minimum it was seen to stop at: nothing more to send. The steps go on as after their own size.
+        if let m = minimum, f.width < b.width - 0.5, b.width <= m + 0.5 {
+            stoppedAtSize = true
+            done = true
             return nil
         }
         final = end
@@ -322,6 +371,10 @@ public struct WindowGlide: Sendable {
         sentAt = now
         expect = f
         landedLast = false
+        topLeftX = b.minX
+        movedFirst = false
+        frameCalls = []
+        frameFrom = b
         if !proven, !(Self.near(f.width, b.width) && Self.near(f.height, b.height)) {
             // The probe: the size alone, at least `probeStep` from where the window is (an animation's first
             // step is under a point, and must not pass for having landed), never past where the slide ends.
@@ -337,8 +390,14 @@ public struct WindowGlide: Sendable {
         }
         if Self.near(f.width, b.width) && Self.near(f.height, b.height) {
             plan = [.place]
-        } else if f.width < b.width || right.map({ b.minX + f.width <= $0 + 0.5 }) ?? false {
+        } else if side == .left, f.width < b.width {
+            plan = [.positionFirst, .size, .fix]
+        } else if f.width < b.width || right.map({ b.minX + f.width <= $0 + 0.5 || b.maxX > $0 + 0.5 }) ?? false {
             plan = [.size, .place]
+        } else if side == .left, let r = right, b.maxX >= r - 0.5 {
+            // Against its screens' right edge (a window that fills its screen): a point past it first. Short of that
+            // edge by less than the frame's step, the window's far edge is in view: the position first, as on the right.
+            plan = [.nudge, .size, .place]
         } else {
             plan = [.positionFirst, .size, .fix]
         }
@@ -355,7 +414,7 @@ public struct WindowGlide: Sendable {
     /// frame waited for whole: given way with its position and size both on
     /// their way, a burst of the two would pass for someone else's change.
     public mutating func next(width: CGFloat?, unanswered: Bool = false) -> Call? {
-        if unanswered, !widening, asked != nil {
+        if unanswered, !widening, !movedFirst, asked != nil {
             plan = []
             slow = true
             probeOut = true
@@ -363,13 +422,20 @@ public struct WindowGlide: Sendable {
             return nil
         }
         let c = plan(width: width)
-        if let c, let b = before { lastCall = (c, sentAt, b) }
+        if let c, let b = before {
+            lastCall = (c, sentAt, b)
+            frameCalls.append((c, sentAt))
+        }
         return c
     }
 
     private mutating func plan(width: CGFloat?) -> Call? {
         guard let f = asked, let b = before else { return nil }
-        if let width { took = width }
+        if let width {
+            took = width
+            // Taken short, narrowing: the browser's minimum, for the rest of this glide.
+            if side == .left, f.width < width - 0.5, width < b.width - 0.5 { minimum = width }
+        }
         while let n = plan.first {
             plan.removeFirst()
             switch n {
@@ -377,26 +443,35 @@ public struct WindowGlide: Sendable {
                 if Self.near(f.width, b.width) && Self.near(f.height, b.height) { continue }
                 return .size(f)
             case .positionFirst:
-                // Where it grows from, at the width it has.
+                // Where it grows from (or, a left show, narrows to), at the width it has.
                 let at = CGRect(x: f.minX, y: f.maxY - b.height, width: b.width, height: b.height)
+                topLeftX = at.minX
                 if Self.near(at.minX, b.minX) && Self.near(at.maxY, b.maxY) { continue }
+                movedFirst = true
+                return .position(at)
+            case .nudge:
+                // A point past its screens' right edge, so it can grow past it (a browser keeps a window wholly on
+                // screen from growing past the edge).
+                let at = CGRect(x: b.minX + 1, y: b.minY, width: b.width, height: b.height)
+                topLeftX = at.minX
+                pastEdge = true
+                movedFirst = true
                 return .position(at)
             case .place, .fix:
                 // A size the read says changed nothing: the browser is at its minimum, or late, or the read is
                 // behind the window. Nothing more of this frame: the window server decides (`step`).
                 if let w = took, !Self.near(f.width, b.width), Self.near(w, b.width, 0.5) {
-                    expect = CGRect(x: n == .fix ? f.minX : b.minX, y: f.maxY - f.height, width: f.width, height: f.height)
+                    expect = CGRect(x: topLeftX, y: f.maxY - f.height, width: f.width, height: f.height)
                     plan = []
                     unread = true
                     return nil
                 }
                 let w = took ?? f.width
-                let x = side == .left ? f.maxX - w : f.minX
+                let x = farX(f, width: w)
                 let at = CGRect(x: x, y: f.maxY - f.height, width: w, height: f.height)
                 expect = at
-                // After a size, the window's top left is where it was; after a position first, where it was sent.
-                let from = n == .fix ? f.minX : b.minX
-                if Self.near(x, from, 0.5) && Self.near(f.maxY, b.maxY, 0.5) { continue }
+                // After a size, the window's top left is where it was, or where a position first sent it.
+                if Self.near(x, topLeftX, 0.5) && Self.near(f.maxY, b.maxY, 0.5) { continue }
                 return .position(at)
             }
         }
@@ -447,6 +522,12 @@ public struct WindowGlide: Sendable {
             guard let c = lastCall, case .size(let f) = c.call, f.width > c.from.width + 0.5 else { return .none }
             return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at, own: !takenOver && !foreign))
         }
+        // A frame's position and size both sent and nothing shown yet (a busy browser): on their way, they are
+        // waited for, the last of them (calls land in order) never sent again. Started afresh, the steps would see
+        // the window where it is and send nothing, and the two would land after them.
+        if !moved, movedFirst, !landedLast, let c = inFlight(seen: seen) {
+            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: c.moved ?? false, then: c.then))
+        }
         guard moved else { return .none }
         let resume = WindowSteps.Resume(from: start, seen: seen, at: sentAt, changed: changedAt)
         if resizedItself { return .holds(resume) }
@@ -454,7 +535,43 @@ public struct WindowGlide: Sendable {
         // A size the browser didn't show at once, narrowing: checked as after the steps' own size (its minimum, a
         // stop short).
         if stoppedAtSize { return .holds(resume) }
-        guard let c = lastCall else { return .none }
-        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at))
+        guard let c = inFlight(seen: seen) else { return .none }
+        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: c.moved ?? (changedAt > c.at), then: c.then))
+    }
+
+    /// The calls of the frame in flight the steps that take over wait for:
+    /// the frame's first, from where the window was when it began, and the
+    /// rest after it in order (`then`; calls land in order), each landing
+    /// taken as one of these, whichever the window shows first. Waiting for
+    /// its last call alone, an earlier one landing would pass for someone
+    /// else's change (a size keeps the top left, a position the size; review
+    /// of adddb77, F1: a left show's position then size, a left hide's nudge,
+    /// size and position).
+    private func inFlight(seen: CGRect) -> (call: Call, at: Double, from: CGRect, then: [Call], moved: Bool?)? {
+        guard let c = lastCall else { return nil }
+        guard frameCalls.count >= 2, let from = frameFrom else { return (c.call, c.at, c.from, [], nil) }
+        // Where each call leaves the window, from where the frame began: the calls the window already shows are
+        // over (waited for, the first never lands again where the later ones moved it: seed 20261126 case 1425).
+        var states = [from]
+        for f in frameCalls {
+            let r = states[states.count - 1]
+            switch f.call {
+            case .size(let t): states.append(CGRect(x: r.minX, y: r.maxY - t.height, width: t.width, height: t.height))
+            case .position(let t): states.append(CGRect(x: t.minX, y: t.maxY - r.height, width: r.width, height: r.height))
+            }
+        }
+        if Self.landed(seen, states[frameCalls.count]) { return (c.call, c.at, states[frameCalls.count - 1], [], nil) }
+        // The latest call that can have left the window where it is shown: the one in flight, from where the calls
+        // before it left the window (moved, unless the window still shows that), the rest after it.
+        func can(_ call: Call, from r: CGRect) -> Bool {
+            switch call {
+            case .size: return Self.near(seen.minX, r.minX) && Self.near(seen.maxY, r.maxY)
+            case .position(let t):
+                return Self.near(seen.width, r.width) && Self.near(seen.height, r.height)
+                    && seen.minX >= min(r.minX, t.minX) - 1.5 && seen.minX <= max(r.minX, t.minX) + 1.5
+            }
+        }
+        let k = frameCalls.indices.last { can(frameCalls[$0].call, from: states[$0]) } ?? 0
+        return (frameCalls[k].call, frameCalls[k].at, states[k], frameCalls.dropFirst(k + 1).map(\.call), !Self.landed(seen, states[k]))
     }
 }
