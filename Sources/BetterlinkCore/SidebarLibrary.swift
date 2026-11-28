@@ -28,6 +28,30 @@ public struct SidebarLibrary: Codable, Equatable, Sendable {
         }
     }
 
+    /// Why `name` can't be a Sidebar Profile's name, or nil when it can:
+    /// empty, or another profile here has it (ignoring case and spaces at
+    /// the ends). Two with one name can't be told apart in the sidebar's
+    /// menu or in Sync settings. `except`: the profile being renamed.
+    public func nameProblem(_ name: String, except: UUID? = nil) -> String? {
+        let n = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if n.isEmpty { return "Give the Sidebar Profile a name." }
+        if let other = profiles.first(where: { $0.id != except && SyncModel.sameName($0.name, n) }) {
+            return "A Sidebar Profile is already named \u{201C}\(other.name)\u{201D}."
+        }
+        return nil
+    }
+
+    /// Adds a Sidebar Profile named `name` and, given `ref`, shows it for that
+    /// browser profile. Nil when the name can't be used (`nameProblem`).
+    @discardableResult
+    public mutating func addProfile(named name: String, showingFor ref: ProfileRef? = nil) -> SidebarProfile? {
+        guard nameProblem(name) == nil else { return nil }
+        let p = SidebarProfile(name: name.trimmingCharacters(in: .whitespacesAndNewlines))
+        profiles.append(p)
+        if let ref { link(ref, to: p.id) }
+        return p
+    }
+
     /// Removes a Sidebar Profile; the last one is kept.
     public mutating func removeProfile(_ id: UUID) {
         guard profiles.count > 1 else { return }

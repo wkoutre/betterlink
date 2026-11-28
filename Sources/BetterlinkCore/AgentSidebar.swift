@@ -34,6 +34,7 @@ extension Agent {
         case "sidebar.profiles.add": return try profilesAddSidebar(input, env)
         case "sidebar.profiles.rename": return try edit(input, env) { lib, p in
             guard let name = try nonEmpty(input, "name") else { throw fail("Give name: the new name.") }
+            if let problem = lib.nameProblem(name, except: p) { throw fail(problem) }
             lib.update(p) { $0.name = name }
         }
         case "sidebar.profiles.remove": return try profilesRemoveSidebar(input, env)
@@ -193,9 +194,8 @@ extension Agent {
         guard let name = try nonEmpty(input, "name") else { throw fail("Give name: the new Sidebar Profile's name.") }
         var made: SidebarProfile?
         _ = try SidebarStore(folder: env.folder).update { lib in
-            let p = SidebarProfile(name: name)
-            lib.profiles.append(p)
-            made = p
+            if let problem = lib.nameProblem(name) { throw fail(problem) }
+            made = lib.addProfile(named: name)
         }
         return .success(made.map(describeProfile))
     }
