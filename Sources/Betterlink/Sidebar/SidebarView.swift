@@ -837,7 +837,8 @@ struct SidebarView: View {
     /// or leaves them; with Shift every row from the one last clicked to
     /// this one is picked, as in Finder. Neither opens anything.
     private func click(_ row: SidebarRowID, plain: () -> Void) {
-        let keys = NSEvent.modifierFlags
+        // The keys held as the click arrived, and the keys held now.
+        let keys = NSEvent.modifierFlags.union(NSApp.currentEvent?.modifierFlags ?? [])
         guard keys.contains(.command) || keys.contains(.shift) else {
             if !selection.isEmpty { animate { selection.click(row) } } else { selection.click(row) }
             plain()
