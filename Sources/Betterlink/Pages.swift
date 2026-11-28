@@ -690,7 +690,7 @@ struct AboutPage: View {
         PageForm {
             DSSection {
                 HStack(spacing: DS.Space.space4) {
-                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: 72, height: 72)
+                    Image(nsImage: NSApp.applicationIconImage).resizable().frame(width: DS.scaled(72), height: DS.scaled(72))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 4) {
                         Text("betterlink").font(DS.TextStyle.title1).tracking(DS.TextStyle.title1Tracking)

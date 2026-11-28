@@ -156,7 +156,7 @@ private struct RuleRow: View {
             if !rule.pattern.isEmpty, let problem = rule.problem {
                 Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, DS.scaled(62))
             }
-            UnresolvedRuleNote(rule: rule.id, leading: 62)
+            UnresolvedRuleNote(rule: rule.id, leading: DS.scaled(62))
         }
         .padding(.vertical, DS.Space.space1)
     }
