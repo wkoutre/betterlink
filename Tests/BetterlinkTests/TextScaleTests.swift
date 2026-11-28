@@ -145,6 +145,17 @@ import Testing
         #expect(!followsTheSize({ _ = DS.Space.space4 }))
     }
 
+    /// The sidebar's settings menu draws its gear at the image's own size,
+    /// so the image is made larger for larger text, like its neighbours.
+    @Test func theSidebarsGearGrowsWithTheText() {
+        let standard = SidebarView.menuSymbol("gearshape", points: CGFloat(TextSize.standard.points)).size
+        let largest = SidebarView.menuSymbol("gearshape", points: CGFloat(TextSize.largest.points)).size
+        #expect(standard.height > 0)
+        #expect(largest.height > standard.height)
+        #expect(largest.width > standard.width)
+        #expect(SidebarView.menuSymbol("gearshape", points: 13).isTemplate)
+    }
+
     /// A tour step still fits the window it is read in at every text size
     /// (TourLayoutTests has the standard one).
     @Test func tourStepsFitTheWindowAtEverySize() {

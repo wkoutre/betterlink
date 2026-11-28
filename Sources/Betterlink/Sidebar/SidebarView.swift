@@ -307,7 +307,13 @@ struct SidebarView: View {
             Menu {
                 profileMenu(match: match, profile: profile)
             } label: {
-                headerIcon("gearshape")
+                // A borderless menu draws its label's image at the image's
+                // own size, whatever the font: so the gear is made at the
+                // size its neighbours' symbols are drawn at.
+                Image(nsImage: Self.menuSymbol("gearshape", points: DS.text(13)))
+                    .foregroundStyle(pal.textSecondary)
+                    .frame(width: DS.scaled(24), height: DS.scaled(24))
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -315,6 +321,15 @@ struct SidebarView: View {
             .disabled(!known)
             .help(known ? "Sidebar Profile settings" : "Waiting to learn this window's Browser Profile")
             .accessibilityLabel("Sidebar Profile settings")
+    }
+
+    /// An SF Symbol as an image of `points`, a template so it takes the
+    /// colour it is drawn in.
+    static func menuSymbol(_ name: String, points: CGFloat) -> NSImage {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: points, weight: .regular)) ?? NSImage()
+        image.isTemplate = true
+        return image
     }
 
     private func headerIcon(_ symbol: String) -> some View {
@@ -1279,6 +1294,10 @@ struct SidebarView: View {
                 .textFieldStyle(.plain)
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
+                // The field AppKit draws keeps the font it was made with for
+                // what is typed, though the placeholder follows: a new text
+                // size makes a new field. What was typed stays (newURL).
+                .id(TextScale.shared.size)
                 .focused($newTabFocused)
                 // Back from being a drop zone (DropSwap): the keyboard it had
                 // before the drag, now that it is there to take it.

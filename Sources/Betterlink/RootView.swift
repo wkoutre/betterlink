@@ -259,11 +259,19 @@ enum BetterlinkWindow {
     /// (TourLayoutTests).
     static var defaultSize: CGSize { fitted(standardDefaultSize, within: screenRoom) }
 
-    /// An editor's sheet, drawn `size` at the standard text size: larger for
-    /// larger text, like the window, and never past the screen.
+    /// An editor's sheet, drawn `width` by `height` at the standard text
+    /// size: larger for larger text, like the window, but never wider or
+    /// taller than the window it opens on (macOS would move the window to
+    /// make room) or, before there is one, the screen.
     static func sheet(_ width: CGFloat, _ height: CGFloat) -> CGSize {
-        fitted(CGSize(width: width, height: height),
-               within: screenRoom.map { CGSize(width: $0.width - 40, height: $0.height - 80) })
+        fitted(CGSize(width: width, height: height), within: sheetRoom)
+    }
+
+    private static var sheetRoom: CGSize? {
+        if let window = (NSApp?.delegate as? AppDelegate)?.window {
+            return window.contentRect(forFrameRect: window.frame).size
+        }
+        return screenRoom.map { CGSize(width: $0.width - 40, height: $0.height - 80) }
     }
 
     /// A size drawn for standard text, at the chosen text size: larger text

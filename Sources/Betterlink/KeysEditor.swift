@@ -105,12 +105,15 @@ private struct KeysRow: View {
     @Binding var rule: ModifierRule
     let problem: String?
     let remove: () -> Void
+    /// Where the keys start in the row, so a problem with them is said under them.
+    @State private var keysLeading: CGFloat = 40
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.space1) {
             HStack(spacing: DS.Space.space2) {
                 Text("Hold").foregroundStyle(DS.Palette.textSecondary)
                 KeyChips(keys: $rule.keys)
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { keysLeading = $0 }
                 Text("to open links in").foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
@@ -119,9 +122,15 @@ private struct KeysRow: View {
                 DSIconButton(symbol: "xmark", label: "Remove", action: remove)
             }
             if let problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, DS.scaled(40))
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, keysLeading)
             }
         }
+        .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
+        // A List gives its rows a font of its own: the row's words are body
+        // text at the chosen size.
+        .font(DS.TextStyle.body)
     }
+
+    private static let row = "keys row"
 }

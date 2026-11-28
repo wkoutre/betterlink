@@ -113,6 +113,9 @@ private struct RuleRow: View {
     @EnvironmentObject var model: AppModel
     @Binding var rule: Rule
     let remove: () -> Void
+    /// Where the pattern field starts in the row, so the lines under it
+    /// start there too, at every text size.
+    @State private var fieldLeading: CGFloat = 62
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.space1) {
@@ -125,6 +128,7 @@ private struct RuleRow: View {
                 DSTextField(label: "Pattern", text: $rule.pattern, prompt: placeholder,
                             invalid: !rule.pattern.isEmpty && rule.problem != nil)
                     .frame(minWidth: DS.scaled(150))
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { fieldLeading = $0 }
                 Text("in").foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
@@ -154,12 +158,18 @@ private struct RuleRow: View {
                     .padding(.trailing, DS.scaled(22) + DS.Space.space2)
             }
             if !rule.pattern.isEmpty, let problem = rule.problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, DS.scaled(62))
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, fieldLeading)
             }
-            UnresolvedRuleNote(rule: rule.id, leading: DS.scaled(62))
+            UnresolvedRuleNote(rule: rule.id, leading: fieldLeading)
         }
+        .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
+        // A List gives its rows a font of its own: the row's words are body
+        // text at the chosen size, as on the Link Rules page.
+        .font(DS.TextStyle.body)
     }
+
+    private static let row = "rule row"
 
     /// The profile + adds: one the rule doesn't name yet, from another
     /// browser than the rule's first choice when there is one.
