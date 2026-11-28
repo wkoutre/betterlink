@@ -9,11 +9,10 @@ D=$(cd "$(dirname "$0")" && pwd); . "$D/lib.sh"
 A=$1; L=$2; SIDE=$3; LOAD=$4; WIN=$5; N=${6:-20}; KIND=${7:-chrome}
 OUTD=${LIVE_OUT:-$D/out/faredge}; mkdir -p "$OUTD"
 browser_for "$KIND"; live_init "$A" "$KIND" sr
-mkdir -p "$RUN"; cp "$D/heavy.html" "$RUN/heavy.html"
-EXTRA=; [ "$LOAD" = heavy ] && EXTRA="file://$RUN/heavy.html file://$RUN/heavy.html file://$RUN/heavy.html file://$RUN/heavy.html"
+mkdir -p "$W"; cp "$D/heavy.html" "$W/heavy.html"   # beside $RUN, which rig.sh starts afresh
+EXTRA=; [ "$LOAD" = heavy ] && EXTRA="file://$W/heavy.html file://$W/heavy.html file://$W/heavy.html file://$W/heavy.html"
 if [ "$KIND" = chrome ]; then
   bash "$D/rig.sh" "$A" $EXTRA "$CHURN?fe#0" >/dev/null; read P TH C < "$RUN/pids"
-  cp "$D/heavy.html" "$RUN/heavy.html"   # rig.sh starts $RUN afresh
 else
   "$B" agent sidebar.settings.set '{"enabled":true,"shown":false,"takeOverTabs":false,"browsers":["Brave"]}' | grep -o '"ok":[a-z]*'
   start_app; sleep 4; unreg
