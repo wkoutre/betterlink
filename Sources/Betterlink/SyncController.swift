@@ -44,6 +44,12 @@ final class SyncController: ObservableObject {
     private var watchers: [PathWatcher] = []
     private var timer: Timer?
     private var pending: DispatchWorkItem?
+    /// Whether the pull waiting to run must run (a timer, a choice made here)
+    /// or may be skipped when nothing it reads changed (a file watch).
+    private var pendingMustRun = false
+    /// What the sync reads, as the last pull that finished left it. Nil until
+    /// one has, and after one failed: the next pull then runs whatever asked.
+    private var pulledInputs: SyncInputs?
     private var note: (String) -> Void = { _ in }
     /// What the Log last said about rules with no matching profile and about
     /// refused device files, so it speaks only when that changes.
@@ -120,7 +126,15 @@ final class SyncController: ObservableObject {
 
     /// A settings file changed on this Mac (AppModel's reloads, which also
     /// see editors that save in place): sync it out.
-    func localChanged() { if session != nil { schedulePull() } }
+    func localChanged() { if session != nil { schedulePull(mustRun: false) } }
+
+    /// The sidebar saved which folders are open and nothing else, which
+    /// doesn't sync: if that save started from the sidebar.json the last pull
+    /// saw, the watch it sets off finds nothing to do (`SyncInputs.moved`).
+    func savedOnlyOpenFolders(before: FileSignature?, after: FileSignature?) {
+        guard let settings else { return }
+        pulledInputs?.moved(SidebarStore(folder: settings).file, from: before, to: after)
+    }
 
     /// Adds a Sidebar Profile another Mac shares, with all its parts, on the
     /// next sync (`betterlink sync add`). The sync copies it in before it
@@ -192,6 +206,7 @@ final class SyncController: ObservableObject {
 
     private func restart() {
         watchers = []; timer?.invalidate(); timer = nil; session = nil; offered = []
+        pulledInputs = nil
         peers = []
         if folder == nil, let settings {
             // Off: no rule is unresolved any more (the CLI's rules list reads this too).
@@ -217,10 +232,10 @@ final class SyncController: ObservableObject {
         session?.saveSelection = { SyncDefaults.setSelection($0, in: d) }
         // Another Mac's file landing, or a local settings change: sync.
         if let w = PathWatcher(url: f.devices, debounce: 0.3, onChange: { [weak self] in
-            MainActor.assumeIsolated { self?.schedulePull() }
+            MainActor.assumeIsolated { self?.schedulePull(mustRun: false) }
         }) { watchers.append(w) }
         if let w = PathWatcher(url: settings.directory, debounce: 0.5, onChange: { [weak self] in
-            MainActor.assumeIsolated { self?.schedulePull() }
+            MainActor.assumeIsolated { self?.schedulePull(mustRun: false) }
         }) { watchers.append(w) }
         // A cloud app can replace files without the folder noticing; look anyway.
         timer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
@@ -231,15 +246,39 @@ final class SyncController: ObservableObject {
         schedulePull()
     }
 
-    private func schedulePull() {
+    /// A pull a moment from now. `mustRun` false (a file watch): skipped
+    /// when nothing the sync reads changed since the last pull. The 30 second
+    /// timer and every choice made here always pull.
+    private func schedulePull(mustRun: Bool = true) {
+        PerfTrace.mark("sync pull scheduled")
         pending?.cancel()
+        pendingMustRun = pendingMustRun || mustRun
         let item = DispatchWorkItem { [weak self] in MainActor.assumeIsolated { self?.pull() } }
         pending = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: item)
     }
 
     private func pull() {
+        let mustRun = pendingMustRun
+        pendingMustRun = false
+        if !mustRun, let seen = pulledInputs, let inputs = currentInputs(), inputs == seen {
+            PerfTrace.mark("sync pull skipped: nothing it reads changed")
+            return
+        }
+        PerfTrace.span("sync pull") { pullNow() }
+    }
+
+    private func currentInputs() -> SyncInputs? {
+        guard let settings, let folder else { return nil }
+        return SyncInputs.of(settings: settings, sync: SyncFolder(folder))
+    }
+
+    private func pullNow() {
         guard let session else { return }
+        // Read before the pull, so a change that lands while it runs is never
+        // taken as seen. Its own writes make the next watch pull once more.
+        let inputs = currentInputs()
+        pulledInputs = nil
         let wasHeld = held?.ids
         defer {
             refreshNotes()
@@ -274,6 +313,7 @@ final class SyncController: ObservableObject {
             status = "Synced \(Date().formatted(date: .omitted, time: .shortened))" + (others.isEmpty ? "" : " with \(others.count) other Mac\(others.count == 1 ? "" : "s")")
             offered = session.offers()
             pendingOffers = []
+            pulledInputs = inputs
         } catch let e as SyncSession.Held {
             if wasHeld != e.hold.ids { note(e.hold.reason) }
             let n = e.hold.ids.count

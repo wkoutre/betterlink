@@ -28,7 +28,8 @@ struct DropTarget: Equatable {
 /// sidebar can draw the line), and hands over the dragged keys on drop.
 struct SidebarRowDrop: DropDelegate {
     let id: UUID
-    let size: CGSize
+    /// The row's size as it is when the drag moves, not as it was drawn.
+    let size: () -> CGSize
     let horizontal: Bool
     let canHold: Bool
     @Binding var target: DropTarget?
@@ -36,8 +37,9 @@ struct SidebarRowDrop: DropDelegate {
     let perform: ([String], DropZone) -> Void
 
     private func zone(_ info: DropInfo) -> DropZone {
-        horizontal ? .at(info.location.x, extent: size.width, canHold: canHold)
-                   : .at(info.location.y, extent: size.height, canHold: canHold)
+        let size = size()
+        return horizontal ? .at(info.location.x, extent: size.width, canHold: canHold)
+                          : .at(info.location.y, extent: size.height, canHold: canHold)
     }
 
     func validateDrop(info: DropInfo) -> Bool { info.hasItemsConforming(to: [SidebarDrag.type]) }
@@ -93,6 +95,13 @@ struct DropMarker: View {
     }
 }
 
+/// A row's last measured size. A box, not view state: a size arriving draws
+/// nothing again. It used to be the sidebar's state, and every row that came
+/// in on opening a folder drew the whole sidebar once more.
+final class RowSize {
+    var size: CGSize = .zero
+}
+
 /// A sidebar row as a drop target: measures the row, follows the drag over it,
 /// and draws the insertion line where the drop would land.
 struct DropRowModifier: ViewModifier {
@@ -100,16 +109,16 @@ struct DropRowModifier: ViewModifier {
     let horizontal: Bool
     let canHold: Bool
     let color: Color
-    let size: CGSize
     @Binding var target: DropTarget?
-    let measured: (CGSize) -> Void
     let allowed: (DropZone) -> Bool
     let perform: ([String], DropZone) -> Void
+    @State private var measured = RowSize()
 
     func body(content: Content) -> some View {
+        let measured = measured
         content
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { measured($0) }
-            .onDrop(of: [SidebarDrag.type], delegate: SidebarRowDrop(id: id, size: size, horizontal: horizontal,
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { measured.size = $0 }
+            .onDrop(of: [SidebarDrag.type], delegate: SidebarRowDrop(id: id, size: { measured.size }, horizontal: horizontal,
                                                                     canHold: canHold, target: $target, allowed: allowed, perform: perform))
             .overlay { DropMarker(zone: target?.id == id ? target?.zone : nil, horizontal: horizontal, color: color) }
     }

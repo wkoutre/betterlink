@@ -223,7 +223,7 @@ final class WindowTracker: NSObject {
                 guard let self else { return }
                 // A window seen not to be a browser window after all goes now,
                 // with everything at rest.
-                self.watchers.values.forEach { $0.dropNotBrowser() }
+                PerfTrace.span("dropNotBrowser") { self.watchers.values.forEach { $0.dropNotBrowser() } }
                 self.onScreen?(true)
             }
         }

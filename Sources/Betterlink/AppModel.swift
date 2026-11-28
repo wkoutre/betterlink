@@ -536,7 +536,12 @@ final class AppModel: ObservableObject {
                                                  attributes: [.posixPermissions: 0o700])
         try? ConfigLoader.writeEditorSupport(paths: paths, catalog: catalog)
         dirWatcher = PathWatcher(url: paths.directory) { [weak self] in
-            Task { @MainActor in self?.reloadRules(); self?.reloadConfig(); SidebarLibraryModel.shared.reload() }
+            Task { @MainActor in
+                PerfTrace.mark("settings folder changed")
+                PerfTrace.span("reloadRules") { self?.reloadRules() }
+                PerfTrace.span("reloadConfig") { self?.reloadConfig() }
+                SidebarLibraryModel.shared.reload()
+            }
         }
     }
 
