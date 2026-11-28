@@ -363,7 +363,11 @@ final class SidebarInstance: ObservableObject {
                 // size alone; a window that can only widen toward the sidebar by moving first waits for that.
                 let right = rightEdge(of: onScreenFrame)
                 let growsInPlace = frame.width <= onScreenFrame.width + 0.5 || right.map { onScreenFrame.minX + frame.width <= $0 + 0.5 } ?? false
-                if flagOff, !reducesMotion(), setsInstant || growsInPlace {
+                // A left show of a window already no wider than its browser was seen to stop at: the steps' size
+                // alone, which leaves it where it is, so the refusal comes at once (`stops`). A glide's position
+                // would go first and move it.
+                let atStop = keep == .left && frame.width < onScreenFrame.width - 0.5 && stops.map { onScreenFrame.width <= $0 + 0.5 } ?? false
+                if flagOff, !reducesMotion(), !atStop, setsInstant || growsInPlace {
                     glide = WindowGlide(closed: run.hiddenWindow, open: run.shownWindow, side: keep, right: right, proven: setsInstant)
                     glide?.slack = slack
                     glideSteps = make

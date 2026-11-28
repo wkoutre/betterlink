@@ -558,9 +558,12 @@ final class FakeBrowser: WindowHandle {
         let d = CGRect(x: span?.lowerBound ?? frame.minX, y: (Displays.all.max { $0.frame.intersection(frame).area < $1.frame.intersection(frame).area } ?? Displays.all[0]).frame.minY,
                        width: (span?.upperBound ?? frame.maxX) - (span?.lowerBound ?? frame.minX), height: 1)
         let least = behaviour.widensBack ? 1 : max(1, behaviour.minWidth)
-        // A window can always go back where it has been, past the display's edge too.
+        // A window can always go back where it has been, past the display's edge too. A window already partly off
+        // its displays isn't limited at all (Chromium only keeps a window that is wholly on screen from growing
+        // past the edge: measured on the Mac mini, macOS 26.5.2, Chrome for Testing and Brave, PR 109).
         let reach = history.map(\.frame.maxX).max() ?? frame.maxX
-        let w = max(least, min(s.width, max(max(d.maxX, frame.maxX, reach) - frame.minX, least)))
+        let off = frame.maxX > d.maxX + 0.5 || frame.minX < d.minX - 0.5
+        let w = off ? max(least, s.width) : max(least, min(s.width, max(max(d.maxX, frame.maxX, reach) - frame.minX, least)))
         let h = min(s.height, max(frame.maxY - d.minY, frame.height, 1))
         set(CGRect(x: frame.minX, y: frame.maxY - h, width: w, height: h))
         if behaviour.widensBack, w < behaviour.minWidth - 0.5 { widenAt = now() + 0.05 }
@@ -766,6 +769,8 @@ final class SidebarRig {
     private(set) var pressedAt: [(t: Double, calls: Int, toggles: Bool)] = []
     /// The browser's width when the first press came.
     private(set) var widthAtPress: CGFloat = 0
+    /// How many frames the browser had had by then (`FakeBrowser.history`).
+    private(set) var historyAtPress = 0
     /// What the last press asked for: open (true) or closed.
     private(set) var askedOpen = false
     /// Where the person put the browser during it, if they did; and whether
@@ -834,6 +839,7 @@ final class SidebarRig {
         fake.sliding = true
         callsBefore = fake.setCalls
         widthAtPress = fake.frame.width
+        historyAtPress = fake.history.count
         edgeWaits = 0
         presses = 0
         pressedAt = []
@@ -900,6 +906,7 @@ final class SidebarRig {
         fake.sliding = true
         callsBefore = fake.setCalls
         widthAtPress = fake.frame.width
+        historyAtPress = fake.history.count
         edgeWaits = 0
         presses = 0
         pressedAt = []
@@ -1252,7 +1259,19 @@ struct RuleCheck {
         // doing a size after betterlink stopped waiting for it, after calls sent since) and a browser
         // widening itself are checked at rest.
         let replays = b.timing == .busy || b.stall > 0 || (b.timing == .late && b.lateBy > 2 * WindowSteps.timeout)
-        let checked = (replays || b.widensBack) ? [rig.fake.frame] : frames + [rig.fake.frame]
+        // Mid-motion, a glide's set puts the browser's far edge out past where it was, never in, for as long as the
+        // next call takes (`WindowGlide`): past the screen's edge for a window that fills it. That much, at most the
+        // sidebar's width out on the far side, isn't counted; the frame at rest is.
+        let left = rig.side == .left, out = rig.sidebarWidth + 2
+        let level = displays.filter { $0.frame.minY < before.maxY - 1 && $0.frame.maxY > before.minY + 1 }
+        let screenRight = max(before.maxX, level.map(\.frame.maxX).max() ?? before.maxX)
+        let screenLeft = min(before.minX, level.map(\.frame.minX).min() ?? before.minX)
+        func far(_ f: CGRect) -> CGRect {
+            if left, f.maxX > screenRight, f.maxX - screenRight <= out { return CGRect(x: f.minX, y: f.minY, width: max(0, screenRight - f.minX), height: f.height) }
+            if !left, f.minX < screenLeft, screenLeft - f.minX <= out { return CGRect(x: screenLeft, y: f.minY, width: max(0, f.maxX - screenLeft), height: f.height) }
+            return f
+        }
+        let checked = (replays || b.widensBack) ? [rig.fake.frame] : frames.map(far) + [rig.fake.frame]
         if let off = checked.first(where: { offScreen($0, displays) > allowed }) {
             problems.append("\(step): pushed off screen to \(off) (\(Int(offScreen(off, displays))) pt off; was \(before), \(Int(allowed - 2)) pt off)")
         }
@@ -1551,6 +1570,19 @@ struct RuleCheck {
                                    Double(far(x.browser)), Double(far(x.browser) - want), (x.t - first.t) * 1000, "\(x.browser)"))
             return
         }
+        // Every frame the browser took, one set at a time: live, the window server shows any one of them alone for
+        // a refresh (a size lands 5-31 ms after the position sent with it, and a read between two calls lets the
+        // first show). Its far edge never comes in from where it was at any of them (Nick's 0.3.34 recording: in by
+        // 29-39 pt for 1-3 frames in each motion; MINI-24 on 0.3.37: a show's far edge in by 47 pt, median). Out
+        // is past the screen's edge for a window that fills it.
+        // A window's first glide probes its sets with a size alone: that first set may be in by `probeStep`.
+        for (i, h) in rig.fake.history.dropFirst(rig.historyAtPress).filter({ !$0.byPerson }).enumerated() {
+            let inward = left ? want - h.frame.maxX : h.frame.minX - want
+            if inward > (i == 0 ? WindowGlide.probeStep + 0.5 : 0.5) {
+                problems.append(String(format: "%@: a set put the browser's far edge %.0f pt in (browser %@)", step, Double(inward), "\(h.frame)"))
+                break
+            }
+        }
         // No added latency (Nick): the first set goes out with the press, as the steps' first call always did,
         // not a tick or more later once the slide has moved a point.
         if let p = rig.pressedAt.first, p.calls < rig.fake.sent.count, rig.fake.sent[p.calls].t > p.t + 1e-9 {
@@ -1558,9 +1590,13 @@ struct RuleCheck {
         }
         let moving = Set(s.map { Int(($0.browser.width * 2).rounded()) }).count
         if moving < Self.smoothFrames { problems.append("\(step): the browser moved in \(moving) frames, fewer than \(Self.smoothFrames)") }
-        if let x = s.first(where: { !$0.hidden && $0.shown > 0.5 && abs($0.shown + $0.browser.width - pair.width) > 2 }) {
-            problems.append(String(format: "%@: the sidebar %.0f shown beside the browser %.0f wide, the pair %.0f, %.0f ms in", step, Double(x.shown),
-                                   Double(x.browser.width), Double(pair.width), (x.t - first.t) * 1000))
+        // The sidebar's seam at the browser's near edge (a glide's position first moves that edge before the size
+        // lands, its far edge out meanwhile): no gap, no overlap.
+        let seam = { (x: SidebarRig.Sample) in left ? pair.minX + x.shown : pair.maxX - x.shown }
+        let near = { (r: CGRect) in left ? r.minX : r.maxX }
+        if let x = s.first(where: { !$0.hidden && $0.shown > 0.5 && abs(seam($0) - near($0.browser)) > 2 }) {
+            problems.append(String(format: "%@: the sidebar %.0f shown beside the browser %.0f wide (near edge %.0f), the pair %.0f, %.0f ms in", step,
+                                   Double(x.shown), Double(x.browser.width), Double(near(x.browser)), Double(pair.width), (x.t - first.t) * 1000))
         }
     }
 
