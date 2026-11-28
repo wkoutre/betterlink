@@ -1,12 +1,14 @@
 import AppKit
 import BetterlinkCore
+import Observation
 import SwiftUI
 import Testing
 @testable import Betterlink
 
 /// The chosen text size (General › Text size) reaches what is drawn: the
 /// design tokens give their numbers at that size, the window grows for larger
-/// text, and a view that is already showing changes without being made again.
+/// text, and every token read is observed, which is what lets a showing view
+/// change without being made again.
 ///
 /// The size is one value for the whole process, so every test here puts it
 /// back before it returns, and none of them waits while it is changed: a wait
@@ -86,38 +88,38 @@ import Testing
         }
     }
 
-    /// A view that reads the tokens the way the app's views do: in its body.
-    private struct Row: View {
-        var body: some View {
-            HStack {
-                Text("A tab's title").font(DS.TextStyle.body)
-                Spacer(minLength: 0)
-                StatusBadge(text: "Preview", kind: .neutral)
-            }
-            .frame(minHeight: DS.Size.sizeRow)
-        }
+    /// Whether what `read` reads is told when the text size changes.
+    private func followsTheSize(_ read: () -> Void) -> Bool {
+        let told = Told()
+        withObservationTracking { read() } onChange: { told.yes = true }
+        guard !told.yes else { return false }
+        at(.largest) {}
+        return told.yes
     }
 
-    /// Changing the size reaches a view that is already showing: nothing has
-    /// to be closed and opened again. It ends up as a view made at that size.
+    /// Reading a token is observed (Observation), and that is the whole of
+    /// how a showing view follows the setting: SwiftUI draws a view again
+    /// when something its body read changes, so nothing is closed and opened
+    /// again. A token read that went around `TextScale` would leave its view
+    /// at the old size, and fails here.
     ///
-    /// Measured by asking SwiftUI itself (`sizeThatFits`), which draws what
-    /// has changed before it answers. An `NSHostingView`'s `fittingSize` is
-    /// AppKit's, and keeps its last answer until the next turn of the run
-    /// loop, which this test must not wait for (see the suite's note).
-    @Test func aShowingViewChangesWithTheSize() {
-        let room = CGSize(width: 300, height: 10_000)
-        let showing = NSHostingController(rootView: Row().frame(width: 300))
-        let before = showing.sizeThatFits(in: room)
-        #expect(before.height == 30)
-        for size in [TextSize.largest, .small, .larger] {
-            let (changed, fresh) = at(size) {
-                (showing.sizeThatFits(in: room), NSHostingController(rootView: Row().frame(width: 300)).sizeThatFits(in: room))
-            }
-            #expect(changed == fresh, "\(size)")
-            #expect(changed.height == CGFloat(size.length(30)), "\(size)")
-        }
-        #expect(showing.sizeThatFits(in: room) == before)
+    /// The redraw itself comes on a later turn of the run loop (measured at
+    /// once, a showing view still has its old size), and this suite must not
+    /// wait while the size is changed, so that half is checked on screen.
+    @Test func everyTokenReadFollowsTheSize() {
+        #expect(followsTheSize({ _ = DS.TextStyle.body }))
+        #expect(followsTheSize({ _ = DS.TextStyle.caption }))
+        #expect(followsTheSize({ _ = DS.TextStyle.title1 }))
+        #expect(followsTheSize({ _ = DS.TextStyle.code }))
+        #expect(followsTheSize({ _ = DS.Size.sizeRow }))
+        #expect(followsTheSize({ _ = DS.Size.sizeControl }))
+        #expect(followsTheSize({ _ = DS.Size.sizeSidebar }))
+        #expect(followsTheSize({ _ = DS.text(10) }))
+        #expect(followsTheSize({ _ = DS.scaled(26) }))
+        #expect(followsTheSize({ _ = BetterlinkWindow.minSize }))
+        #expect(followsTheSize({ _ = TourLayout.column }))
+        // What doesn't scale isn't observed: spacing stays as it is.
+        #expect(!followsTheSize({ _ = DS.Space.space4 }))
     }
 
     /// A tour step still fits the window it is read in at every text size
@@ -138,4 +140,9 @@ import Testing
             }
         }
     }
+}
+
+/// Set from Observation's change notice, which may come from any thread.
+private final class Told: @unchecked Sendable {
+    var yes = false
 }
