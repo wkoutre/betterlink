@@ -122,6 +122,9 @@ final class SyncController: ObservableObject {
     /// see editors that save in place): sync it out.
     func localChanged() { if session != nil { schedulePull() } }
 
+    /// The sidebar saved which folders are open and nothing else.
+    func savedOnlyOpenFolders(before: FileSignature?, after: FileSignature?) {}
+
     /// Adds a Sidebar Profile another Mac shares, with all its parts, on the
     /// next sync (`betterlink sync add`). The sync copies it in before it
     /// starts syncing it: a selected profile this Mac doesn't have reads as

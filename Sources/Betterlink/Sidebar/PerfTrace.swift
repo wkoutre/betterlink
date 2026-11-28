@@ -1,5 +1,6 @@
 import AppKit
 import QuartzCore
+import SwiftUI
 
 /// Diagnostics, on only with BETTERLINK_TRACE=1 (as DragTrace): what the main
 /// thread does after a click in a sidebar panel. From a press in a panel until
@@ -81,14 +82,17 @@ enum PerfTrace {
 
     /// For work too frequent to list: `began()` before, `ended` after. They
     /// are counted and summed. `timed: false` counts without adding its time
-    /// (a call inside another one of the same name).
+    /// (a call inside another one of the same name). `listFrom`: one that
+    /// took at least this long (ms) is listed too.
     static func began() -> Double { enabled && watching ? now : 0 }
-    static func ended(_ name: String, _ began: Double, timed: Bool = true) {
+    static func ended(_ name: String, _ began: Double, timed: Bool = true, listFrom: Double? = nil) {
         guard began > 0, watching else { return }
+        let ms = (now - began) * 1000
         var c = counts[name] ?? (0, 0)
         c.n += 1
-        if timed { c.ms += (now - began) * 1000 }
+        if timed { c.ms += ms }
         counts[name] = c
+        if let listFrom, ms >= listFrom { entries.append(Entry(at: began, ms: ms, name: name)) }
     }
 
     static func count(_ name: String) {
@@ -179,5 +183,18 @@ enum PerfTrace {
         DragTrace.log(String(format: "perf: %d frames of %.2f ms, longest %.1f ms, %d over 1.5 refreshes; each: %@",
                              intervals.count, period * 1000, intervals.max() ?? 0, long.count,
                              intervals.map { String(format: "%.0f", $0) }.joined(separator: " ")))
+    }
+}
+
+/// The view a sidebar panel holds. SwiftUI works a change out and lays it out
+/// in `layout`, once per frame drawn, so the trace times it there.
+final class SidebarHostingView<Content: View>: NSHostingView<Content> {
+    required init(rootView: Content) { super.init(rootView: rootView) }
+    @available(*, unavailable) required init?(coder: NSCoder) { fatalError("not used") }
+
+    override func layout() {
+        let began = PerfTrace.began()
+        super.layout()
+        PerfTrace.ended("layout", began, listFrom: 4)
     }
 }

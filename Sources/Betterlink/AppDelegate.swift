@@ -26,6 +26,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
 
     /// Quitting gives the browser windows the sidebar narrowed their space back.
     func applicationWillTerminate(_ notification: Notification) {
+        // A folder opened or closed a moment ago is in the file before the app is gone.
+        SidebarLibraryModel.shared.flush()
         SidebarController.shared.giveSpaceBack()
     }
 

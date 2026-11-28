@@ -62,6 +62,12 @@ struct SidebarView: View {
     private func edit(_ id: UUID, _ change: (inout SidebarProfile) -> Void) {
         animate { lib.change(profile: id, change) }
     }
+
+    /// Opens or closes folders, animated. On screen at once; the file follows
+    /// (`SidebarLibraryModel.setOpen`).
+    private func setOpen(_ change: SidebarOpenChange) {
+        animate { lib.setOpen(change) }
+    }
     @FocusState private var nameFocused: Bool
 
     var body: some View {
@@ -702,7 +708,7 @@ struct SidebarView: View {
         // Option-Left and Option-Right close and open every folder, as Option-click does.
         if press.modifiers.contains(.option) {
             guard press.key == .leftArrow || press.key == .rightArrow else { return .ignored }
-            edit(p.id) { $0.setAllExpanded(press.key == .rightArrow) }
+            setOpen(.all(profile: p.id, open: press.key == .rightArrow))
             return .handled
         }
         switch press.key {
@@ -712,7 +718,9 @@ struct SidebarView: View {
             let opening = press.key == .rightArrow
             switch cursor {
             case .folder(let id)?:
-                if case .folder(let f)? = SidebarProfile.find(id, in: p.items), f.expanded != opening { edit(p.id) { $0.toggleExpanded(id) } }
+                if case .folder(let f)? = SidebarProfile.find(id, in: p.items), f.expanded != opening {
+                    setOpen(.folder(profile: p.id, id: id, open: opening))
+                }
             case .favorite?: cursor = SidebarRows.move(cursor, by: opening ? 1 : -1, in: rows)
             default: return .ignored
             }
@@ -731,16 +739,17 @@ struct SidebarView: View {
     /// Opens or closes a folder. With Option held (`all`), every folder in the
     /// Sidebar Profile goes the way this one goes, as in Finder and Dia.
     private func toggleFolder(_ f: SidebarFolder, all: Bool, _ p: SidebarProfile) {
+        // Where it ends up, from what the click was made on: the other state
+        // of the folder as it shows, never "toggle", which a save could apply twice.
         PerfTrace.span("toggleFolder") {
-            edit(p.id) { profile in
-                if all { profile.setAllExpanded(!f.expanded) } else { profile.toggleExpanded(f.id) }
-            }
+            setOpen(all ? .all(profile: p.id, open: !f.expanded) : .folder(profile: p.id, id: f.id, open: !f.expanded))
         }
     }
 
     private func openCursor(_ p: SidebarProfile, _ m: Match) {
         switch cursor {
-        case .folder(let id)?: edit(p.id) { $0.toggleExpanded(id) }
+        case .folder(let id)?:
+            if let f = p.folder(id) { setOpen(.folder(profile: p.id, id: id, open: !f.expanded)) }
         case .favorite(let id)?, .link(let id)?:
             listFocused = false
             if let l = p.savedLink(id) { openOrSwitch(l, m) }

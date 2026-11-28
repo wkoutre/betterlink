@@ -1350,7 +1350,7 @@ final class SidebarInstance: ObservableObject {
     }
 
     private func makePanel() -> SidebarPanel {
-        let host = NSHostingView(rootView: SidebarView().environmentObject(self))
+        let host = SidebarHostingView(rootView: SidebarView().environmentObject(self))
         // The browser window sets the panel's size; the content must never grow it.
         host.sizingOptions = []
         let panel = SidebarPanel(contentView: host)
