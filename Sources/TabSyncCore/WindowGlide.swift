@@ -97,8 +97,10 @@ public struct WindowGlide: Sendable {
     /// nudge): with the size unanswered, both are on their way, and the frame
     /// is waited for whole, as widening.
     private var movedFirst = false
-    /// That position, when, and the window when it was sent.
-    private var firstMove: (call: Call, at: Double, from: CGRect)?
+    /// Every call of the frame in flight so far, in order, and the window
+    /// when it began.
+    private var frameCalls: [(call: Call, at: Double)] = []
+    private var frameFrom: CGRect?
 
     /// The narrowest this browser's window was seen to take in this glide (a
     /// size taken short: its minimum). A left show at it sends nothing more.
@@ -371,7 +373,8 @@ public struct WindowGlide: Sendable {
         landedLast = false
         topLeftX = b.minX
         movedFirst = false
-        firstMove = nil
+        frameCalls = []
+        frameFrom = b
         if !proven, !(Self.near(f.width, b.width) && Self.near(f.height, b.height)) {
             // The probe: the size alone, at least `probeStep` from where the window is (an animation's first
             // step is under a point, and must not pass for having landed), never past where the slide ends.
@@ -421,7 +424,7 @@ public struct WindowGlide: Sendable {
         let c = plan(width: width)
         if let c, let b = before {
             lastCall = (c, sentAt, b)
-            if movedFirst, firstMove == nil, case .position = c { firstMove = (c, sentAt, b) }
+            frameCalls.append((c, sentAt))
         }
         return c
     }
@@ -523,7 +526,7 @@ public struct WindowGlide: Sendable {
         // waited for, the last of them (calls land in order) never sent again. Started afresh, the steps would see
         // the window where it is and send nothing, and the two would land after them.
         if !moved, movedFirst, !landedLast, let c = inFlight(seen: seen) {
-            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: false, then: c.then))
+            return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: c.moved ?? false, then: c.then))
         }
         guard moved else { return .none }
         let resume = WindowSteps.Resume(from: start, seen: seen, at: sentAt, changed: changedAt)
@@ -533,20 +536,42 @@ public struct WindowGlide: Sendable {
         // stop short).
         if stoppedAtSize { return .holds(resume) }
         guard let c = inFlight(seen: seen) else { return .none }
-        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: changedAt > c.at, then: c.then))
+        return .waits(WindowSteps.inFlight(c.call, at: c.at, from: c.from, seen: seen, changed: changedAt, moved: c.moved ?? (changedAt > c.at), then: c.then))
     }
 
-    /// The call of the frame in flight the steps that take over wait for:
-    /// its last; but for a frame whose position went before its size, that
-    /// position until the window shows it (calls land in order), the size
-    /// waited for after it (`then`); once the position shows, the size, from
-    /// where the position put the window. Waiting for the size
-    /// from the start, the position landing would pass for someone else's
-    /// change (a size keeps the top left; review of adddb77, F1).
-    private func inFlight(seen: CGRect) -> (call: Call, at: Double, from: CGRect, then: Call?)? {
+    /// The calls of the frame in flight the steps that take over wait for:
+    /// the frame's first, from where the window was when it began, and the
+    /// rest after it in order (`then`; calls land in order), each landing
+    /// taken as one of these, whichever the window shows first. Waiting for
+    /// its last call alone, an earlier one landing would pass for someone
+    /// else's change (a size keeps the top left, a position the size; review
+    /// of adddb77, F1: a left show's position then size, a left hide's nudge,
+    /// size and position).
+    private func inFlight(seen: CGRect) -> (call: Call, at: Double, from: CGRect, then: [Call], moved: Bool?)? {
         guard let c = lastCall else { return nil }
-        guard movedFirst, let m = firstMove, case .position(let t) = m.call, case .size = c.call else { return (c.call, c.at, c.from, nil) }
-        if !Self.near(seen.minX, t.minX, 0.5) { return (m.call, m.at, m.from, c.call) }
-        return (c.call, c.at, CGRect(x: t.minX, y: t.maxY - m.from.height, width: m.from.width, height: m.from.height), nil)
+        guard frameCalls.count >= 2, let from = frameFrom else { return (c.call, c.at, c.from, [], nil) }
+        // Where each call leaves the window, from where the frame began: the calls the window already shows are
+        // over (waited for, the first never lands again where the later ones moved it: seed 20261126 case 1425).
+        var states = [from]
+        for f in frameCalls {
+            let r = states[states.count - 1]
+            switch f.call {
+            case .size(let t): states.append(CGRect(x: r.minX, y: r.maxY - t.height, width: t.width, height: t.height))
+            case .position(let t): states.append(CGRect(x: t.minX, y: t.maxY - r.height, width: r.width, height: r.height))
+            }
+        }
+        if Self.landed(seen, states[frameCalls.count]) { return (c.call, c.at, states[frameCalls.count - 1], [], nil) }
+        // The latest call that can have left the window where it is shown: the one in flight, from where the calls
+        // before it left the window (moved, unless the window still shows that), the rest after it.
+        func can(_ call: Call, from r: CGRect) -> Bool {
+            switch call {
+            case .size: return Self.near(seen.minX, r.minX) && Self.near(seen.maxY, r.maxY)
+            case .position(let t):
+                return Self.near(seen.width, r.width) && Self.near(seen.height, r.height)
+                    && seen.minX >= min(r.minX, t.minX) - 1.5 && seen.minX <= max(r.minX, t.minX) + 1.5
+            }
+        }
+        let k = frameCalls.indices.last { can(frameCalls[$0].call, from: states[$0]) } ?? 0
+        return (frameCalls[k].call, frameCalls[k].at, states[k], frameCalls.dropFirst(k + 1).map(\.call), !Self.landed(seen, states[k]))
     }
 }

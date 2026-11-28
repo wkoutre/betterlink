@@ -180,34 +180,47 @@ import Testing
         #expect(g.done && g.interrupted)
     }
 
-    /// A busy browser: a left show's position and size both sent, the size's
-    /// read unanswered, nothing shown, and a press takes over (review of
-    /// adddb77, F1). Whichever lands first, the glide's position and then its
-    /// size, neither passes for someone else's change: the steps that take
-    /// over wait for the one still to come and go on to the frame asked.
-    @Test func aBusyLeftShowsCallsInFlightAreWaitedForInOrder() {
-        // Shown one after the other, or both at once.
-        for (sizeLandsToo, together) in [(false, false), (true, false), (true, true)] {
-            var g = WindowGlide(closed: closed, open: leftOpen, side: .left, right: 2056, proven: true)
-            var calls: [WindowSteps.Call] = []
-            var c = g.step(seen: closed, now: 0, progress: 0, end: false, deadline: 3)
-            while let call = c {
-                calls.append(call)
-                if case .size = call { c = g.next(width: nil, unanswered: true) } else { c = g.next(width: nil) }
-            }
-            g.sent(at: 0.001)
-            guard case .position(let p) = calls.first, case .size(let f) = calls.last, calls.count == 2 else { Issue.record("\(calls)"); return }
-            guard case .waits(let w) = g.handover(seen: closed, takenOver: true) else { Issue.record("not waited for"); return }
-            var s = WindowSteps(target: closed, keep: .left, deadline: 3, after: w)
-            _ = s.step(seen: closed, now: 0.02)
-            let moved = CGRect(x: p.minX, y: 0, width: closed.width, height: closed.height)
-            if !together {
-                _ = s.step(seen: moved, now: 0.03)
-                #expect(!s.interrupted, "the glide's own position landing passed for someone else's change")
-            }
-            if sizeLandsToo {
-                _ = s.step(seen: CGRect(x: p.minX, y: 0, width: f.width, height: closed.height), now: 0.05)
-                #expect(!s.interrupted, "the glide's own size landing passed for someone else's change")
+    /// A busy browser: a frame's calls all sent, the size's read unanswered,
+    /// nothing shown, and a press takes over (review of adddb77, F1): a left
+    /// show's position then size, and a left hide's nudge, size and position
+    /// (28 pt steps, mid-slide). Shown one at a time, the first two together,
+    /// or all at once, none of them passes for someone else's change, and
+    /// the steps go on to the frame asked.
+    @Test func aBusyFramesCallsInFlightAreWaitedForInOrder() {
+        for show in [true, false] {
+            for order in 0..<3 {
+                var g = WindowGlide(closed: closed, open: leftOpen, side: .left, right: 2056, proven: true)
+                let start = show ? closed : leftOpen
+                var calls: [WindowSteps.Call] = []
+                var c = g.step(seen: start, now: 0, progress: show ? 0.1 : 0.9, end: false, deadline: 3)
+                while let call = c {
+                    calls.append(call)
+                    if case .size = call { c = g.next(width: nil, unanswered: true) } else { c = g.next(width: nil) }
+                }
+                g.sent(at: 0.001)
+                #expect(calls.count == (show ? 2 : 3), "\(calls)")
+                guard case .waits(let w) = g.handover(seen: start, takenOver: true) else { Issue.record("not waited for"); return }
+                var s = WindowSteps(target: start, keep: .left, deadline: 3, after: w)
+                _ = s.step(seen: start, now: 0.02)
+                var win = start, t = 0.03
+                for (i, call) in calls.enumerated() {
+                    switch call {
+                    case .position(let f): win.origin.x = f.minX
+                    case .size(let f): win.size.width = f.width
+                    }
+                    if order == 0 || (order == 1 && i >= 1) || (order == 2 && i == calls.count - 1) {
+                        _ = s.step(seen: win, now: t)
+                        t += 0.01
+                    }
+                }
+                for _ in 0..<60 {
+                    if let r = s.step(seen: win, now: t) {
+                        switch r { case .position(let f): win.origin.x = f.minX; case .size(let f): win.size.width = f.width }
+                    }
+                    t += 0.01
+                }
+                #expect(!s.interrupted, "show \(show), order \(order): the frame's own call passed for someone else's change")
+                #expect(win == start, "show \(show), order \(order): ended at \(win)")
             }
         }
     }
