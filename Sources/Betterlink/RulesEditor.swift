@@ -47,11 +47,13 @@ struct RulesEditor: View {
             List {
                 if rules.isEmpty, let profileName {
                     Text("No rules for \(profileName). Add one, or Done removes this profile from Link Rules.")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
                 } else if rules.isEmpty {
                     Text("No rules. Every link opens in \(model.fallbackProfile?.name ?? model.browserName(model.fallback.browser)).")
+                        .font(DS.TextStyle.body)
                         .foregroundStyle(DS.Palette.textSecondary)
                         .padding(.vertical, DS.Space.space2)
                         .listRowBackground(DS.Palette.panel)
@@ -86,9 +88,10 @@ struct RulesEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 800, height: 480)
+        .frame(width: BetterlinkWindow.sheet(800, 480).width, height: BetterlinkWindow.sheet(800, 480).height)
         .background(DS.Palette.canvas)
         .toggleStyle(.ds)
+        .font(DS.TextStyle.body)
     }
 
     private func addRule() {
@@ -112,22 +115,26 @@ private struct RuleRow: View {
     @EnvironmentObject var model: AppModel
     @Binding var rule: Rule
     let remove: () -> Void
+    /// Where the pattern field starts in the row, so the lines under it
+    /// start there too, at every text size.
+    @State private var fieldLeading: CGFloat = 62
 
     var body: some View {
         VStack(alignment: .leading, spacing: DS.Space.space1) {
             HStack(spacing: DS.Space.space2) {
                 Image(systemName: "line.3.horizontal").foregroundStyle(DS.Palette.textPlaceholder)
                     .accessibilityHidden(true)
-                Text("Open").foregroundStyle(DS.Palette.textSecondary)
+                Text("Open").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 DSPicker(accessibility: "Match type", selection: $rule.kind, options: Rule.Kind.allCases) { $0.label }
-                    .frame(width: 164)
+                    .frame(width: DS.scaled(164))
                 DSTextField(label: "Pattern", text: $rule.pattern, prompt: placeholder,
                             invalid: !rule.pattern.isEmpty && rule.problem != nil)
-                    .frame(minWidth: 150)
-                Text("in").foregroundStyle(DS.Palette.textSecondary)
+                    .frame(minWidth: DS.scaled(150))
+                    .onGeometryChange(for: CGFloat.self) { $0.frame(in: .named(Self.row)).minX } action: { fieldLeading = $0 }
+                Text("in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                 ProfileMenu(selection: Binding(get: { rule.target },
                                                set: { rule.browser = $0.browser; rule.profile = $0.directory }),
-                            width: 236)
+                            width: DS.scaled(236))
                 DSIconButton(symbol: "plus", label: "Add another profile, for a Mac without this one", destructive: false,
                              action: addBackup)
                     .disabled(nextBackup == nil)
@@ -136,29 +143,32 @@ private struct RuleRow: View {
             ForEach(rule.backups.indices, id: \.self) { i in
                 HStack(spacing: DS.Space.space2) {
                     Spacer(minLength: 0)
-                    Text("or in").foregroundStyle(DS.Palette.textSecondary)
+                    Text("or in").font(DS.TextStyle.body).foregroundStyle(DS.Palette.textSecondary)
                     ProfileMenu(selection: Binding(get: { rule.backup(i) },
                                                    set: { if rule.backups.indices.contains(i) { rule.backups[i] = $0 } }),
-                                width: 236)
+                                width: DS.scaled(236))
                     DSIconButton(symbol: "xmark", label: "Remove this profile from the rule") {
                         if rule.backups.indices.contains(i) { rule.backups.remove(at: i) }
                     }
-                    Color.clear.frame(width: 22, height: 22).accessibilityHidden(true)
+                    Color.clear.frame(width: DS.scaled(22), height: DS.scaled(22)).accessibilityHidden(true)
                 }
             }
             if !rule.backups.isEmpty {
                 Text("Opens in the first of these profiles the Mac has, so one rule works on Macs with different browsers.")
                     .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                     .frame(maxWidth: .infinity, alignment: .trailing)
-                    .padding(.trailing, 22 + DS.Space.space2)
+                    .padding(.trailing, DS.scaled(22) + DS.Space.space2)
             }
             if !rule.pattern.isEmpty, let problem = rule.problem {
-                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, 62)
+                Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger).padding(.leading, fieldLeading)
             }
-            UnresolvedRuleNote(rule: rule.id, leading: 62)
+            UnresolvedRuleNote(rule: rule.id, leading: fieldLeading)
         }
+        .coordinateSpace(.named(Self.row))
         .padding(.vertical, DS.Space.space1)
     }
+
+    private static let row = "rule row"
 
     /// The profile + adds: one the rule doesn't name yet, from another
     /// browser than the rule's first choice when there is one.

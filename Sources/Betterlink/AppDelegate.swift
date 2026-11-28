@@ -15,9 +15,10 @@ private let kLaunchedAsLoginItem = OSType(0x6C676974)       // 'lgit'
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate {
     let model = AppModel()
     private var statusItem: NSStatusItem?
-    private var window: NSWindow?
+    private(set) var window: NSWindow?
     private var routedAtLaunch = false
     private var menuBarSetting: AnyCancellable?
+    private var textSizeSetting: AnyCancellable?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSAppleEventManager.shared().setEventHandler(self, andSelector: #selector(handleURL(_:reply:)),
@@ -50,6 +51,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
         // the setting changes, from the window or the CLI.
         menuBarSetting = model.$showsMenuBarIcon.removeDuplicates().receive(on: DispatchQueue.main).sink { [weak self] shown in
             MainActor.assumeIsolated { self?.setStatusItemShown(shown) }
+        }
+        // The window's smallest size follows the text size (BetterlinkWindow.minSize):
+        // when a larger one is chosen, in the window or with the CLI, a window
+        // now under it grows to it.
+        textSizeSetting = model.$textSize.removeDuplicates().dropFirst().receive(on: DispatchQueue.main).sink { [weak self] _ in
+            MainActor.assumeIsolated { self?.growToSmallestSize() }
         }
         // Started by macOS at login, not by the person: the window still opens
         // as it always has, but that is not the moment for the first-run tour.
@@ -143,6 +150,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
             // development or test run (MenuBarIcon.defaults).
             if (ProcessInfo.processInfo.environment["BETTERLINK_HOME"] ?? "").isEmpty { w.setFrameAutosaveName("betterlink.main.v4") }
             window = w
+            // A frame saved at a smaller text size may be under today's smallest.
+            growToSmallestSize()
         }
         model.refreshPermissions()
         NSApp.activate(ignoringOtherApps: true)
@@ -157,6 +166,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWind
     func windowWillResize(_ sender: NSWindow, to frameSize: NSSize) -> NSSize {
         let least = sender.frameRect(forContentRect: NSRect(origin: .zero, size: BetterlinkWindow.minSize)).size
         return NSSize(width: max(frameSize.width, least.width), height: max(frameSize.height, least.height))
+    }
+
+    /// Grows the window to its smallest size when it is under it, keeping its
+    /// top left corner where it is and the window on its screen. The smallest
+    /// size is larger at a larger text size, so a window can be under it
+    /// without having been dragged there.
+    private func growToSmallestSize() {
+        guard let w = window else { return }
+        let least = w.frameRect(forContentRect: NSRect(origin: .zero, size: BetterlinkWindow.minSize)).size
+        let now = w.frame
+        guard now.width < least.width || now.height < least.height else { return }
+        var frame = NSRect(x: now.minX, y: now.maxY - max(now.height, least.height),
+                           width: max(now.width, least.width), height: max(now.height, least.height))
+        if let area = (w.screen ?? NSScreen.main)?.visibleFrame {
+            frame.size.width = min(frame.width, area.width)
+            frame.size.height = min(frame.height, area.height)
+            frame.origin.x = min(max(frame.minX, area.minX), area.maxX - frame.width)
+            frame.origin.y = min(max(frame.minY, area.minY), area.maxY - frame.height)
+        }
+        w.setFrame(frame, display: true, animate: w.isVisible)
     }
 
     // MARK: Keyboard menu

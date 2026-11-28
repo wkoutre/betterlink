@@ -30,7 +30,8 @@ final class FindTabPanel {
         panel.contentView = NSHostingView(rootView: FindTabView(state: state) { [weak self] item in self?.pick(item) })
         let screen = NSScreen.screens.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? NSScreen.main
         if let visible = screen?.visibleFrame {
-            let size = NSSize(width: 560, height: 420)
+            // Wider and taller with larger text, never past the screen.
+            let size = NSSize(width: min(DS.scaled(560), visible.width), height: min(DS.scaled(420), visible.height * 0.8))
             panel.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.maxY - size.height - visible.height * 0.18,
                                   width: size.width, height: size.height), display: false)
         }
@@ -160,6 +161,7 @@ private struct FindTabView: View {
             Spacer(minLength: 0)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .font(DS.TextStyle.body)
         .background(RoundedRectangle(cornerRadius: DS.Radius.radiusLg, style: .continuous).fill(.regularMaterial))
         .clipShape(RoundedRectangle(cornerRadius: DS.Radius.radiusLg, style: .continuous))
         .onAppear { state.results = results }
@@ -190,7 +192,7 @@ private struct FindTabView: View {
             }
         }
         .padding(.horizontal, DS.Space.space3)
-        .frame(minHeight: 40)
+        .frame(minHeight: DS.scaled(40))
         .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
             .fill(chosen ? DS.Palette.selected : Color.clear))
         .contentShape(Rectangle())

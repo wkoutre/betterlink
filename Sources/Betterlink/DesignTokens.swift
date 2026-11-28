@@ -5,6 +5,8 @@ import AppKit
 import SwiftUI
 
 /// betterlink's design tokens. See Design/tokens.json for what each is for.
+/// Text styles and sizes are at the chosen text size (TextScale.swift); the
+/// numbers here are theirs at the standard one.
 enum DS {
     enum Palette {
         /// The window background. Everything else sits on it.
@@ -96,34 +98,34 @@ enum DS {
     }
     enum Size {
         /// Height of every button, field and select.
-        static let sizeControl: CGFloat = 28
+        static var sizeControl: CGFloat { DS.scaled(28) }
         /// Height of the buttons that finish a sheet (Cancel, Done, Add).
-        static let sizeControlLg: CGFloat = 32
+        static var sizeControlLg: CGFloat { DS.scaled(32) }
         /// Height of a sidebar row.
-        static let sizeRow: CGFloat = 30
+        static var sizeRow: CGFloat { DS.scaled(30) }
         /// Sidebar icon tile: a white symbol on a coloured rounded square.
-        static let sizeTile: CGFloat = 20
+        static var sizeTile: CGFloat { DS.scaled(20) }
         /// Width of the sidebar column.
-        static let sizeSidebar: CGFloat = 224
+        static var sizeSidebar: CGFloat { DS.scaled(224) }
     }
     enum TextStyle {
         /// The window title. Once per window.
-        static let title1 = Font.system(size: 28, weight: .semibold, design: .default)
+        static var title1: Font { Font.system(size: DS.text(28), weight: .semibold, design: .default) }
         static let title1Tracking: CGFloat = -0.4
         /// Sheet titles.
-        static let title2 = Font.system(size: 20, weight: .semibold, design: .default)
+        static var title2: Font { Font.system(size: DS.text(20), weight: .semibold, design: .default) }
         static let title2Tracking: CGFloat = -0.2
         /// Section titles above cards.
-        static let headline = Font.system(size: 13, weight: .semibold, design: .default)
+        static var headline: Font { Font.system(size: DS.text(13), weight: .semibold, design: .default) }
         /// Everything you read: rows, descriptions, menus. The macOS standard size.
-        static let body = Font.system(size: 13, weight: .regular, design: .default)
+        static var body: Font { Font.system(size: DS.text(13), weight: .regular, design: .default) }
         /// The value in a sentence: a rule's pattern, a profile name.
-        static let bodyStrong = Font.system(size: 13, weight: .medium, design: .default)
+        static var bodyStrong: Font { Font.system(size: DS.text(13), weight: .medium, design: .default) }
         /// Meta under or beside a value. The smallest readable size.
-        static let caption = Font.system(size: 11, weight: .medium, design: .default)
+        static var caption: Font { Font.system(size: DS.text(11), weight: .medium, design: .default) }
         static let captionTracking: CGFloat = 0.1
         /// Links, paths, config.ts errors.
-        static let code = Font.system(size: 12, weight: .regular, design: .monospaced)
+        static var code: Font { Font.system(size: DS.text(12), weight: .regular, design: .monospaced) }
     }
     enum Shadow {
         /// Section cards: barely there, so the page stays airy.

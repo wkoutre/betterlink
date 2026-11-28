@@ -32,7 +32,7 @@ private struct DSButtonBody: View {
             .lineLimit(1)
             .foregroundStyle(foreground)
             .padding(.horizontal, size == .large ? 14 : 10)
-            .frame(height: size == .large ? 30 : 26)
+            .frame(height: DS.scaled(size == .large ? 30 : 26))
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm + 1, style: .continuous).fill(fill(pressed: pressed)))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.radiusSm + 1, style: .continuous)
                 .strokeBorder(border, lineWidth: kind == .secondary ? 1 : 0))
@@ -87,9 +87,9 @@ struct DSIconButton: View {
     var body: some View {
         Button(action: action) {
             Image(systemName: symbol)
-                .font(.system(size: 10, weight: .bold))
+                .font(.system(size: DS.text(10), weight: .bold))
                 .foregroundStyle(hovering ? (destructive ? DS.Palette.danger : DS.Palette.accentText) : DS.Palette.textTertiary)
-                .frame(width: 22, height: 22)
+                .frame(width: DS.scaled(22), height: DS.scaled(22))
                 .background(Circle().fill(hovering && destructive ? DS.Palette.dangerTint : DS.Palette.hover))
         }
         .buttonStyle(.plain)
@@ -108,7 +108,7 @@ private struct FieldChrome: ViewModifier {
     func body(content: Content) -> some View {
         content
             .padding(.horizontal, 9)
-            .frame(height: 28)
+            .frame(height: DS.scaled(28))
             .background(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous).fill(DS.Palette.canvas))
             .overlay(RoundedRectangle(cornerRadius: DS.Radius.radiusSm, style: .continuous)
                 .strokeBorder(invalid ? DS.Palette.danger : focused ? DS.Palette.focusRing
@@ -162,7 +162,7 @@ struct DSSelect<Label: View, Content: View>: View {
                 label.lineLimit(1).foregroundStyle(DS.Palette.text)
                 Spacer(minLength: 0)
                 Image(systemName: "chevron.up.chevron.down")
-                    .font(.system(size: 9, weight: .bold))
+                    .font(.system(size: DS.text(9), weight: .bold))
                     .foregroundStyle(DS.Palette.textTertiary)
             }
             .modifier(FieldChrome(focused: false))
@@ -212,8 +212,8 @@ private struct DSToggleBody: View {
                 }
                 ZStack(alignment: configuration.isOn ? .trailing : .leading) {
                     Capsule().fill(configuration.isOn ? DS.Palette.accent : DS.Palette.border)
-                        .frame(width: 34, height: 20)
-                    Circle().fill(.white).frame(width: 16, height: 16).padding(2)
+                        .frame(width: DS.scaled(34), height: DS.scaled(20))
+                    Circle().fill(.white).frame(width: DS.scaled(20) - 4, height: DS.scaled(20) - 4).padding(2)
                         .shadow(color: .black.opacity(0.18), radius: 1.5, y: 1)
                 }
                 .animation(.spring(response: 0.25, dampingFraction: 0.85), value: configuration.isOn)

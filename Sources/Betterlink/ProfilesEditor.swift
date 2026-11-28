@@ -13,6 +13,10 @@ struct ProfilesEditor: View {
     private let initial: [BrowserProfile]
     let dismiss: () -> Void
 
+    /// The swatch column: as wide as the swatch picker, or as the word
+    /// "Colour" over it when larger text makes that the wider of the two.
+    private var colourColumn: CGFloat { max(52, DS.scaled(52)) }
+
     struct Row: Identifiable {
         let id = UUID()
         var browser: String
@@ -44,11 +48,11 @@ struct ProfilesEditor: View {
             }
             VStack(spacing: 0) {
                 HStack(spacing: DS.Space.space2) {
-                    Text("Colour").frame(width: 52, alignment: .leading)
-                    Text("Browser").frame(width: 170, alignment: .leading)
+                    Text("Colour").frame(width: colourColumn, alignment: .leading)
+                    Text("Browser").frame(width: DS.scaled(170), alignment: .leading)
                     Text("Name").frame(maxWidth: .infinity, alignment: .leading)
-                    Text("Folder or profile name").frame(width: 150, alignment: .leading)
-                    Color.clear.frame(width: 22, height: 1)
+                    Text("Folder or profile name").frame(width: DS.scaled(150), alignment: .leading)
+                    Color.clear.frame(width: DS.scaled(22), height: 1)
                 }
                 .font(DS.TextStyle.caption).foregroundStyle(DS.Palette.textTertiary)
                 .padding(.horizontal, DS.Space.space4).padding(.vertical, DS.Space.space2)
@@ -64,17 +68,17 @@ struct ProfilesEditor: View {
                         ForEach($rows) { $row in
                             VStack(alignment: .leading, spacing: DS.Space.space1) {
                                 HStack(spacing: DS.Space.space2) {
-                                    DSSwatchPicker(color: $row.color).frame(width: 52, alignment: .leading)
+                                    DSSwatchPicker(color: $row.color).frame(width: colourColumn, alignment: .leading)
                                     DSPicker(accessibility: "Browser", selection: $row.browser,
                                              options: browserChoices(including: row.browser).map(\.bundleId)) {
                                         model.browserName($0)
                                     }
-                                    .frame(width: 170)
+                                    .frame(width: DS.scaled(170))
                                     DSTextField(label: "Name", text: $row.name, prompt: "Work")
                                     DSTextField(label: "Folder or profile name", text: $row.directory,
                                                 prompt: family(row) == .firefox ? "default-release" : "Profile 1",
                                                 invalid: !row.directory.isEmpty && problem(row) != nil)
-                                        .frame(width: 150)
+                                        .frame(width: DS.scaled(150))
                                         .disabled(family(row) == .plain)
                                     DSIconButton(symbol: "xmark", label: "Remove \(row.name)") {
                                         rows.removeAll { $0.id == row.id }
@@ -82,7 +86,7 @@ struct ProfilesEditor: View {
                                 }
                                 if let problem = problem(row) {
                                     Text(problem).font(DS.TextStyle.caption).foregroundStyle(DS.Palette.danger)
-                                        .padding(.leading, 238)
+                                        .padding(.leading, colourColumn + DS.scaled(170) + 2 * DS.Space.space2)
                                 }
                             }
                             .padding(.horizontal, DS.Space.space4).padding(.vertical, DS.Space.space2)
@@ -112,8 +116,9 @@ struct ProfilesEditor: View {
             }
         }
         .padding(DS.Space.space8)
-        .frame(width: 800, height: 480)
+        .frame(width: BetterlinkWindow.sheet(800, 480).width, height: BetterlinkWindow.sheet(800, 480).height)
         .background(DS.Palette.canvas)
+        .font(DS.TextStyle.body)
     }
 
     private func addProfile() {

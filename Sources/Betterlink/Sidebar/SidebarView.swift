@@ -215,6 +215,9 @@ struct SidebarView: View {
         // the folder names) follows the palette: its text color by default and
         // a light or dark scheme matching the profile color (review F1).
         .foregroundStyle(pal.text)
+        // And anything with no text style of its own (a row's symbol, the New
+        // Tab plus) is body text, at the chosen text size.
+        .font(DS.TextStyle.body)
         .modifier(SchemeOverride(scheme: pal.scheme))
         .environment(\.sidebarColors, pal)
     }
@@ -228,7 +231,7 @@ struct SidebarView: View {
     private func header(match: Match?, profile: SidebarProfile?, open: [BrowserTab]) -> some View {
         // Until there is a Favorite, dropping one here makes the first.
         let first = profile.flatMap { $0.favorites.isEmpty && match != nil && allowed(.favorites(0), $0) ? $0 : nil }
-        return DropSwap(showing: first != nil, height: 24) {
+        return DropSwap(showing: first != nil, height: DS.scaled(24)) {
             if let first { dropZone("Drag here for a Favorite", at: .favorites(0), first, open) }
         } line: {
             headerLine(match: match, profile: profile)
@@ -304,7 +307,13 @@ struct SidebarView: View {
             Menu {
                 profileMenu(match: match, profile: profile)
             } label: {
-                headerIcon("gearshape")
+                // A borderless menu draws its label's image at the image's
+                // own size, whatever the font: so the gear is made at the
+                // size its neighbours' symbols are drawn at.
+                Image(nsImage: Self.menuSymbol("gearshape", points: DS.text(13)))
+                    .foregroundStyle(pal.textSecondary)
+                    .frame(width: DS.scaled(24), height: DS.scaled(24))
+                    .contentShape(Rectangle())
             }
             .menuStyle(.borderlessButton)
             .menuIndicator(.hidden)
@@ -314,11 +323,20 @@ struct SidebarView: View {
             .accessibilityLabel("Sidebar Profile settings")
     }
 
+    /// An SF Symbol as an image of `points`, a template so it takes the
+    /// colour it is drawn in.
+    static func menuSymbol(_ name: String, points: CGFloat) -> NSImage {
+        let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: points, weight: .regular)) ?? NSImage()
+        image.isTemplate = true
+        return image
+    }
+
     private func headerIcon(_ symbol: String) -> some View {
         Image(systemName: symbol)
             .font(DS.TextStyle.body)
             .foregroundStyle(pal.textSecondary)
-            .frame(width: 24, height: 24)
+            .frame(width: DS.scaled(24), height: DS.scaled(24))
             .contentShape(Rectangle())
     }
 
@@ -405,14 +423,14 @@ struct SidebarView: View {
     }
 
     private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 64), spacing: 6)], spacing: 6) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: DS.scaled(44), maximum: DS.scaled(64)), spacing: 6)], spacing: 6) {
             ForEach(p.favorites) { link in
                 let tab = m.tab(for: link)
                 let isOpen = tab != nil
                 let picked = selection.contains(.favorite(link.id))
                 Button { click(.favorite(link.id)) { openOrSwitch(link, m) } } label: {
                     SavedIcon(icons: [link.icon, tab?.favIconUrl], title: link.title)
-                        .frame(maxWidth: .infinity, minHeight: 40)
+                        .frame(maxWidth: .infinity, minHeight: DS.scaled(40))
                         .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
                             .fill(isOpen || picked ? pal.selected : pal.hover.opacity(0.6)))
                         .modifier(FocusRing(on: isCursor(.favorite(link.id)), radius: DS.Radius.radiusMd))
@@ -688,7 +706,7 @@ struct SidebarView: View {
         Group {
             if let draft { FolderGlyph(icon: draft, expanded: f.expanded) }
             else {
-                Image(systemName: "questionmark.square.dashed").foregroundStyle(pal.textTertiary).frame(width: 16)
+                Image(systemName: "questionmark.square.dashed").foregroundStyle(pal.textTertiary).frame(width: DS.scaled(16))
                     .accessibilityHidden(true)
             }
         }
@@ -716,10 +734,10 @@ struct SidebarView: View {
     /// forward instead), so the sidebar offers its own; any other emoji can
     /// be typed or pasted into the field.
     private func emojiGrid(_ f: SidebarFolder, _ p: SidebarProfile, indent: CGFloat) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 26, maximum: 30), spacing: 2)], spacing: 2) {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: DS.scaled(26), maximum: DS.scaled(30)), spacing: 2)], spacing: 2) {
             ForEach(FolderIcon.suggestedEmoji, id: \.self) { e in
                 Button { setIcon(f.id, .emoji(e), p) } label: {
-                    Text(e).font(DS.TextStyle.body).frame(width: 26, height: 26).contentShape(Rectangle())
+                    Text(e).font(DS.TextStyle.body).frame(width: DS.scaled(26), height: DS.scaled(26)).contentShape(Rectangle())
                 }
                 .buttonStyle(PressStyle())
                 .help(e)
@@ -758,7 +776,7 @@ struct SidebarView: View {
                       picked: selection.contains(.tab(tab.id)) ? selection : nil,
                       pickedShown: selection.contains(.tab(tab.id)) ? several?.shown : nil,
                       drop: dropTarget?.id == id ? dropTarget?.zone : nil, size: rowSizes[id], palette: sidebar.palette,
-                      reduceMotion: reduceMotion)
+                      reduceMotion: reduceMotion, textSize: TextScale.shared.size)
     }
 
     // MARK: - Keyboard
@@ -1276,6 +1294,10 @@ struct SidebarView: View {
                 .textFieldStyle(.plain)
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
+                // The field AppKit draws keeps the font it was made with for
+                // what is typed, though the placeholder follows: a new text
+                // size makes a new field. What was typed stays (newURL).
+                .id(TextScale.shared.size)
                 .focused($newTabFocused)
                 // Back from being a drop zone (DropSwap): the keyboard it had
                 // before the drag, now that it is there to take it.
@@ -1653,7 +1675,7 @@ private struct TabSpeaker: View {
     var body: some View {
         if tab.audible || tab.muted {
             let speaker = RowIcon(tab.muted ? "speaker.slash.fill" : "speaker.wave.2.fill")
-                .background { if onTile { Circle().fill(.regularMaterial).frame(width: 18, height: 18) } }
+                .background { if onTile { Circle().fill(.regularMaterial).frame(width: DS.scaled(18), height: DS.scaled(18)) } }
             if canMute {
                 Button(action: mute) { speaker }
                     .buttonStyle(PressStyle())
@@ -1693,6 +1715,8 @@ private struct RowKey: Equatable {
     var size: CGSize?
     var palette: SidebarPalette?
     var reduceMotion: Bool
+    /// A row is drawn again at a new text size (General › Text size).
+    var textSize: TextSize
 }
 
 /// A tab's title, as `TabTitle` has it now, after `before`; its address
@@ -1712,12 +1736,12 @@ private struct SkipUnchanged<Key: Equatable, Content: View>: View, Equatable {
     var body: some View { content() }
 }
 
-/// A row's small button: a 20 pt target.
+/// A row's small button: a 20 pt target beside standard text.
 private struct RowIcon: View {
     let symbol: String
     init(_ symbol: String) { self.symbol = symbol }
     var body: some View {
-        Image(systemName: symbol).font(DS.TextStyle.caption).frame(width: 20, height: 20).contentShape(Rectangle())
+        Image(systemName: symbol).font(DS.TextStyle.caption).frame(width: DS.scaled(20), height: DS.scaled(20)).contentShape(Rectangle())
     }
 }
 
@@ -1741,7 +1765,7 @@ private struct FolderGlyph: View {
                 Image(systemName: expanded ? "folder.fill" : "folder").foregroundStyle(pal.textSecondary)
             }
         }
-        .frame(width: 16)
+        .frame(width: DS.scaled(16))
         .accessibilityHidden(true)
     }
 }
@@ -1816,7 +1840,7 @@ private struct PickedMark: View {
         Image(systemName: "checkmark.circle.fill")
             .font(DS.TextStyle.caption)
             .foregroundStyle(pal.text)
-            .frame(width: 20, height: 20)
+            .frame(width: DS.scaled(20), height: DS.scaled(20))
             .accessibilityHidden(true)
     }
 }

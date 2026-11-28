@@ -23,11 +23,11 @@ func groupedProfiles(_ profiles: [BrowserProfile]) -> [(browser: String, profile
     return order.map { ($0, groups[$0]!) }
 }
 
-/// A profile's colour dot: 9pt, never an icon.
+/// A profile's colour dot: 9pt beside standard text, never an icon.
 struct ProfileDot: View {
     let color: Color
     var body: some View {
-        Circle().fill(color).frame(width: 9, height: 9)
+        Circle().fill(color).frame(width: DS.scaled(9), height: DS.scaled(9))
             .overlay(Circle().strokeBorder(.black.opacity(0.08), lineWidth: 0.5))
             .accessibilityHidden(true)
     }
@@ -88,7 +88,9 @@ struct ProfileMenu: View {
                 }
             }
         } label: {
-            ProfileLabel(ref: selection)
+            // Body text, as every select's label is (DSPicker): set here, since
+            // a List row's own font wins over one its row was given.
+            ProfileLabel(ref: selection).font(DS.TextStyle.body)
         }
         .frame(width: width)
         .fixedSize(horizontal: width == nil, vertical: false)
@@ -151,7 +153,7 @@ struct Banner: View {
                 .fixedSize(horizontal: false, vertical: true)
             Spacer(minLength: 0)
             if let onClose {
-                Button(action: onClose) { Image(systemName: "xmark").font(.caption.weight(.semibold)) }
+                Button(action: onClose) { Image(systemName: "xmark").font(.system(size: DS.text(10), weight: .semibold)) }
                     .buttonStyle(.plain).foregroundStyle(DS.Palette.textSecondary)
                     .accessibilityLabel("Dismiss")
             }
@@ -166,7 +168,7 @@ struct KeyHint: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text).font(.system(size: 10, weight: .semibold)).padding(.horizontal, 4).padding(.vertical, 1)
+        Text(text).font(.system(size: DS.text(10), weight: .semibold)).padding(.horizontal, 4).padding(.vertical, 1)
             .overlay(RoundedRectangle(cornerRadius: 4).stroke(.secondary.opacity(0.5)))
             .foregroundStyle(.secondary)
             .accessibilityHidden(true)

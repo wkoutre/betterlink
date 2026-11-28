@@ -20,6 +20,7 @@ enum AgentCommand {
         "menu-bar.get", "menu-bar.set",
         "updates.get", "updates.set",
         "toast.get", "toast.set",
+        "text-size.get", "text-size.set",
         "sync.get", "sync.set", "sync.add", "sync.merge",
     ]
 
@@ -212,6 +213,20 @@ enum AgentCommand {
             d.synchronize()
             return AgentResponseJSON.success(["shown": LinkToast.isShown(in: d), "position": LinkToast.position(in: d).rawValue,
                                               "note": "This Mac only."])
+        case "text-size.get":
+            return AgentResponseJSON.success(textSize(TextSize.current(in: MenuBarIcon.defaults())))
+        case "text-size.set":
+            let names = TextSize.allCases.map(\.rawValue).joined(separator: ", ")
+            guard let name = input["size"] as? String else { return AgentResponseJSON.failure("Give size: one of \(names).") }
+            guard let size = TextSize(rawValue: name) else {
+                return AgentResponseJSON.failure("There is no text size \"\(name)\". Give one of \(names).")
+            }
+            let d = MenuBarIcon.defaults()
+            TextSize.set(size, in: d)
+            d.synchronize()  // the running app reads it as soon as it is notified
+            var out = textSize(size)
+            out["note"] = "This Mac only. An open betterlink window and its sidebars change at once."
+            return AgentResponseJSON.success(out)
         case "sync.get":
             return AgentResponseJSON.success(syncSettings(folder: folder))
         case "sync.set":
@@ -248,6 +263,11 @@ enum AgentCommand {
         default:
             return AgentResponseJSON.failure("Unknown command \(command).")
         }
+    }
+
+    /// A text size as the commands report it.
+    private static func textSize(_ size: TextSize) -> [String: Any] {
+        ["size": size.rawValue, "points": Int(size.points), "sizes": TextSize.allCases.map(\.rawValue)]
     }
 
     // MARK: Sync

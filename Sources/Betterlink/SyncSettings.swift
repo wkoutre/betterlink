@@ -192,12 +192,12 @@ private struct SyncPartChip: View {
         Button(action: toggle) {
             HStack(spacing: 5) {
                 Image(systemName: isOn ? "checkmark" : symbol)
-                    .font(.system(size: 10, weight: .semibold))
-                    .frame(width: 12)
+                    .font(.system(size: DS.text(10), weight: .semibold))
+                    .frame(width: DS.scaled(12))
                 Text(label).font(DS.TextStyle.caption)
             }
             .padding(.horizontal, 10)
-            .frame(height: 24)
+            .frame(height: DS.scaled(24))
             .foregroundStyle(isOn ? DS.Palette.accentText : DS.Palette.textSecondary)
             .background(Capsule().fill(isOn ? DS.Palette.accentTint : (hovering ? DS.Palette.hover : Color.clear)))
             .overlay(Capsule().strokeBorder(isOn ? DS.Palette.accent.opacity(0.35) : DS.Palette.border, lineWidth: 1))

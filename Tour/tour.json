@@ -222,6 +222,29 @@
       ]
     },
     {
+      "id": "appearance",
+      "title": "Text size",
+      "summary": "Larger or smaller words in the window and in the sidebar.",
+      "symbol": "textformat.size",
+      "tile": "tileNeutral",
+      "tier": "more",
+      "page": "general",
+      "steps": [
+        {
+          "id": "text-size",
+          "revision": 1,
+          "title": "Choose how large the words are",
+          "body": "Pick a text size, and this window and the sidebar beside your browser change at once. Rows, buttons and icons are drawn to match the words. The choice is kept on this Mac only.",
+          "control": "textSize",
+          "cli": "betterlink text-size set --size large",
+          "covers": {
+            "commands": ["text-size"],
+            "settings": ["Pages.model.textSize"]
+          }
+        }
+      ]
+    },
+    {
       "id": "sidebar",
       "title": "Sidebar",
       "summary": "Favorites, folders and live tabs beside your browser window. A preview.",

@@ -67,6 +67,17 @@ final class AppModel: ObservableObject {
             LinkToast.setPosition(linkToastPosition, in: MenuBarIcon.defaults())
         }
     }
+    /// How large betterlink draws its text, in the window and in the sidebar.
+    /// Per Mac (UserDefaults, see TextSize), like the link toast. Views read it
+    /// through the design tokens (TextScale), so a new size shows at once.
+    @Published var textSize: TextSize = TextSize.current(in: MenuBarIcon.defaults()) {
+        didSet {
+            guard textSize != oldValue else { return }
+            TextSize.set(textSize, in: MenuBarIcon.defaults())
+            TextScale.shared.set(textSize)
+            note("Text size set to \(textSize.label).")
+        }
+    }
     /// Where links no rule claims open. Stored in rules.json; changing it
     /// here saves it there.
     @Published var fallback: ProfileRef = ProfileRef(browser: Browser.brave.bundleId, directory: "Default") {
@@ -96,6 +107,8 @@ final class AppModel: ObservableObject {
     private var initialLoadDone = false
 
     init() {
+        // Before anything is drawn: the window and the sidebars read it.
+        TextScale.shared.set(textSize)
         browsers = Self.installedBrowsers()
         migrateDefaultsIntoRulesJSON()
         reloadRules()
@@ -483,6 +496,9 @@ final class AppModel: ObservableObject {
                 if toast != self.showsLinkToast { self.showsLinkToast = toast }
                 let where_ = LinkToast.position(in: MenuBarIcon.defaults())
                 if where_ != self.linkToastPosition { self.linkToastPosition = where_ }
+                // And `betterlink text-size set`.
+                let size = TextSize.current(in: MenuBarIcon.defaults())
+                if size != self.textSize { self.textSize = size }
                 // `betterlink tour …` changed what was seen, or asked for the tour.
                 TourModel.shared.reload()
             }
