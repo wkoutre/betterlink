@@ -18,6 +18,11 @@ final class SidebarLibraryModel: ObservableObject {
     @Published private(set) var library = SidebarLibrary.starter
     /// Why the last load or save failed, for the Sidebar page.
     @Published private(set) var problem: String?
+    /// Goes up with every change to the library but opening and closing
+    /// folders. A sidebar row is drawn again only when what it shows changes,
+    /// and its menus and drop places come from the rest of the library (the
+    /// folders to move to, where it sits): comparing this stands for that.
+    private(set) var shape = 0
     private var store = SidebarStore(folder: SettingsFolder.resolve())
 
     /// sidebar.json as this last read or wrote it. While the file is still
@@ -58,6 +63,7 @@ final class SidebarLibraryModel: ObservableObject {
         writing.apply(to: &next)
         waiting.apply(to: &next)
         guard next != library else { return }
+        if !next.sameApartFromOpenFolders(as: library) { shape += 1 }
         library = next
         PerfTrace.published()
     }
