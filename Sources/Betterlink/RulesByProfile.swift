@@ -128,7 +128,7 @@ struct ProfileRulesDetail: View {
             .padding(.bottom, DS.Space.space2)
             DSSection {
                 ForEach(mine, id: \.self) { i in
-                    ProfileRuleRow(index: i, rules: rules,
+                    ProfileRuleRow(index: i, rules: rules, target: target,
                                    crossings: crossings.filter { $0.earlier == i || $0.later == i })
                 }
             } footer: {
@@ -151,6 +151,8 @@ private struct ProfileRuleRow: View {
     @EnvironmentObject var model: AppModel
     let index: Int
     let rules: [Rule]
+    /// The profile whose page this is.
+    let target: ProfileRef
     let crossings: [RuleGroups.Crossing]
 
     var body: some View {
