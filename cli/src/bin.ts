@@ -403,10 +403,14 @@ const sidebar = Cli.create('sidebar', {
     run: (c) => core('sidebar.items.remove', { id: c.args.id, ...c.options }),
   })
   .command('expand', {
-    description: 'Open or close a folder',
-    args: z.object({ id: z.string().describe('Folder id from sidebar list') }),
-    options: z.object({ ...sidebarProfileOption, open: onOff('the folder') }),
-    run: (c) => core('sidebar.items.expand', { id: c.args.id, profile: c.options.profile, expanded: isOn(c.options.open) }),
+    description: 'Open or close a folder, or every folder with --all (as Option-click on a folder does)',
+    args: z.object({ id: z.string().optional().describe('Folder id from sidebar list; leave out with --all') }),
+    options: z.object({
+      ...sidebarProfileOption,
+      open: onOff('the folder'),
+      all: z.boolean().optional().describe('Every folder in the Sidebar Profile, at every depth'),
+    }),
+    run: (c) => core('sidebar.items.expand', { id: c.args.id, all: c.options.all, profile: c.options.profile, expanded: isOn(c.options.open) }),
   })
   .command(sidebarIcon)
   .command('import', {

@@ -347,13 +347,20 @@ extension Agent {
         }
     }
 
+    /// One folder (`id`), or every folder in the Sidebar Profile (`all: true`),
+    /// as Option-click does.
     static func itemsExpand(_ input: [String: Any], _ env: AgentEnvironment) throws -> AgentResponse {
         try edit(input, env) { lib, pid in
             let p = lib.profiles.first { $0.id == pid }!
-            guard let id = try itemID(input, "id", in: p), case .folder(let f) = SidebarProfile.find(id, in: p.items) else {
-                throw fail("Give id: a folder's id.")
-            }
             guard let open = try bool(input, "expanded") else { throw fail("Give expanded: true or false.") }
+            if try bool(input, "all") == true {
+                guard try nonEmpty(input, "id") == nil else { throw fail("Give id or all, not both.") }
+                lib.update(pid) { $0.setAllExpanded(open) }
+                return
+            }
+            guard let id = try itemID(input, "id", in: p), case .folder(let f) = SidebarProfile.find(id, in: p.items) else {
+                throw fail("Give id: a folder's id, or all: true for every folder.")
+            }
             if f.expanded != open { lib.update(pid) { $0.toggleExpanded(id) } }
         }
     }

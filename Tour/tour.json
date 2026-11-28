@@ -300,10 +300,10 @@
         },
         {
           "id": "sidebar-library",
-          "revision": 2,
+          "revision": 3,
           "title": "Favorites, folders and Sidebar Profiles",
-          "body": "Drag a tab onto the Favorites grid or a folder to save it; it keeps its tab, like a pinned tab in Arc, and a right-click gives a folder an emoji or a symbol. Each Sidebar Profile holds its own Favorites and folders, and the cog at the top picks which one a browser profile shows. Import from Arc or bookmarks on the Sidebar page.",
-          "changed": "Folders can have an icon now: right-click one and choose an emoji or a built-in symbol, shown in place of the folder.",
+          "body": "Drag a tab onto the Favorites grid or a folder to save it; it keeps its tab, like a pinned tab in Arc. A closed folder still shows the tab you are on; Option-click opens or closes every folder. Right-click a folder for an icon. The cog picks a browser profile's Sidebar Profile. Import from Arc or bookmarks on the Sidebar page.",
+          "changed": "A closed folder now shows only the tab you are on, not all its open tabs, and Option-click on a folder opens or closes every folder.",
           "cli": "betterlink sidebar icon set <folder id> --emoji 📚",
           "covers": {
             "commands": ["sidebar", "sidebar.profiles", "sidebar.folders", "sidebar.links", "sidebar.items"],

@@ -74,7 +74,7 @@ struct SidebarView: View {
             if let m = match, let profile {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
                 let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
-                let rows = SidebarRows.visible(profile, open: Set(m.links.tabs.keys), tabs: loose.map(\.id))
+                let rows = SidebarRows.visible(profile, active: m.activeLinks, tabs: loose.map(\.id))
                 ScrollViewReader { scroller in
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
@@ -84,8 +84,8 @@ struct SidebarView: View {
                                     node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
                                 }
                             }
-                            // A closed folder lists its open items, which come and go
-                            // with tabs: animate those in place too (review F1).
+                            // A closed folder shows the active tab when it holds it,
+                            // which comes and goes with tabs: animate it in place too (review F1).
                             .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
                             let end = SidebarProfile.Spot.items(parent: nil, index: profile.items.count)
                             DropSwap(showing: allowed(end, profile), height: DS.Size.sizeRow) {
@@ -391,7 +391,7 @@ struct SidebarView: View {
                 SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)),
                            editing: renaming == f.id || iconEditing?.id == f.id,
                            label: "Folder \(f.name), \(f.expanded ? "open" : "closed")") {
-                    edit(p.id) { $0.toggleExpanded(f.id) }
+                    toggleFolder(f, all: NSEvent.modifierFlags.contains(.option), p)
                 } content: {
                     if let editing = iconEditing, editing.id == f.id {
                         iconField(f, editing.kind, p)
@@ -421,8 +421,9 @@ struct SidebarView: View {
                     }
                     .transition(Motion.reveal(reduceMotion))
                 } else {
-                    // Closed, it still lists its open items, as Arc and Dia do.
-                    ForEach(SidebarProfile.links(in: f.items).filter { m.links.tab(for: $0.id) != nil }) { l in
+                    // Closed, it still shows the tab you are on when that tab is
+                    // inside it, as Dia does; its other tabs fold away with it.
+                    ForEach(SidebarRows.peek(f, active: m.activeLinks)) { l in
                         node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
                     }
                 }
@@ -649,7 +650,13 @@ struct SidebarView: View {
     private func isCursor(_ row: SidebarRowID) -> Bool { listFocused && cursor == row }
 
     private func key(_ press: KeyPress, _ rows: [SidebarRowID], _ p: SidebarProfile, _ m: Match) -> KeyPress.Result {
-        guard listFocused, press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+        guard listFocused, press.modifiers.isDisjoint(with: [.command, .control]) else { return .ignored }
+        // Option-Left and Option-Right close and open every folder, as Option-click does.
+        if press.modifiers.contains(.option) {
+            guard press.key == .leftArrow || press.key == .rightArrow else { return .ignored }
+            edit(p.id) { $0.setAllExpanded(press.key == .rightArrow) }
+            return .handled
+        }
         switch press.key {
         case .downArrow: cursor = SidebarRows.move(cursor, by: 1, in: rows)
         case .upArrow: cursor = SidebarRows.move(cursor, by: -1, in: rows)
@@ -671,6 +678,14 @@ struct SidebarView: View {
         default: return .ignored
         }
         return .handled
+    }
+
+    /// Opens or closes a folder. With Option held (`all`), every folder in the
+    /// Sidebar Profile goes the way this one goes, as in Finder and Dia.
+    private func toggleFolder(_ f: SidebarFolder, all: Bool, _ p: SidebarProfile) {
+        edit(p.id) { profile in
+            if all { profile.setAllExpanded(!f.expanded) } else { profile.toggleExpanded(f.id) }
+        }
     }
 
     private func openCursor(_ p: SidebarProfile, _ m: Match) {

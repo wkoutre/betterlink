@@ -27,6 +27,27 @@ struct SidebarLibraryTests {
         #expect(lib.profiles.map(\.name) == ["B"])
     }
 
+    /// Option-click: every folder, at every depth, goes the way the clicked one went.
+    @Test func everyFolderOpensOrClosesAtOnce() {
+        var p = SidebarProfile(name: "P")
+        let a = p.addFolder("A"), b = p.addFolder("B")
+        let inner = p.addFolder("Inner", in: a)
+        p.toggleExpanded(b)
+        func states() -> [Bool] {
+            [a, b, inner].map { id in
+                if case .folder(let f)? = SidebarProfile.find(id, in: p.items) { return f.expanded }
+                return false
+            }
+        }
+        p.setAllExpanded(false)
+        #expect(states() == [false, false, false])
+        p.setAllExpanded(true)
+        #expect(states() == [true, true, true])
+        let before = p
+        p.setAllExpanded(true) // already open: nothing changes
+        #expect(p == before)
+    }
+
     @Test func foldersNestAndLinksLandWhereTheyAreDropped() {
         var p = SidebarProfile(name: "Primary")
         let travel = p.addFolder("Travel")

@@ -181,6 +181,15 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         }
     }
 
+    /// Opens (true) or closes every folder, at every depth: what Option-click
+    /// on a folder does, by where that folder ends up.
+    public mutating func setAllExpanded(_ open: Bool) {
+        items = Self.mapping(items) { item in
+            if case .folder(var f) = item, f.expanded != open { f.expanded = open; return .folder(f) }
+            return item
+        }
+    }
+
     /// Moves an item into `parent` (nil: the top level), at the end. A folder
     /// can't move into itself or into one of its own folders.
     public mutating func move(_ id: UUID, into parent: UUID?) {
