@@ -11,6 +11,7 @@ extension AgentCommand {
     static let tabCommands = [
         "tabs.list", "tabs.open", "tabs.close", "tabs.activate", "tabs.move", "tabs.mute",
         "tabs.duplicate", "tabs.reload", "tabs.navigate", "tabs.new-window", "tabs.close-others", "tabs.close-below", "tabs.send", "tabs.find",
+        "tabs.save",
         "tabs.extension", "tabs.helper.list", "tabs.helper.set",
         "sidebar.settings.get", "sidebar.settings.set",
     ]
@@ -32,7 +33,7 @@ extension AgentCommand {
         do {
             let out = try tabCommand(command, input, hub, sessions, acks)
             // Give the host a moment to take the command before this process exits.
-            if command != "tabs.list" && command != "tabs.find" { Thread.sleep(forTimeInterval: 0.3) }
+            if !["tabs.list", "tabs.find", "tabs.save"].contains(command) { Thread.sleep(forTimeInterval: 0.3) }
             return AgentResponseJSON.success(out)
         } catch let e as TabError {
             return AgentResponseJSON.failure(e.message)
@@ -271,6 +272,28 @@ extension AgentCommand {
             let (s, w) = try find(id, in: sessions, browser: input["browser"] as? String)
             return (id, s, w)
         }
+        // Several tabs at once (`tabs`: a list of ids) and/or one (`tab`):
+        // what the sidebar does for several picked rows.
+        func tabIDs() throws -> [Int] {
+            var ids: [Int] = []
+            if let list = input["tabs"], !(list is NSNull) {
+                guard let items = list as? [Any] else { throw TabError(message: "tabs must be a list of tab ids.") }
+                for item in items {
+                    guard let n = item as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), !CFNumberIsFloatType(n), let i = Int(exactly: n) else {
+                        throw TabError(message: "tabs must be whole-number tab ids (tabs list).")
+                    }
+                    ids.append(i)
+                }
+            }
+            if let one = try int(input, "tab") { ids.append(one) }
+            guard !ids.isEmpty else { throw TabError(message: "Give tab (one id) or tabs (a list of ids).") }
+            // A tab named twice is one tab.
+            var seen = Set<Int>()
+            return ids.filter { seen.insert($0).inserted }
+        }
+        func several() throws -> [(Int, BrowserSession)] {
+            try tabIDs().map { id in (id, try find(id, in: sessions, browser: input["browser"] as? String).0) }
+        }
         switch command {
         case "tabs.list":
             let labels = profileLabels(sessions)
@@ -292,23 +315,9 @@ extension AgentCommand {
             hub.send(.open(url, windowId: windowId), to: s.socketPath)
             return ["opened": url, "browser": s.browser]
         case "tabs.close":
-            var ids: [Int] = []
-            if let list = input["tabs"] {
-                guard let items = list as? [Any] else { throw TabError(message: "tabs must be a list of tab ids.") }
-                for item in items {
-                    guard let n = item as? NSNumber, CFGetTypeID(n) != CFBooleanGetTypeID(), !CFNumberIsFloatType(n), let i = Int(exactly: n) else {
-                        throw TabError(message: "tabs must be whole-number tab ids (tabs list).")
-                    }
-                    ids.append(i)
-                }
-            }
-            if let one = try int(input, "tab") { ids.append(one) }
-            guard !ids.isEmpty else { throw TabError(message: "Give tab (one id) or tabs (a list of ids).") }
+            let ids = try tabIDs()
             var bySession: [String: (BrowserSession, [Int])] = [:]
-            for id in ids {
-                let (s, _) = try find(id, in: sessions, browser: input["browser"] as? String)
-                bySession[s.socketPath, default: (s, [])].1.append(id)
-            }
+            for (id, s) in try several() { bySession[s.socketPath, default: (s, [])].1.append(id) }
             for (s, list) in bySession.values {
                 if s.can(.closeMany) { hub.send(.close(list), to: s.socketPath) } else { for id in list { hub.send(.close(id), to: s.socketPath) } }
             }
@@ -325,21 +334,52 @@ extension AgentCommand {
             hub.send(.move(id, to: pos - 1, windowId: windowId == from ? nil : windowId), to: s.socketPath)
             return ["moved": id, "position": pos]
         case "tabs.mute":
-            let (id, s, _) = try tab()
-            try need(s, .mute)
+            let tabs = try several()
+            for (_, s) in tabs { try need(s, .mute) }
             guard let n = input["muted"] as? NSNumber, CFGetTypeID(n) == CFBooleanGetTypeID() else { throw TabError(message: "Give muted: true or false.") }
-            hub.send(.mute(id, n.boolValue), to: s.socketPath)
-            return ["tab": id, "muted": n.boolValue]
+            for (id, s) in tabs { hub.send(.mute(id, n.boolValue), to: s.socketPath) }
+            if tabs.count == 1 { return ["tab": tabs[0].0, "muted": n.boolValue] }
+            return ["tabs": tabs.map(\.0), "muted": n.boolValue]
         case "tabs.duplicate":
             let (id, s, _) = try tab()
             try need(s, .duplicate)
             hub.send(.duplicate(id), to: s.socketPath)
             return ["duplicated": id]
         case "tabs.reload":
-            let (id, s, _) = try tab()
-            try need(s, .reload)
-            hub.send(.reload(id), to: s.socketPath)
-            return ["reloaded": id]
+            let tabs = try several()
+            for (_, s) in tabs { try need(s, .reload) }
+            for (id, s) in tabs { hub.send(.reload(id), to: s.socketPath) }
+            if tabs.count == 1 { return ["reloaded": tabs[0].0] }
+            return ["reloaded": tabs.map(\.0)]
+        case "tabs.save":
+            // The sidebar's Add to Favorites, Save to Folder and New Folder
+            // with Selection for the picked tabs: their pages are saved as
+            // links (Agent.saveTabs). Nothing is sent to the browser.
+            let picked = try several()
+            let links = try picked.map { id, s -> SavedLink in
+                guard let t = s.store.orderedWindows.flatMap(\.tabs).first(where: { $0.id == id }), !t.url.isEmpty else {
+                    throw TabError(message: "Tab \(id) has no page to save.")
+                }
+                return SavedLink(title: t.title.isEmpty ? t.url : t.title, url: t.url, icon: t.favIconUrl.hasPrefix("data:") ? t.favIconUrl : nil)
+            }
+            let folder = SettingsFolder.resolve()
+            var input = input
+            // With no Sidebar Profile named, the one these tabs' sidebar
+            // shows, as saving from the sidebar does.
+            if (input["profile"] as? String ?? "").trimmingCharacters(in: .whitespaces).isEmpty,
+               let lib = try? SidebarStore(folder: folder).load(), lib.profiles.count > 1 {
+                var asked = Set<String>()
+                // A browser profile that can't be told shows the catch-all, on screen and here.
+                let refs = picked.map(\.1).filter { asked.insert($0.socketPath).inserted }.map { s -> ProfileRef? in
+                    guard let instance = s.instance, let place = TabsModel.profileFolder(of: s) else { return nil }
+                    return TabsModel.readProfile(instance: instance, place.browser, place.root)?.0
+                }
+                if let id = lib.shownProfile(for: refs) { input["profile"] = id.uuidString }
+            }
+            let installed = Browser.known.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
+            let r = Agent.saveTabs(links, input, AgentEnvironment(folder: folder, installed: installed))
+            guard r.ok, let out = r.data as? [String: Any] else { throw TabError(message: r.error ?? "Couldn't save the tabs.") }
+            return out
         case "tabs.navigate":
             let (id, s, _) = try tab()
             try need(s, .navigate)

@@ -33,9 +33,13 @@ struct SidebarView: View {
     @State private var dropTarget: DropTarget?
     @State private var rowSizes: [UUID: CGSize] = [:]
     /// The last delete, for Undo: which profile, what went and from where.
-    @State private var undo: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)?
-    /// A folder with things in it waiting for its delete to be confirmed.
-    @State private var confirmDelete: (id: UUID, name: String)?
+    @State private var undo: (profile: UUID, removed: [SidebarProfile.Removed], label: String, at: Date)?
+    /// Folders with things in them waiting for their delete to be confirmed
+    /// (`name`: the folder's, or how many things when several were picked).
+    @State private var confirmDelete: (ids: [UUID], name: String)?
+    /// The rows picked for one action on all of them: Command-click and
+    /// Shift-click, as in Finder (SidebarSelection).
+    @State private var selection = SidebarSelection()
     /// What is being dragged from the sidebar, so a row can refuse a drop
     /// that wouldn't move anything (a folder into itself, say).
     @State private var dragging: String?
@@ -80,13 +84,15 @@ struct SidebarView: View {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
                 let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
                 let rows = SidebarRows.visible(profile, active: m.activeLinks, tabs: loose.map(\.id))
+                // What several picked rows are, worked out once for this redraw: each of their menus shows it.
+                let several = selection.count > 1 ? pickedThings(Now(profile: profile, match: m, rows: rows, current: nil)) : nil
                 ScrollViewReader { scroller in
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
-                            favorites(profile, m, windowTabs)
+                            favorites(profile, m, windowTabs, several)
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 ForEach(profile.items) { item in
-                                    node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
+                                    node(item, depth: 0, profile, m, windowTabs, several).transition(Motion.reveal(reduceMotion))
                                 }
                             }
                             // A closed folder shows the active tab when it holds it,
@@ -101,20 +107,24 @@ struct SidebarView: View {
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
-                                    SkipUnchanged(key: rowKey(tab, profile, m, order)) {
+                                    SkipUnchanged(key: rowKey(tab, profile, m, order, several)) {
                                         SidebarTabRow(tab: tab, title: sidebar.title(of: tab), canMute: m.session.can(.mute),
-                                                      focused: isCursor(.tab(tab.id))) {
-                                            tabs.activate(tab, in: m.session)
-                                            sidebar.returnFocusToBrowser()
+                                                      focused: isCursor(.tab(tab.id)), picked: selection.contains(.tab(tab.id))) {
+                                            click(.tab(tab.id)) {
+                                                tabs.activate(tab, in: m.session)
+                                                sidebar.returnFocusToBrowser()
+                                            }
                                         } close: {
                                             tabs.close(tab, in: m.session)
                                         } mute: {
                                             tabs.setMuted(!tab.muted, tab, in: m.session)
                                         }
-                                        .onDrag { drag(tabKeyPrefix + String(tab.id)) }
+                                        .onDrag { drag(dragKey(.tab(tab.id))) }
                                         // Drop a tab before or after another to reorder the window's tabs.
                                         .modifier(tabDropRow(tab, m, windowTabs))
-                                        .contextMenu { tabMenu(tab, profile, m, windowTabs) }
+                                        .contextMenu {
+                                            if let several, selection.contains(.tab(tab.id)) { bulkMenu(several) } else { tabMenu(tab, profile, m, windowTabs) }
+                                        }
                                     }
                                     .equatable()
                                     .id(SidebarRowID.tab(tab.id))
@@ -125,11 +135,18 @@ struct SidebarView: View {
                             .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
                         }
                         .padding(.horizontal, DS.Space.space2)
-                        .padding(.bottom, DS.Space.space4)
+                        // Room for the bar that says what is picked, so it never covers the last rows.
+                        .padding(.bottom, DS.Space.space4 + (selection.isEmpty ? 0 : Self.selectionBarRoom))
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .contentShape(Rectangle())
                         .contextMenu { Button("New Folder") { newFolder(in: nil, profile) } }
                     }
+                    // No scroll bar, however macOS is set: with "Show scroll
+                    // bars: Always", or a mouse plugged in, it took 17 pt of
+                    // the width as soon as the list was long enough to scroll,
+                    // and the Favorites went from five in a row to four.
+                    // .never, not .hidden, which a mouse overrides.
+                    .scrollIndicators(.never)
                     // One stop for the keyboard: the arrows move the cursor
                     // through the rows, Return opens, Delete closes or removes.
                     // Beside the rows, not around them: a container's focus is
@@ -146,7 +163,12 @@ struct SidebarView: View {
                     .onChange(of: listFocused) { _, on in
                         cursor = on ? cursor ?? rows.first : nil
                     }
-                    .onChange(of: rows) { old, new in cursor = SidebarRows.keep(cursor, from: old, to: new) }
+                    .onChange(of: rows) { old, new in
+                        cursor = SidebarRows.keep(cursor, from: old, to: new)
+                        // A picked row that is gone (its tab closed, its folder closed over it) is no longer picked.
+                        let kept = selection.kept(in: new)
+                        if kept != selection { selection = kept }
+                    }
                     .onChange(of: cursor) { _, c in if let c { scroller.scrollTo(c) } }
                 }
             } else {
@@ -165,13 +187,23 @@ struct SidebarView: View {
             // Not set here: the field may not be back yet (its onAppear sets it).
             if owed { retryNewTabFocus("drag ended") }
         }
-        // Undo for the last delete, at the bottom for a few seconds.
-        .overlay(alignment: .bottom) { if let u = undo { undoBar(u) } }
+        // At the bottom: what is picked, with the actions on all of it, and
+        // Undo for the last delete, for a few seconds.
+        .overlay(alignment: .bottom) {
+            VStack(spacing: 0) {
+                if !selection.isEmpty, let n = now() { selectionBar(n) }
+                if let u = undo { undoBar(u) }
+            }
+        }
         // A folder with things in it asks first (review F6), then offers Undo too.
-        .confirmationDialog("Delete \"\(confirmDelete?.name ?? "")\" and everything in it?",
+        .confirmationDialog(confirmDelete.map { $0.ids.count == 1 ? "Delete \"\($0.name)\" and everything in it?"
+                                                                  : "Delete \($0.name), with everything in the folders?" } ?? "",
                             isPresented: Binding(get: { confirmDelete != nil }, set: { if !$0 { confirmDelete = nil } })) {
-            Button("Delete Folder", role: .destructive) {
-                if let d = confirmDelete, let p = profile { deleteWithUndo(d.id, d.name, p) }
+            Button(confirmDelete?.ids.count == 1 ? "Delete Folder" : "Delete", role: .destructive) {
+                if let d = confirmDelete, let p = profile {
+                    deleteWithUndo(d.ids, d.name, p)
+                    animate { selection.clear() }
+                }
                 confirmDelete = nil
             }
         }
@@ -340,9 +372,9 @@ struct SidebarView: View {
     // MARK: - Favorites
 
     @ViewBuilder
-    private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
+    private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> some View {
         // With none, the header turns into the place to drop the first.
-        if !p.favorites.isEmpty { favoritesGrid(p, m, open) }
+        if !p.favorites.isEmpty { favoritesGrid(p, m, open, several) }
     }
 
     /// Somewhere to drop what is being dragged (see DropSwap).
@@ -375,19 +407,24 @@ struct SidebarView: View {
         return true
     }
 
-    private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
+    private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: DS.scaled(44), maximum: DS.scaled(64)), spacing: 6)], spacing: 6) {
             ForEach(p.favorites) { link in
                 let tab = m.tab(for: link)
                 let isOpen = tab != nil
-                Button { openOrSwitch(link, m) } label: {
+                let picked = selection.contains(.favorite(link.id))
+                Button { click(.favorite(link.id)) { openOrSwitch(link, m) } } label: {
                     SavedIcon(icons: [link.icon, tab?.favIconUrl], title: link.title)
                         .frame(maxWidth: .infinity, minHeight: DS.scaled(40))
                         .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous)
-                            .fill(isOpen ? pal.selected : pal.hover.opacity(0.6)))
+                            .fill(isOpen || picked ? pal.selected : pal.hover.opacity(0.6)))
                         .modifier(FocusRing(on: isCursor(.favorite(link.id)), radius: DS.Radius.radiusMd))
                 }
                 .buttonStyle(PressStyle())
+                // Picked with others for one action: a check on the tile's other corner.
+                .overlay(alignment: .topLeading) {
+                    if picked { PickedMark().offset(x: -2, y: -2).transition(Motion.pop(reduceMotion)) }
+                }
                 // Its tab plays sound (or is silenced): the speaker sits on the
                 // tile's corner, a button of its own.
                 .overlay(alignment: .topTrailing) {
@@ -399,7 +436,7 @@ struct SidebarView: View {
                     }
                 }
                 .id(SidebarRowID.favorite(link.id))
-                .onDrag { drag(Self.savedKey(link.id)) }
+                .onDrag { drag(dragKey(.favorite(link.id))) }
                 .modifier(dropRow(link.id, horizontal: true, canHold: false, p, open) { zone in
                     let i = p.favorites.firstIndex { $0.id == link.id } ?? p.favorites.count
                     return .favorites(zone == .before ? i : i + 1)
@@ -407,11 +444,16 @@ struct SidebarView: View {
                 .transition(Motion.pop(reduceMotion))
                 .help(link.title)
                 .accessibilityLabel(isOpen ? "\(link.title), open" : link.title)
+                .accessibilityAddTraits(picked ? .isSelected : [])
                 .contextMenu {
-                    heldMenu(link, tab, p, m)
-                    moveMenu(link.id, isFolder: false, inFavorites: true, p)
-                    Divider()
-                    Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p) }
+                    if let several, picked {
+                        bulkMenu(several)
+                    } else {
+                        heldMenu(link, tab, p, m)
+                        moveMenu(link.id, isFolder: false, inFavorites: true, p)
+                        Divider()
+                        Button("Remove from Favorites") { deleteWithUndo(link.id, link.title, p) }
+                    }
                 }
             }
         }
@@ -424,14 +466,16 @@ struct SidebarView: View {
 
     // MARK: - Folders
 
-    private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> AnyView {
+    private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> AnyView {
         switch item {
         case .folder(let f):
             return AnyView(VStack(alignment: .leading, spacing: 1) {
                 SidebarRow(indent: CGFloat(depth) * Self.indent, focused: isCursor(.folder(f.id)),
+                           picked: selection.contains(.folder(f.id)),
                            editing: renaming == f.id || iconEditing?.id == f.id,
                            label: "Folder \(f.name), \(f.expanded ? "open" : "closed")") {
-                    toggleFolder(f, all: NSEvent.modifierFlags.contains(.option), p)
+                    // Command and Shift pick the folder; Option alone opens or closes every folder.
+                    click(.folder(f.id)) { toggleFolder(f, all: NSEvent.modifierFlags.contains(.option), p) }
                 } content: {
                     if let editing = iconEditing, editing.id == f.id {
                         iconField(f, editing.kind, p)
@@ -441,15 +485,19 @@ struct SidebarView: View {
                     }
                 }
                 .id(SidebarRowID.folder(f.id))
-                .onDrag { drag(Self.savedKey(f.id)) }
+                .onDrag { drag(dragKey(.folder(f.id))) }
                 .modifier(dropRow(f.id, canHold: true, p, open) { zone in spot(for: f.id, zone, p) })
                 .contextMenu {
-                    Button("New Folder Inside") { newFolder(in: f.id, p) }
-                    Button("Rename") { startRename(f.id, f.name) }
-                    iconMenu(f, p)
-                    moveMenu(f.id, isFolder: true, inFavorites: false, p)
-                    Divider()
-                    Button("Delete Folder", role: .destructive) { deleteFolder(f, p) }
+                    if let several, selection.contains(.folder(f.id)) {
+                        bulkMenu(several)
+                    } else {
+                        Button("New Folder Inside") { newFolder(in: f.id, p) }
+                        Button("Rename") { startRename(f.id, f.name) }
+                        iconMenu(f, p)
+                        moveMenu(f.id, isFolder: true, inFavorites: false, p)
+                        Divider()
+                        Button("Delete Folder", role: .destructive) { deleteFolder(f, p) }
+                    }
                 }
                 if let editing = iconEditing, editing.id == f.id, editing.kind == .emoji {
                     emojiGrid(f, p, indent: CGFloat(depth) * Self.indent)
@@ -457,14 +505,14 @@ struct SidebarView: View {
                 }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
-                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open, several) }
                     }
                     .transition(Motion.reveal(reduceMotion))
                 } else {
                     // Closed, it still shows the tab you are on when that tab is
                     // inside it, as Dia does; its other tabs fold away with it.
                     ForEach(SidebarRows.peek(f, active: m.activeLinks)) { l in
-                        node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
+                        node(.link(l), depth: depth + 1, p, m, open, several).transition(Motion.reveal(reduceMotion))
                     }
                 }
             }
@@ -474,9 +522,10 @@ struct SidebarView: View {
             // Like Arc: the link's tab has moved on to another page.
             let away = tab != nil && m.links.isAway(l.id)
             return AnyView(SidebarRow(indent: CGFloat(depth) * Self.indent, selected: tab?.active == true,
-                                      focused: isCursor(.link(l.id)), editing: renaming == l.id,
+                                      focused: isCursor(.link(l.id)), picked: selection.contains(.link(l.id)),
+                                      editing: renaming == l.id,
                                       label: tab == nil ? l.title : (away ? "\(l.title), open on another page" : "\(l.title), open")) {
-                openOrSwitch(l, m)
+                click(.link(l.id)) { openOrSwitch(l, m) }
             } content: {
                 SavedIcon(icons: [tab?.favIconUrl, l.icon], title: l.title)
                 // Dim while closed, full strength while open.
@@ -503,15 +552,19 @@ struct SidebarView: View {
                 }
             }
             .id(SidebarRowID.link(l.id))
-            .onDrag { drag(Self.savedKey(l.id)) }
+            .onDrag { drag(dragKey(.link(l.id))) }
             .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
             .contextMenu {
-                Button("Rename") { startRename(l.id, l.title) }
-                Button("New Folder") { newFolder(in: p.parent(of: l.id), p) }
-                heldMenu(l, tab, p, m)
-                moveMenu(l.id, isFolder: false, inFavorites: false, p)
-                Divider()
-                Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, p) }
+                if let several, selection.contains(.link(l.id)) {
+                    bulkMenu(several)
+                } else {
+                    Button("Rename") { startRename(l.id, l.title) }
+                    Button("New Folder") { newFolder(in: p.parent(of: l.id), p) }
+                    heldMenu(l, tab, p, m)
+                    moveMenu(l.id, isFolder: false, inFavorites: false, p)
+                    Divider()
+                    Button("Remove", role: .destructive) { deleteWithUndo(l.id, l.title, p) }
+                }
             })
         }
     }
@@ -524,7 +577,7 @@ struct SidebarView: View {
                 .foregroundStyle(pal.text)
                 .font(DS.TextStyle.body)
                 .focused($nameFocused)
-                .onAppear { nameFocused = true }
+                .onAppear { focusNameField() }
                 .onSubmit { edit(p.id) { $0.rename(id, to: draftName) }; renaming = nil }
                 .onExitCommand { renaming = nil }
         } else {
@@ -536,7 +589,31 @@ struct SidebarView: View {
         renamingProfile = nil
         iconEditing = nil
         draftName = name
+        // Unset first: SwiftUI moves the keyboard only when the focus changes.
+        nameFocused = false
         renaming = id
+    }
+
+    /// Gives the name field the keyboard as it opens. Opened from a menu
+    /// (Rename, New Folder, New Folder with Selection) it was seen on screen
+    /// to take typing only after a click, as the icon field was, so it is
+    /// tried the same way: again a turn later and once the menu has closed,
+    /// making the panel key when it isn't. The browser stays the active app.
+    private func focusNameField() {
+        func attempt(last: Bool) {
+            guard renaming != nil else { return }
+            if let panel = sidebar.panel, !panel.isKeyWindow { panel.makeKey() }
+            if !nameFocused {
+                nameFocused = true
+            } else if last, !(sidebar.panel?.firstResponder is NSTextView) {
+                // Set, and it did not take: SwiftUI moves the focus only on a change.
+                nameFocused = false
+                DispatchQueue.main.async { nameFocused = true }
+            }
+        }
+        attempt(last: false)
+        DispatchQueue.main.async { attempt(last: false) }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { attempt(last: true) }
     }
 
     // MARK: - Folder icons
@@ -669,7 +746,7 @@ struct SidebarView: View {
     }
 
     private func deleteFolder(_ f: SidebarFolder, _ p: SidebarProfile) {
-        if f.items.isEmpty { deleteWithUndo(f.id, f.name, p) } else { confirmDelete = (f.id, f.name) }
+        if f.items.isEmpty { deleteWithUndo(f.id, f.name, p) } else { confirmDelete = ([f.id], f.name) }
     }
 
     /// How far each level of folders is set in.
@@ -677,10 +754,12 @@ struct SidebarView: View {
 
     // MARK: - Unchanged rows
 
-    private func rowKey(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ order: [RowKey.Place]) -> RowKey {
+    private func rowKey(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ order: [RowKey.Place], _ several: Picked?) -> RowKey {
         let id = Self.rowID(tab)
         return RowKey(tab: tab, order: order, claimed: m.links.claimed, session: m.session.socketPath, ops: m.session.ops,
                       window: m.window?.id, profile: p, focused: isCursor(.tab(tab.id)),
+                      picked: selection.contains(.tab(tab.id)) ? selection : nil,
+                      pickedShown: selection.contains(.tab(tab.id)) ? several?.shown : nil,
                       drop: dropTarget?.id == id ? dropTarget?.zone : nil, size: rowSizes[id], palette: sidebar.palette,
                       reduceMotion: reduceMotion, textSize: TextScale.shared.size)
     }
@@ -698,8 +777,20 @@ struct SidebarView: View {
             return .handled
         }
         switch press.key {
-        case .downArrow: cursor = SidebarRows.move(cursor, by: 1, in: rows)
-        case .upArrow: cursor = SidebarRows.move(cursor, by: -1, in: rows)
+        case .downArrow, .upArrow:
+            let to = SidebarRows.move(cursor, by: press.key == .downArrow ? 1 : -1, in: rows)
+            // With Shift, the rows passed over are picked, as in Finder: the
+            // range starts at the row the cursor was on.
+            if press.modifiers.contains(.shift), let to {
+                animate {
+                    if selection.isEmpty, let from = cursor { selection.click(from) }
+                    selection.extend(to: to, current: nil, in: rows)
+                }
+            } else if !selection.isEmpty, let to {
+                // A plain arrow picks nothing again, as in Finder; a range would start at the cursor.
+                animate { selection.click(to) }
+            }
+            cursor = to
         case .leftArrow, .rightArrow:
             let opening = press.key == .rightArrow
             switch cursor {
@@ -709,12 +800,15 @@ struct SidebarView: View {
             default: return .ignored
             }
         case .escape:
+            // First what is picked, then the keyboard.
+            if !selection.isEmpty { animate { selection.clear() }; return .handled }
             listFocused = false
             sidebar.returnFocusToBrowser()
         // Held down, these must not open or close row after row.
         case .return where press.phase == .down: openCursor(p, m)
         // The Delete key types U+007F; KeyEquivalent.delete is U+0008.
-        case .delete where press.phase == .down, "\u{7F}" where press.phase == .down, .deleteForward where press.phase == .down: deleteCursor(p, m)
+        case .delete where press.phase == .down, "\u{7F}" where press.phase == .down, .deleteForward where press.phase == .down:
+            if selection.count > 1 { bulkDelete() } else { deleteCursor(p, m) }
         default: return .ignored
         }
         return .handled
@@ -753,6 +847,251 @@ struct SidebarView: View {
         }
     }
 
+    // MARK: - Several rows at once
+
+    /// The sidebar as it is this moment. A click, a menu and a drag read it
+    /// when they run: a tab's row keeps its closures while it isn't drawn
+    /// again (SkipUnchanged), and what they saw then may be gone.
+    private struct Now {
+        var profile: SidebarProfile
+        var match: Match
+        /// The rows on screen, top to bottom.
+        var rows: [SidebarRowID]
+        /// The row of the tab the window shows.
+        var current: SidebarRowID?
+    }
+
+    private func now() -> Now? {
+        let look = sidebar.look
+        guard let found = look.match, let profile = lib.library.profile(for: found.profile?.ref) else { return nil }
+        let m = found.resolving(profile)
+        let open = m.window?.tabs ?? []
+        let rows = SidebarRows.visible(profile, active: m.activeLinks,
+                                       tabs: open.filter { !m.links.claimed.contains($0.id) }.map(\.id))
+        let current = SidebarRows.current(in: rows, activeTab: open.first(where: \.active)?.id, activeLinks: m.activeLinks)
+        return Now(profile: profile, match: m, rows: rows, current: current)
+    }
+
+    /// A click on a row. Plain, it does what the row does (`plain`) and
+    /// nothing stays picked. With Command held the row joins the picked rows
+    /// or leaves them; with Shift every row from the one last clicked to
+    /// this one is picked, as in Finder. Neither opens anything.
+    private func click(_ row: SidebarRowID, plain: () -> Void) {
+        // The keys held as the click arrived, and the keys held now.
+        let keys = NSEvent.modifierFlags.union(NSApp.currentEvent?.modifierFlags ?? [])
+        guard keys.contains(.command) || keys.contains(.shift) else {
+            if !selection.isEmpty { animate { selection.click(row) } } else { selection.click(row) }
+            plain()
+            return
+        }
+        guard let n = now() else { return }
+        animate {
+            if keys.contains(.command) {
+                selection.toggle(row, current: n.current, in: n.rows)
+            } else {
+                selection.extend(to: row, current: n.current, in: n.rows)
+            }
+        }
+    }
+
+    /// What is picked, for the menu on all of it: the tabs open behind it
+    /// (the picked tabs themselves and the tabs of the picked saved links)
+    /// and the picked saved links that are closed.
+    private struct Picked {
+        var now: Now
+        var parts: SidebarSelection.Parts
+        var open: [BrowserTab]
+        var closed: [SavedLink]
+
+        /// What the menu shows of other rows, for a tab's row that is only
+        /// drawn again when its key changes (RowKey).
+        var shown: [Int] {
+            [parts.tabs.count, parts.saved.count, parts.links.count, open.count, closed.count, open.contains { !$0.muted } ? 1 : 0]
+        }
+    }
+
+    private func pickedThings(_ n: Now) -> Picked {
+        let parts = selection.parts(in: n.rows, of: n.profile)
+        let open = parts.tabs.compactMap { n.match.byId[$0] } + parts.links.compactMap { n.match.tab(for: $0) }
+        return Picked(now: n, parts: parts, open: open, closed: parts.links.filter { n.match.tab(for: $0) == nil })
+    }
+
+    /// The bar's height with its margins: the list leaves this much room below its last row.
+    private static let selectionBarRoom: CGFloat = 44
+
+    private static func count(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 ? one : many)" }
+
+    /// At the bottom while rows are picked: how many, the actions on all of
+    /// them, and a way to pick nothing again.
+    private func selectionBar(_ n: Now) -> some View {
+        HStack(spacing: DS.Space.space2) {
+            Text("\(selection.count) selected").lineLimit(1).foregroundStyle(pal.textSecondary)
+            Spacer(minLength: 0)
+            Menu {
+                bulkMenu(pickedThings(n))
+            } label: {
+                Text("Actions").fontWeight(.semibold).foregroundStyle(pal.text)
+            }
+            .menuStyle(.borderlessButton)
+            .menuIndicator(.hidden)
+            .fixedSize()
+            .help("What to do with the selected rows")
+            .accessibilityLabel("Actions for the selected rows")
+            Button { animate { selection.clear() } } label: { RowIcon("xmark") }
+                .buttonStyle(PressStyle())
+                .foregroundStyle(pal.textSecondary)
+                .help("Deselect All")
+                .accessibilityLabel("Deselect All")
+        }
+        .font(DS.TextStyle.caption)
+        .padding(.leading, DS.Space.space3)
+        .padding(.trailing, DS.Space.space1)
+        .padding(.vertical, DS.Space.space1)
+        .background(RoundedRectangle(cornerRadius: DS.Radius.radiusMd, style: .continuous).fill(pal.hover))
+        .padding(DS.Space.space2)
+        .transition(Motion.reveal(reduceMotion))
+    }
+
+    /// The menu for several picked rows, on any of them and in the bar at
+    /// the bottom. Each action works out what is picked again when it runs.
+    @ViewBuilder
+    private func bulkMenu(_ picked: Picked) -> some View {
+        let parts = picked.parts, open = picked.open, closed = picked.closed
+        let p = picked.now.profile, s = picked.now.match.session
+        // Folders stay out of the grid, and so does what is a Favorite already.
+        let favorites = Set(p.favorites.map(\.id))
+        let canFavorite = !parts.tabs.isEmpty || parts.saved.contains { !favorites.contains($0) && p.folder($0) == nil }
+        // Not into a picked folder or one inside it.
+        let inside: Set<UUID> = Set(parts.saved.flatMap { id -> [UUID] in [id] + Self.folders(p.children(of: id), prefix: "").map(\.id) })
+        Button("Add to Favorites") { bulkPlace(at: .favorites(.max)) }
+            .disabled(!canFavorite)
+        Menu(parts.saved.isEmpty ? "Save to Folder" : "Move to Folder") {
+            ForEach(Self.folders(p.items, prefix: "").filter { !inside.contains($0.id) }) { f in
+                Button(f.label) { bulkPlace(at: .items(parent: f.id, index: .max)) }
+            }
+            Divider()
+            Button("Top Level") { bulkPlace(at: .items(parent: nil, index: .max)) }
+        }
+        Button("New Folder with Selection") { bulkNewFolder() }
+        Divider()
+        if !closed.isEmpty {
+            Button("Open \(Self.count(closed.count, "Link", "Links"))") { bulkOpen() }
+        }
+        Button("Copy \(Self.count(parts.tabs.count + parts.links.count, "Link", "Links"))") { bulkCopy() }
+            .disabled(parts.tabs.isEmpty && parts.links.isEmpty)
+        if !open.isEmpty {
+            if s.can(.reload) { Button("Reload \(Self.count(open.count, "Tab", "Tabs"))") { bulkReload() } }
+            if s.can(.mute) {
+                // Mute while any of them can still be heard.
+                let mute = open.contains { !$0.muted }
+                let title: String = (mute ? "Mute " : "Unmute ") + Self.count(open.count, "Tab", "Tabs")
+                Button(title) { bulkMute() }
+            }
+        }
+        Divider()
+        if !open.isEmpty {
+            Button("Close \(Self.count(open.count, "Tab", "Tabs"))") { bulkClose() }
+        }
+        if !parts.saved.isEmpty {
+            Button("Remove \(Self.count(parts.saved.count, "Saved Item", "Saved Items"))", role: .destructive) { bulkRemove() }
+        }
+        Divider()
+        Button("Deselect All") { animate { selection.clear() } }
+    }
+
+    /// Puts everything picked at `spot`: the Favorites, saved links and
+    /// folders move there together, and the tabs are saved after them, each
+    /// keeping its tab as a single save does.
+    private func bulkPlace(at spot: SidebarProfile.Spot) {
+        guard let n = now() else { return }
+        let parts = selection.parts(in: n.rows, of: n.profile)
+        let saving = parts.tabs.compactMap { n.match.byId[$0] }
+        let links = saving.map { Self.saved(sidebar.current($0)) }
+        // Adding to Favorites leaves the ones already there where they are.
+        var moving = parts.saved
+        if case .favorites = spot { moving.removeAll { id in n.profile.favorites.contains { $0.id == id } } }
+        edit(n.profile.id) { $0.place(moving, adding: links, at: spot) }
+        for (t, l) in zip(saving, links) { holdIfSaved(t, l) }
+        animate { selection.clear() }
+    }
+
+    /// Finder's New Folder with Selection: a folder where the first picked
+    /// saved thing was, holding everything picked, its name ready to type.
+    private func bulkNewFolder() {
+        guard let n = now() else { return }
+        let parts = selection.parts(in: n.rows, of: n.profile)
+        guard !parts.isEmpty else { return }
+        let saving = parts.tabs.compactMap { n.match.byId[$0] }
+        let links = saving.map { Self.saved(sidebar.current($0)) }
+        var made: UUID?
+        edit(n.profile.id) { made = $0.addFolder("New Folder", holding: parts.saved, and: links) }
+        for (t, l) in zip(saving, links) { holdIfSaved(t, l) }
+        animate { selection.clear() }
+        if let made { startRename(made, "New Folder") }
+    }
+
+    private func bulkOpen() {
+        guard let n = now() else { return }
+        for l in pickedThings(n).closed { tabs.open(l, in: n.match.session, windowId: n.match.window?.id) }
+        animate { selection.clear() }
+        sidebar.returnFocusToBrowser()
+    }
+
+    /// The addresses, one to a line: the picked tabs', then the saved links'.
+    private func bulkCopy() {
+        guard let n = now() else { return }
+        let parts = selection.parts(in: n.rows, of: n.profile)
+        let urls = parts.tabs.compactMap { n.match.byId[$0]?.url } + parts.links.map(\.url)
+        if !urls.isEmpty { TabsModel.copy(urls.joined(separator: "\n")) }
+    }
+
+    private func bulkReload() {
+        guard let n = now() else { return }
+        for t in pickedThings(n).open { tabs.reload(t, in: n.match.session) }
+    }
+
+    /// Mutes them while any can still be heard, else lets them all be heard
+    /// again: decided now, not when the menu was drawn.
+    private func bulkMute() {
+        guard let n = now() else { return }
+        let open = pickedThings(n).open
+        let muted = open.contains { !$0.muted }
+        for t in open { tabs.setMuted(muted, t, in: n.match.session) }
+    }
+
+    /// Closes the tabs behind what is picked. The saved links stay saved.
+    private func bulkClose() {
+        guard let n = now() else { return }
+        tabs.close(pickedThings(n).open, in: n.match.session)
+        animate { selection.clear() }
+    }
+
+    /// Removes the picked Favorites, saved links and folders, with one Undo
+    /// for all of them. Folders with things in them ask first, as one does.
+    private func bulkRemove() {
+        guard let n = now() else { return }
+        let parts = selection.parts(in: n.rows, of: n.profile)
+        guard !parts.saved.isEmpty else { return }
+        // One saved thing among the picked rows goes by its own name, as a single delete does.
+        var label = Self.count(parts.saved.count, "item", "items")
+        if parts.saved.count == 1, let id = parts.saved.first {
+            label = n.profile.folder(id)?.name ?? n.profile.allLinks.first { $0.id == id }?.title ?? label
+        }
+        if parts.hasFullFolder {
+            confirmDelete = (parts.saved, label)
+        } else {
+            deleteWithUndo(parts.saved, label, n.profile)
+            animate { selection.clear() }
+        }
+    }
+
+    /// The Delete key with several rows picked: closes the tabs behind them,
+    /// as it does for one row; with none of them open, removes the saved ones.
+    private func bulkDelete() {
+        guard let n = now() else { return }
+        if pickedThings(n).open.isEmpty { bulkRemove() } else { bulkClose() }
+    }
+
     // MARK: - Drag and drop
 
     static func savedKey(_ id: UUID) -> String { "betterlink-saved:\(id.uuidString)" }
@@ -764,8 +1103,29 @@ struct SidebarView: View {
     /// own drags, and only moves that would happen (review F4).
     private func allowed(_ spot: SidebarProfile.Spot, _ p: SidebarProfile) -> Bool {
         guard let key = dragging else { return false }
+        let keys = SidebarDrag.keys(in: key)
+        // Several picked rows dragged as one: when any of them would land.
+        if keys.count > 1 {
+            if keys.contains(where: { $0.hasPrefix(tabKeyPrefix) }) { return true }
+            var after = p
+            return !after.place(keys.compactMap(Self.savedID), at: spot).isEmpty
+        }
         if let id = Self.savedID(key) { return p.canPlace(id, at: spot) }
         return key.hasPrefix(tabKeyPrefix)
+    }
+
+    /// What a drag of `row` carries: every picked row when it is one of
+    /// several picked (they move together, as files do in Finder), else itself.
+    private func dragKey(_ row: SidebarRowID) -> String {
+        guard selection.count > 1, selection.contains(row), let n = now() else { return key(for: row) }
+        return SidebarDrag.joined(selection.ordered(in: n.rows).map(key(for:)))
+    }
+
+    private func key(for row: SidebarRowID) -> String {
+        switch row {
+        case .favorite(let id), .folder(let id), .link(let id): return Self.savedKey(id)
+        case .tab(let id): return tabKeyPrefix + String(id)
+        }
     }
 
     /// Starts a drag of `key`, remembering it for the drop targets.
@@ -810,7 +1170,19 @@ struct SidebarView: View {
     /// Dropped keys, in order: a tab is saved there, a favorite, saved link
     /// or folder moves there.
     @discardableResult
-    private func apply(_ keys: [String], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
+    private func apply(_ dropped: [String], at spot: SidebarProfile.Spot, _ p: SidebarProfile, _ open: [BrowserTab]) -> Bool {
+        let keys = dropped.flatMap(SidebarDrag.keys(in:))
+        // Several picked rows dropped as one: the saved ones move there
+        // together, and the tabs are saved after them.
+        if keys.count > 1 {
+            let saving = keys.compactMap { tab(forDragKey: $0, in: open) }
+            let links = saving.map { Self.saved(sidebar.current($0)) }
+            var placed: [UUID] = []
+            edit(p.id) { placed = $0.place(keys.compactMap(Self.savedID), adding: links, at: spot) }
+            for (t, l) in zip(saving, links) { holdIfSaved(t, l) }
+            if !placed.isEmpty { animate { selection.clear() } }
+            return !placed.isEmpty
+        }
         var did = false
         var next = spot
         for k in keys {
@@ -861,9 +1233,14 @@ struct SidebarView: View {
 
     /// Deletes at once and offers Undo for a few seconds.
     private func deleteWithUndo(_ id: UUID, _ label: String, _ p: SidebarProfile) {
-        var removed: SidebarProfile.Removed?
-        edit(p.id) { removed = $0.take(id) }
-        guard let removed else { return }
+        deleteWithUndo([id], label, p)
+    }
+
+    /// Several deleted at once come back with one Undo (`label`: how many).
+    private func deleteWithUndo(_ ids: [UUID], _ label: String, _ p: SidebarProfile) {
+        var removed: [SidebarProfile.Removed] = []
+        edit(p.id) { removed = $0.take(ids) }
+        guard !removed.isEmpty else { return }
         let now = Date()
         withAnimation(Motion.quick(reduceMotion)) { undo = (p.id, removed, label, now) }
         DispatchQueue.main.asyncAfter(deadline: .now() + 6) {
@@ -871,9 +1248,10 @@ struct SidebarView: View {
         }
     }
 
-    private func undoBar(_ u: (profile: UUID, removed: SidebarProfile.Removed, label: String, at: Date)) -> some View {
+    private func undoBar(_ u: (profile: UUID, removed: [SidebarProfile.Removed], label: String, at: Date)) -> some View {
         HStack(spacing: DS.Space.space2) {
-            Text("\(u.removed.item.isFolder ? "Deleted" : "Removed") \u{201C}\(u.label)\u{201D}").lineLimit(1).foregroundStyle(pal.textSecondary)
+            Text(u.removed.count == 1 ? "\(u.removed[0].item.isFolder ? "Deleted" : "Removed") \u{201C}\(u.label)\u{201D}" : "Removed \(u.label)")
+                .lineLimit(1).foregroundStyle(pal.textSecondary)
             Spacer(minLength: 0)
             Button("Undo") {
                 // Just what was deleted, where it was; later changes stay (review F1).
@@ -1222,6 +1600,8 @@ private struct SidebarTabRow: View {
     /// Whether the installed extension can mute: the speaker is a button then.
     let canMute: Bool
     let focused: Bool
+    /// Picked with other rows for one action on all of them.
+    let picked: Bool
     let activate: () -> Void
     let close: () -> Void
     let mute: () -> Void
@@ -1233,7 +1613,7 @@ private struct SidebarTabRow: View {
     var body: some View {
         let name = title.text
         let shown = name.isEmpty ? tab.url : name
-        SidebarRow(selected: tab.active, focused: focused, label: shown, action: activate) {
+        SidebarRow(selected: tab.active, focused: focused, picked: picked, label: shown, action: activate) {
             SavedIcon(icons: [tab.favIconUrl], title: URL(string: tab.url)?.host() ?? shown)
             Text(shown)
                 .font(DS.TextStyle.body)
@@ -1308,6 +1688,10 @@ private struct RowKey: Equatable {
     var window: Int?
     var profile: SidebarProfile
     var focused: Bool
+    /// What is picked, while this row is: its menu is then the one for all of it.
+    var picked: SidebarSelection?
+    /// What that menu says of the other picked rows (how many, open, heard).
+    var pickedShown: [Int]?
     var drop: DropZone?
     var size: CGSize?
     var palette: SidebarPalette?
@@ -1372,12 +1756,15 @@ private struct SidebarRow<Content: View, Trailing: View>: View {
     var indent: CGFloat = 0
     var selected = false
     var focused = false
+    /// Picked with other rows for one action on all of them (SidebarSelection).
+    var picked = false
     /// Its name is being typed: the row is not a button meanwhile.
     var editing = false
     let label: String
     let action: () -> Void
     @ViewBuilder let content: Content
     @ViewBuilder let trailing: Trailing
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         let inside = HStack(spacing: DS.Space.space2) { content }
@@ -1391,19 +1778,21 @@ private struct SidebarRow<Content: View, Trailing: View>: View {
                 Button(action: action) { inside }
                     .buttonStyle(.plain)
                     .accessibilityLabel(label)
-                    .accessibilityAddTraits(selected ? .isSelected : [])
+                    .accessibilityAddTraits(selected || picked ? .isSelected : [])
             }
             trailing
+            // A check, not a color alone: the tab you are on has the same fill.
+            if picked { PickedMark().transition(Motion.pop(reduceMotion)) }
         }
         .padding(.trailing, DS.Space.space1)
-        .rowStyle(selected: selected, focused: focused)
+        .rowStyle(selected: selected || picked, focused: focused)
     }
 }
 
 private extension SidebarRow where Trailing == EmptyView {
-    init(indent: CGFloat = 0, selected: Bool = false, focused: Bool = false, editing: Bool = false, label: String,
-         action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
-        self.init(indent: indent, selected: selected, focused: focused, editing: editing, label: label,
+    init(indent: CGFloat = 0, selected: Bool = false, focused: Bool = false, picked: Bool = false, editing: Bool = false,
+         label: String, action: @escaping () -> Void, @ViewBuilder content: () -> Content) {
+        self.init(indent: indent, selected: selected, focused: focused, picked: picked, editing: editing, label: label,
                   action: action, content: content, trailing: { EmptyView() })
     }
 }
@@ -1422,6 +1811,18 @@ private struct RowStyle: ViewModifier {
             .animation(Motion.hover(reduceMotion), value: hovering)
             .animation(Motion.quick(reduceMotion), value: selected)
             .onHover { hovering = $0 }
+    }
+}
+
+/// On a row or a Favorite picked with others for one action on all of them.
+private struct PickedMark: View {
+    @Environment(\.sidebarColors) private var pal
+    var body: some View {
+        Image(systemName: "checkmark.circle.fill")
+            .font(DS.TextStyle.caption)
+            .foregroundStyle(pal.text)
+            .frame(width: DS.scaled(20), height: DS.scaled(20))
+            .accessibilityHidden(true)
     }
 }
 

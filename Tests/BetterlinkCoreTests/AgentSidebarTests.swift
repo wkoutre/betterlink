@@ -251,4 +251,112 @@ struct AgentSidebarTests {
         let again = try #require((call("sidebar.list", in: f).data as? [[String: Any]])?.first?["id"] as? String)
         #expect(try SidebarStore(folder: f).load().profiles.first?.id.uuidString == again)
     }
+
+    // MARK: Several at once
+
+    /// A profile with links A, B, C at the top level and folder F holding X.
+    func several(_ f: SettingsFolder) throws -> (a: String, b: String, c: String, folder: String, x: String) {
+        func id(_ r: (ok: Bool, data: Any?, error: String?)) throws -> String {
+            try #require((r.data as? [String: Any])?["id"] as? String)
+        }
+        let a = try id(call("sidebar.links.add", ["url": "https://a.example", "title": "A"], in: f))
+        let b = try id(call("sidebar.links.add", ["url": "https://b.example", "title": "B"], in: f))
+        let c = try id(call("sidebar.links.add", ["url": "https://c.example", "title": "C"], in: f))
+        let folder = try id(call("sidebar.folders.add", ["name": "F"], in: f))
+        let x = try id(call("sidebar.links.add", ["url": "https://x.example", "title": "X", "to": folder], in: f))
+        return (a, b, c, folder, x)
+    }
+
+    func names(_ items: [SidebarItem]) -> [String] {
+        items.map { item in
+            switch item {
+            case .link(let l): return l.title
+            case .folder(let f): return f.name + "[" + names(f.items).joined(separator: ",") + "]"
+            }
+        }
+    }
+
+    @Test func severalMoveTogetherInTheOrderGiven() throws {
+        let f = try folder()
+        let s = try several(f)
+        #expect(call("sidebar.items.move", ["ids": [s.c, s.a], "to": s.folder, "position": 1], in: f).ok)
+        #expect(names(try lib(f).profiles[0].items) == ["B", "F[C,A,X]"])
+        // Starts of ids work in a list too, and `id` counts as one more.
+        #expect(call("sidebar.items.move", ["ids": [String(s.x.prefix(8))], "id": s.b, "to": "favorites"], in: f).ok)
+        #expect(try lib(f).profiles[0].favorites.map(\.title) == ["X", "B"])
+    }
+
+    @Test func severalMoveAllOrNone() throws {
+        let f = try folder()
+        let s = try several(f)
+        let before = try lib(f)
+        // A folder can't be a favorite, so nothing moves.
+        let r = call("sidebar.items.move", ["ids": [s.a, s.folder], "to": "favorites"], in: f)
+        #expect(!r.ok && r.error!.contains("Nothing was moved"))
+        #expect(try lib(f) == before)
+        // Several need a place to go.
+        #expect(!call("sidebar.items.move", ["ids": [s.a, s.b], "position": 1], in: f).ok)
+        #expect(!call("sidebar.items.move", ["ids": [s.a, "nope-nope"], "to": "top"], in: f).ok)
+        #expect(!call("sidebar.items.move", ["ids": "not a list", "to": "top"], in: f).ok)
+        #expect(try lib(f) == before)
+    }
+
+    @Test func severalAreRemovedTogether() throws {
+        let f = try folder()
+        let s = try several(f)
+        let full = call("sidebar.items.remove", ["ids": [s.a, s.folder]], in: f)
+        #expect(!full.ok && full.error!.contains("isn't empty"))
+        #expect(names(try lib(f).profiles[0].items) == ["A", "B", "C", "F[X]"])
+        // X goes with its folder, named or not.
+        #expect(call("sidebar.items.remove", ["ids": [s.a, s.folder, s.x], "withContents": true], in: f).ok)
+        #expect(names(try lib(f).profiles[0].items) == ["B", "C"])
+    }
+
+    @Test func aNewFolderTakesThingsWithIt() throws {
+        let f = try folder()
+        let s = try several(f)
+        // It stands where the first of them stood.
+        let r = call("sidebar.folders.add", ["name": "New", "with": [s.b, s.x]], in: f)
+        #expect(r.ok)
+        #expect((r.data as? [String: Any])?["id"] is String)
+        #expect(names(try lib(f).profiles[0].items) == ["A", "New[B,X]", "C", "F[]"])
+        // Or where it is asked to go.
+        #expect(call("sidebar.folders.add", ["name": "Top", "with": [s.a, s.c], "to": "top", "position": 1], in: f).ok)
+        #expect(names(try lib(f).profiles[0].items) == ["Top[A,C]", "New[B,X]", "F[]"])
+        // Not inside a folder it takes.
+        let before = try lib(f)
+        let inside = call("sidebar.folders.add", ["name": "Loop", "with": [s.folder], "to": s.folder], in: f)
+        #expect(!inside.ok && inside.error!.contains("inside itself"))
+        #expect(try lib(f) == before)
+    }
+
+    @Test func openTabsAreSavedWhereAsked() throws {
+        let f = try folder()
+        let s = try several(f)
+        let env = AgentEnvironment(folder: f, installed: [])
+        // New links each time, as the app makes them from the open tabs.
+        func tabs() -> [SavedLink] {
+            [SavedLink(title: "One", url: "https://one.example"), SavedLink(title: "Two", url: "https://two.example")]
+        }
+        // Into a folder, at the top of it.
+        let into = Agent.saveTabs(tabs(), ["to": s.folder, "position": 1], env)
+        #expect(into.ok)
+        #expect(((into.data as? [String: Any])?["saved"] as? [String])?.count == 2)
+        #expect(names(try lib(f).profiles[0].items) == ["A", "B", "C", "F[One,Two,X]"])
+        // Into a new folder.
+        let made = Agent.saveTabs(tabs(), ["folder": "Later"], env)
+        #expect(made.ok && (made.data as? [String: Any])?["folder"] is String)
+        #expect(names(try lib(f).profiles[0].items).last == "Later[One,Two]")
+        // Favorites take an address once.
+        #expect(Agent.saveTabs(tabs(), ["to": "favorites"], env).ok)
+        let third = SavedLink(title: "Three", url: "https://three.example")
+        let again = Agent.saveTabs([tabs()[0], third], ["to": "favorites"], env)
+        #expect(again.ok)
+        #expect((again.data as? [String: Any])?["alreadyFavorites"] as? [String] == ["https://one.example"])
+        #expect(try lib(f).profiles[0].favorites.map(\.title) == ["One", "Two", "Three"])
+        let none = Agent.saveTabs([tabs()[0]], ["to": "favorites"], env)
+        #expect(!none.ok && none.error!.contains("already have"))
+        #expect(!Agent.saveTabs(tabs(), ["to": "favorites", "folder": "No"], env).ok)
+        #expect(!Agent.saveTabs([], [:], env).ok)
+    }
 }

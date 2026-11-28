@@ -17,6 +17,14 @@ public struct SidebarLibrary: Codable, Equatable, Sendable {
         return profiles.first { $0.browserProfiles.isEmpty } ?? profiles.first
     }
 
+    /// The one Sidebar Profile the sidebars of browser profiles `refs` show,
+    /// nil for none or several. A browser profile that can't be told (nil)
+    /// shows the catch-all, as it does on screen.
+    public func shownProfile(for refs: [ProfileRef?]) -> UUID? {
+        let shown = Set(refs.compactMap { profile(for: $0)?.id })
+        return shown.count == 1 ? shown.first : nil
+    }
+
     /// The library with one profile, "Primary", for everything.
     public static let starter = SidebarLibrary(profiles: [SidebarProfile(name: "Primary")])
 
@@ -331,6 +339,114 @@ public struct SidebarProfile: Codable, Equatable, Identifiable, Sendable {
         case .items(let parent, let index):
             insert(.link(link), into: parent, at: max(index, 0))
         }
+    }
+
+    // MARK: - Several at once
+
+    /// Of `ids`, in the order given, those that are here and not inside a
+    /// folder that is also among them (that folder carries them), each once.
+    public func roots(of ids: [UUID]) -> [UUID] {
+        let all = Set(ids)
+        var seen = Set<UUID>()
+        return ids.filter { id in
+            guard seen.insert(id).inserted else { return false }
+            guard favorites.contains(where: { $0.id == id }) || Self.find(id, in: items) != nil else { return false }
+            var up = parent(of: id)
+            while let u = up {
+                if all.contains(u) { return false }
+                up = parent(of: u)
+            }
+            return true
+        }
+    }
+
+    /// Moves several favorites, saved links and folders to `spot` as one
+    /// move, and saves `links` (tabs dropped with them) right after them:
+    /// they land together, in the order given, where one of them dropped
+    /// there would (`place(_:at:)`). Each one that can't make the move stays
+    /// where it is: a folder in the Favorites grid or inside itself, and a
+    /// link in the grid when a favorite there already has its address.
+    /// Answers with the ids that moved or were saved.
+    @discardableResult
+    public mutating func place(_ ids: [UUID], adding links: [SavedLink] = [], at spot: Spot) -> [UUID] {
+        var moving: [SidebarItem] = roots(of: ids).compactMap { id in
+            favorites.first { $0.id == id }.map { SidebarItem.link($0) } ?? Self.find(id, in: items)
+        }
+        var adding = links
+        switch spot {
+        case .favorites(let index):
+            // One favorite for an address: the ones staying in the grid first.
+            let leaving = Set(moving.map(\.id))
+            var taken = Set(favorites.filter { !leaving.contains($0.id) }.map { SavedLink.key($0.url) })
+            moving = moving.filter { item in
+                guard case .link(let l) = item else { return false }
+                return taken.insert(SavedLink.key(l.url)).inserted
+            }
+            adding = adding.filter { taken.insert(SavedLink.key($0.url)).inserted }
+            guard !moving.isEmpty || !adding.isEmpty else { return [] }
+            let gone = Set(moving.map(\.id))
+            // The index counts the grid before anything leaves it.
+            let i = min(max(index, 0), favorites.count)
+            let at = i - favorites[..<i].filter { gone.contains($0.id) }.count
+            favorites.removeAll { gone.contains($0.id) }
+            for id in gone { items = Self.removing(id, from: items) }
+            let moved = moving.compactMap { item -> SavedLink? in
+                if case .link(let l) = item { return l }
+                return nil
+            }
+            favorites.insert(contentsOf: moved + adding, at: min(at, favorites.count))
+        case .items(let parent, let index):
+            if let parent {
+                guard isFolder(parent) else { return [] }
+                moving = moving.filter { item in
+                    if item.id == parent { return false }
+                    if case .folder(let f) = item, Self.find(parent, in: f.items) != nil { return false }
+                    return true
+                }
+            }
+            guard !moving.isEmpty || !adding.isEmpty else { return [] }
+            let gone = Set(moving.map(\.id))
+            let list = children(of: parent)
+            let i = min(max(index, 0), list.count)
+            let at = i - list[..<i].filter { gone.contains($0.id) }.count
+            favorites.removeAll { gone.contains($0.id) }
+            for id in gone { items = Self.removing(id, from: items) }
+            for (n, item) in (moving + adding.map { SidebarItem.link($0) }).enumerated() { insert(item, into: parent, at: at + n) }
+        }
+        return moving.map(\.id) + adding.map(\.id)
+    }
+
+    /// A new folder holding these, like Finder's New Folder with Selection:
+    /// it stands where the first of them stood among the folders (at the end
+    /// of the top level when they are all Favorites or tabs), and `links`
+    /// (tabs picked with them) are saved into it after them.
+    @discardableResult
+    public mutating func addFolder(_ name: String, holding ids: [UUID], and links: [SavedLink] = []) -> UUID {
+        let moving = roots(of: ids)
+        let first = moving.first { Self.find($0, in: items) != nil }
+        let home = first.flatMap { self.parent(of: $0) }
+        let index = first.flatMap { id in children(of: home).firstIndex { $0.id == id } } ?? .max
+        let folder = SidebarFolder(name: name)
+        insert(.folder(folder), into: home, at: index)
+        place(moving, adding: links, at: .items(parent: folder.id, index: 0))
+        return folder.id
+    }
+
+    /// Removes several favorites, saved links and folders (with everything
+    /// in them) for one Undo, and says where each was.
+    @discardableResult
+    public mutating func take(_ ids: [UUID]) -> [Removed] {
+        var out: [Removed] = []
+        for id in roots(of: ids) {
+            if let r = take(id) { out.append(r) }
+        }
+        return out
+    }
+
+    /// Puts back what `take(_:)` removed of several: the last taken first, so
+    /// each lands where it was.
+    public mutating func restore(_ removed: [Removed]) {
+        for r in removed.reversed() { restore(r) }
     }
 
     /// The items directly in `parent` (nil: the top level), in order.

@@ -40,7 +40,7 @@ enum AgentCommand {
 
         if tabCommands.contains(command) {
             let out = runTabCommand(command, input)
-            if ["sidebar.settings.set", "tabs.helper.set"].contains(command) && isOK(out) { notifyApp() }
+            if ["sidebar.settings.set", "tabs.helper.set", "tabs.save"].contains(command) && isOK(out) { notifyApp() }
             return emit(out)
         }
         if TourAgent.commands.contains(command) {

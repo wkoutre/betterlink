@@ -10,6 +10,15 @@ public enum SidebarDrag {
 
     public static func data(for key: String) -> Data { Data(key.utf8) }
 
+    /// Several rows dragged as one (the picked rows): their keys, one to a
+    /// line, in the order they are on screen.
+    public static func joined(_ keys: [String]) -> String { keys.joined(separator: "\n") }
+
+    /// The keys a drag carries: one, or several picked rows' (`joined`).
+    public static func keys(in key: String) -> [String] {
+        key.split(separator: "\n").map(String.init)
+    }
+
     /// The key in dropped data, or nil when there is none to read.
     public static func key(from data: Data) -> String? {
         guard !data.isEmpty else { return nil }

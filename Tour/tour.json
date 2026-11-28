@@ -364,6 +364,13 @@
           "title": "Send a tab to another profile",
           "body": "Right-click a tab in the sidebar and choose Send to Another Profile to move its page into another browser profile or browser that is open with the Tabs extension. The page opens there, and the tab here closes only once it has.",
           "cli": "betterlink tabs send --tab 12 --to \"Work (Google Chrome)\""
+        },
+        {
+          "id": "sidebar-select",
+          "revision": 1,
+          "title": "Act on several rows at once",
+          "body": "Hold Command and click rows in the sidebar to pick several, or hold Shift and click to pick every row from the last one clicked to this one. Right-click one of them, or use Actions at the bottom of the sidebar, and what you choose happens to all of them, such as moving them into a new folder or closing their tabs.",
+          "cli": "betterlink tabs save 12,34 --folder \"Read later\""
         }
       ]
     },

@@ -105,6 +105,38 @@ describe.skipIf(!existsSync(app))('betterlink CLI', () => {
     expect(run(d, 'sidebar', 'expand', '--open', 'off').code).not.toBe(0)
   })
 
+  test('moves, files and deletes several at once, as the sidebar does for picked rows', () => {
+    const d = home()
+    const link = (name: string) => run(d, 'sidebar', 'add-link', '--url', `https://${name}.example`, '--title', name).json.id as string
+    const [a, b, c] = [link('a'), link('b'), link('c')]
+    const docs = run(d, 'sidebar', 'add-folder', '--name', 'Docs').json.id as string
+    const shape = () => {
+      const name = (i: any): string => (i.kind === 'folder' ? `${i.name}[${i.items.map(name).join(',')}]` : i.title)
+      return run(d, 'sidebar', 'list').json[0].items.map(name)
+    }
+    // Several move together, in the order given.
+    expect(run(d, 'sidebar', 'move', `${c},${a.slice(0, 8)}`, '--to', docs).code).toBe(0)
+    expect(shape()).toEqual(['b', 'Docs[c,a]'])
+    // All or none: a folder can't be a Favorite, so b stays too.
+    expect(run(d, 'sidebar', 'move', `${b},${docs}`, '--to', 'favorites').code).not.toBe(0)
+    expect(shape()).toEqual(['b', 'Docs[c,a]'])
+    // A new folder takes things with it and stands where the first stood.
+    expect(run(d, 'sidebar', 'add-folder', '--name', 'New', '--with', `${b},${a}`).code).toBe(0)
+    expect(shape()).toEqual(['New[b,a]', 'Docs[c]'])
+    // Several are deleted together; a folder with things in it still needs --withContents.
+    expect(run(d, 'sidebar', 'remove', `${c},${docs}`).code).not.toBe(0) // Docs holds c
+    expect(shape()).toEqual(['New[b,a]', 'Docs[c]'])
+    expect(run(d, 'sidebar', 'remove', `${c},${docs}`, '--withContents').code).toBe(0)
+    expect(shape()).toEqual(['New[b,a]'])
+    const full = run(d, 'sidebar', 'remove', `${b},${run(d, 'sidebar', 'list').json[0].items[0].id}`)
+    expect(full.code).not.toBe(0)
+    expect(shape()).toEqual(['New[b,a]'])
+    const llms = spawnSync('bun', [bin, '--llms'], { encoding: 'utf8', env: { ...process.env, BETTERLINK_APP_BINARY: app } }).stdout
+    for (const c of ['tabs save', 'tabs reload', 'tabs mute']) expect(llms).toContain(`betterlink ${c}`)
+    expect(run(d, 'tabs', 'save', 'twelve', '--folder', 'Later').code).not.toBe(0) // not a tab id
+    expect(shape()).toEqual(['New[b,a]'])
+  })
+
   // The app carries the Tabs extension and puts it in one folder (under
   // BETTERLINK_HOME here, so this never touches the one a browser loads).
   test('says where the Tabs extension is, after putting it there', () => {
