@@ -141,14 +141,15 @@ private struct NavTile: View {
 }
 
 /// The navigation column, drawn from tokens: groups of size-row rows, space-1 apart,
-/// space-6 between groups, a caption title space-1 above its rows.
+/// space-4 between groups, a caption title space-1 above its rows. Every row,
+/// the Log's included, fits the window's minimum height without scrolling.
 private struct NavColumn: View {
     @EnvironmentObject var model: AppModel
     @Binding var selection: RootView.Page?
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: DS.Space.space6) {
+            VStack(alignment: .leading, spacing: DS.Space.space4) {
                 NavHeader()
                 // What betterlink does, then how it runs on this Mac, then
                 // the parts for people who write code, then the app itself.
