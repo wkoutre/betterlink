@@ -345,8 +345,8 @@
         {
           "id": "sidebar-select",
           "revision": 1,
-          "title": "Act on several tabs at once",
-          "body": "Hold Command and click rows in the sidebar to pick several, or hold Shift and click to pick every row from the last one clicked to this one. Then right-click a picked row, or use Actions at the bottom of the sidebar, to add them to Favorites, put them in a folder or a new one, close their tabs or remove them.",
+          "title": "Act on several rows at once",
+          "body": "Hold Command and click rows in the sidebar to pick several, or hold Shift and click to pick every row from the last one clicked to this one. Right-click one of them, or use Actions at the bottom of the sidebar, and what you choose happens to all of them, such as moving them into a new folder or closing their tabs.",
           "cli": "betterlink tabs save 12,34 --folder \"Read later\""
         }
       ]

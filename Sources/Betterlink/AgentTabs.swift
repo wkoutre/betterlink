@@ -287,7 +287,9 @@ extension AgentCommand {
             }
             if let one = try int(input, "tab") { ids.append(one) }
             guard !ids.isEmpty else { throw TabError(message: "Give tab (one id) or tabs (a list of ids).") }
-            return ids
+            // A tab named twice is one tab.
+            var seen = Set<Int>()
+            return ids.filter { seen.insert($0).inserted }
         }
         func several() throws -> [(Int, BrowserSession)] {
             try tabIDs().map { id in (id, try find(id, in: sessions, browser: input["browser"] as? String).0) }
@@ -353,14 +355,29 @@ extension AgentCommand {
             // The sidebar's Add to Favorites, Save to Folder and New Folder
             // with Selection for the picked tabs: their pages are saved as
             // links (Agent.saveTabs). Nothing is sent to the browser.
-            let links = try several().map { id, s -> SavedLink in
+            let picked = try several()
+            let links = try picked.map { id, s -> SavedLink in
                 guard let t = s.store.orderedWindows.flatMap(\.tabs).first(where: { $0.id == id }), !t.url.isEmpty else {
                     throw TabError(message: "Tab \(id) has no page to save.")
                 }
                 return SavedLink(title: t.title.isEmpty ? t.url : t.title, url: t.url, icon: t.favIconUrl.hasPrefix("data:") ? t.favIconUrl : nil)
             }
+            let folder = SettingsFolder.resolve()
+            var input = input
+            // With no Sidebar Profile named, the one these tabs' sidebar
+            // shows, as saving from the sidebar does.
+            if (input["profile"] as? String ?? "").trimmingCharacters(in: .whitespaces).isEmpty,
+               let lib = try? SidebarStore(folder: folder).load(), lib.profiles.count > 1 {
+                var asked = Set<String>()
+                let shown = Set(picked.map(\.1).filter { asked.insert($0.socketPath).inserted }.compactMap { s -> UUID? in
+                    guard let instance = s.instance, let place = TabsModel.profileFolder(of: s),
+                          let ref = TabsModel.readProfile(instance: instance, place.browser, place.root)?.0 else { return nil }
+                    return lib.profile(for: ref)?.id
+                })
+                if shown.count == 1, let id = shown.first { input["profile"] = id.uuidString }
+            }
             let installed = Browser.known.filter { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.bundleId) != nil }
-            let r = Agent.saveTabs(links, input, AgentEnvironment(folder: SettingsFolder.resolve(), installed: installed))
+            let r = Agent.saveTabs(links, input, AgentEnvironment(folder: folder, installed: installed))
             guard r.ok, let out = r.data as? [String: Any] else { throw TabError(message: r.error ?? "Couldn't save the tabs.") }
             return out
         case "tabs.navigate":

@@ -84,13 +84,15 @@ struct SidebarView: View {
                 let loose = windowTabs.filter { !m.links.claimed.contains($0.id) }
                 let order = windowTabs.map { RowKey.Place(id: $0.id, pinned: $0.pinned) }
                 let rows = SidebarRows.visible(profile, active: m.activeLinks, tabs: loose.map(\.id))
+                // What several picked rows are, worked out once for this redraw: each of their menus shows it.
+                let several = selection.count > 1 ? pickedThings(Now(profile: profile, match: m, rows: rows, current: nil)) : nil
                 ScrollViewReader { scroller in
                     ScrollView {
                         VStack(alignment: .leading, spacing: DS.Space.space2) {
-                            favorites(profile, m, windowTabs)
+                            favorites(profile, m, windowTabs, several)
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 ForEach(profile.items) { item in
-                                    node(item, depth: 0, profile, m, windowTabs).transition(Motion.reveal(reduceMotion))
+                                    node(item, depth: 0, profile, m, windowTabs, several).transition(Motion.reveal(reduceMotion))
                                 }
                             }
                             // A closed folder shows the active tab when it holds it,
@@ -105,7 +107,7 @@ struct SidebarView: View {
                             LazyVStack(alignment: .leading, spacing: 1) {
                                 // Tabs that are open saved links show in their folder instead.
                                 ForEach(loose) { tab in
-                                    SkipUnchanged(key: rowKey(tab, profile, m, order)) {
+                                    SkipUnchanged(key: rowKey(tab, profile, m, order, several)) {
                                         SidebarTabRow(tab: tab, title: sidebar.title(of: tab), canMute: m.session.can(.mute),
                                                       focused: isCursor(.tab(tab.id)), picked: selection.contains(.tab(tab.id))) {
                                             click(.tab(tab.id)) {
@@ -121,7 +123,7 @@ struct SidebarView: View {
                                         // Drop a tab before or after another to reorder the window's tabs.
                                         .modifier(tabDropRow(tab, m, windowTabs))
                                         .contextMenu {
-                                            if let n = severalPicked(with: .tab(tab.id)) { bulkMenu(n) } else { tabMenu(tab, profile, m, windowTabs) }
+                                            if let several, selection.contains(.tab(tab.id)) { bulkMenu(several) } else { tabMenu(tab, profile, m, windowTabs) }
                                         }
                                     }
                                     .equatable()
@@ -133,7 +135,8 @@ struct SidebarView: View {
                             .animation(Motion.quick(reduceMotion), value: windowTabs.map { [$0.id, $0.active ? 1 : 0] })
                         }
                         .padding(.horizontal, DS.Space.space2)
-                        .padding(.bottom, DS.Space.space4)
+                        // Room for the bar that says what is picked, so it never covers the last rows.
+                        .padding(.bottom, DS.Space.space4 + (selection.isEmpty ? 0 : Self.selectionBarRoom))
                         .frame(maxWidth: .infinity, alignment: .topLeading)
                         .contentShape(Rectangle())
                         .contextMenu { Button("New Folder") { newFolder(in: nil, profile) } }
@@ -360,9 +363,9 @@ struct SidebarView: View {
     // MARK: - Favorites
 
     @ViewBuilder
-    private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
+    private func favorites(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> some View {
         // With none, the header turns into the place to drop the first.
-        if !p.favorites.isEmpty { favoritesGrid(p, m, open) }
+        if !p.favorites.isEmpty { favoritesGrid(p, m, open, several) }
     }
 
     /// Somewhere to drop what is being dragged (see DropSwap).
@@ -395,7 +398,7 @@ struct SidebarView: View {
         return true
     }
 
-    private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> some View {
+    private func favoritesGrid(_ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 44, maximum: 64), spacing: 6)], spacing: 6) {
             ForEach(p.favorites) { link in
                 let tab = m.tab(for: link)
@@ -434,8 +437,8 @@ struct SidebarView: View {
                 .accessibilityLabel(isOpen ? "\(link.title), open" : link.title)
                 .accessibilityAddTraits(picked ? .isSelected : [])
                 .contextMenu {
-                    if let n = severalPicked(with: .favorite(link.id)) {
-                        bulkMenu(n)
+                    if let several, picked {
+                        bulkMenu(several)
                     } else {
                         heldMenu(link, tab, p, m)
                         moveMenu(link.id, isFolder: false, inFavorites: true, p)
@@ -454,7 +457,7 @@ struct SidebarView: View {
 
     // MARK: - Folders
 
-    private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab]) -> AnyView {
+    private func node(_ item: SidebarItem, depth: Int, _ p: SidebarProfile, _ m: Match, _ open: [BrowserTab], _ several: Picked?) -> AnyView {
         switch item {
         case .folder(let f):
             return AnyView(VStack(alignment: .leading, spacing: 1) {
@@ -476,8 +479,8 @@ struct SidebarView: View {
                 .onDrag { drag(dragKey(.folder(f.id))) }
                 .modifier(dropRow(f.id, canHold: true, p, open) { zone in spot(for: f.id, zone, p) })
                 .contextMenu {
-                    if let n = severalPicked(with: .folder(f.id)) {
-                        bulkMenu(n)
+                    if let several, selection.contains(.folder(f.id)) {
+                        bulkMenu(several)
                     } else {
                         Button("New Folder Inside") { newFolder(in: f.id, p) }
                         Button("Rename") { startRename(f.id, f.name) }
@@ -493,14 +496,14 @@ struct SidebarView: View {
                 }
                 if f.expanded {
                     VStack(alignment: .leading, spacing: 1) {
-                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open) }
+                        ForEach(f.items) { child in node(child, depth: depth + 1, p, m, open, several) }
                     }
                     .transition(Motion.reveal(reduceMotion))
                 } else {
                     // Closed, it still shows the tab you are on when that tab is
                     // inside it, as Dia does; its other tabs fold away with it.
                     ForEach(SidebarRows.peek(f, active: m.activeLinks)) { l in
-                        node(.link(l), depth: depth + 1, p, m, open).transition(Motion.reveal(reduceMotion))
+                        node(.link(l), depth: depth + 1, p, m, open, several).transition(Motion.reveal(reduceMotion))
                     }
                 }
             }
@@ -543,8 +546,8 @@ struct SidebarView: View {
             .onDrag { drag(dragKey(.link(l.id))) }
             .modifier(dropRow(l.id, canHold: false, p, open) { zone in spot(for: l.id, zone, p) })
             .contextMenu {
-                if let n = severalPicked(with: .link(l.id)) {
-                    bulkMenu(n)
+                if let several, selection.contains(.link(l.id)) {
+                    bulkMenu(several)
                 } else {
                     Button("Rename") { startRename(l.id, l.title) }
                     Button("New Folder") { newFolder(in: p.parent(of: l.id), p) }
@@ -718,11 +721,12 @@ struct SidebarView: View {
 
     // MARK: - Unchanged rows
 
-    private func rowKey(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ order: [RowKey.Place]) -> RowKey {
+    private func rowKey(_ tab: BrowserTab, _ p: SidebarProfile, _ m: Match, _ order: [RowKey.Place], _ several: Picked?) -> RowKey {
         let id = Self.rowID(tab)
         return RowKey(tab: tab, order: order, claimed: m.links.claimed, session: m.session.socketPath, ops: m.session.ops,
                       window: m.window?.id, profile: p, focused: isCursor(.tab(tab.id)),
                       picked: selection.contains(.tab(tab.id)) ? selection : nil,
+                      pickedShown: selection.contains(.tab(tab.id)) ? several?.shown : nil,
                       drop: dropTarget?.id == id ? dropTarget?.zone : nil, size: rowSizes[id], palette: sidebar.palette,
                       reduceMotion: reduceMotion)
     }
@@ -749,6 +753,9 @@ struct SidebarView: View {
                     if selection.isEmpty, let from = cursor { selection.click(from) }
                     selection.extend(to: to, current: nil, in: rows)
                 }
+            } else if !selection.isEmpty, let to {
+                // A plain arrow picks nothing again, as in Finder; a range would start at the cursor.
+                animate { selection.click(to) }
             }
             cursor = to
         case .leftArrow, .rightArrow:
@@ -854,19 +861,30 @@ struct SidebarView: View {
         }
     }
 
-    /// The sidebar now, when `row` is one of several picked rows: its menu
-    /// is then the one for all of them.
-    private func severalPicked(with row: SidebarRowID) -> Now? {
-        selection.count > 1 && selection.contains(row) ? now() : nil
+    /// What is picked, for the menu on all of it: the tabs open behind it
+    /// (the picked tabs themselves and the tabs of the picked saved links)
+    /// and the picked saved links that are closed.
+    private struct Picked {
+        var now: Now
+        var parts: SidebarSelection.Parts
+        var open: [BrowserTab]
+        var closed: [SavedLink]
+
+        /// What the menu shows of other rows, for a tab's row that is only
+        /// drawn again when its key changes (RowKey).
+        var shown: [Int] {
+            [parts.tabs.count, parts.saved.count, parts.links.count, open.count, closed.count, open.contains { !$0.muted } ? 1 : 0]
+        }
     }
 
-    /// What is picked, and the tabs that are open behind it: the picked tabs
-    /// themselves and the tabs of the picked saved links.
-    private func pickedThings(_ n: Now) -> (parts: SidebarSelection.Parts, open: [BrowserTab], closed: [SavedLink]) {
+    private func pickedThings(_ n: Now) -> Picked {
         let parts = selection.parts(in: n.rows, of: n.profile)
         let open = parts.tabs.compactMap { n.match.byId[$0] } + parts.links.compactMap { n.match.tab(for: $0) }
-        return (parts, open, parts.links.filter { n.match.tab(for: $0) == nil })
+        return Picked(now: n, parts: parts, open: open, closed: parts.links.filter { n.match.tab(for: $0) == nil })
     }
+
+    /// The bar's height with its margins: the list leaves this much room below its last row.
+    private static let selectionBarRoom: CGFloat = 44
 
     private static func count(_ n: Int, _ one: String, _ many: String) -> String { "\(n) \(n == 1 ? one : many)" }
 
@@ -877,7 +895,7 @@ struct SidebarView: View {
             Text("\(selection.count) selected").lineLimit(1).foregroundStyle(pal.textSecondary)
             Spacer(minLength: 0)
             Menu {
-                bulkMenu(n)
+                bulkMenu(pickedThings(n))
             } label: {
                 Text("Actions").fontWeight(.semibold).foregroundStyle(pal.text)
             }
@@ -904,10 +922,9 @@ struct SidebarView: View {
     /// The menu for several picked rows, on any of them and in the bar at
     /// the bottom. Each action works out what is picked again when it runs.
     @ViewBuilder
-    private func bulkMenu(_ n: Now) -> some View {
-        let things = pickedThings(n)
-        let parts = things.parts, open = things.open, closed = things.closed
-        let p = n.profile, s = n.match.session
+    private func bulkMenu(_ picked: Picked) -> some View {
+        let parts = picked.parts, open = picked.open, closed = picked.closed
+        let p = picked.now.profile, s = picked.now.match.session
         // Folders stay out of the grid, and so does what is a Favorite already.
         let favorites = Set(p.favorites.map(\.id))
         let canFavorite = !parts.tabs.isEmpty || parts.saved.contains { !favorites.contains($0) && p.folder($0) == nil }
@@ -935,7 +952,7 @@ struct SidebarView: View {
                 // Mute while any of them can still be heard.
                 let mute = open.contains { !$0.muted }
                 let title: String = (mute ? "Mute " : "Unmute ") + Self.count(open.count, "Tab", "Tabs")
-                Button(title) { bulkMute(mute) }
+                Button(title) { bulkMute() }
             }
         }
         Divider()
@@ -957,7 +974,10 @@ struct SidebarView: View {
         let parts = selection.parts(in: n.rows, of: n.profile)
         let saving = parts.tabs.compactMap { n.match.byId[$0] }
         let links = saving.map { Self.saved(sidebar.current($0)) }
-        edit(n.profile.id) { $0.place(parts.saved, adding: links, at: spot) }
+        // Adding to Favorites leaves the ones already there where they are.
+        var moving = parts.saved
+        if case .favorites = spot { moving.removeAll { id in n.profile.favorites.contains { $0.id == id } } }
+        edit(n.profile.id) { $0.place(moving, adding: links, at: spot) }
         for (t, l) in zip(saving, links) { holdIfSaved(t, l) }
         animate { selection.clear() }
     }
@@ -997,9 +1017,13 @@ struct SidebarView: View {
         for t in pickedThings(n).open { tabs.reload(t, in: n.match.session) }
     }
 
-    private func bulkMute(_ muted: Bool) {
+    /// Mutes them while any can still be heard, else lets them all be heard
+    /// again: decided now, not when the menu was drawn.
+    private func bulkMute() {
         guard let n = now() else { return }
-        for t in pickedThings(n).open { tabs.setMuted(muted, t, in: n.match.session) }
+        let open = pickedThings(n).open
+        let muted = open.contains { !$0.muted }
+        for t in open { tabs.setMuted(muted, t, in: n.match.session) }
     }
 
     /// Closes the tabs behind what is picked. The saved links stay saved.
@@ -1015,7 +1039,11 @@ struct SidebarView: View {
         guard let n = now() else { return }
         let parts = selection.parts(in: n.rows, of: n.profile)
         guard !parts.saved.isEmpty else { return }
-        let label = Self.count(parts.saved.count, "item", "items")
+        // One saved thing among the picked rows goes by its own name, as a single delete does.
+        var label = Self.count(parts.saved.count, "item", "items")
+        if parts.saved.count == 1, let id = parts.saved.first {
+            label = n.profile.folder(id)?.name ?? n.profile.allLinks.first { $0.id == id }?.title ?? label
+        }
         if parts.hasFullFolder {
             confirmDelete = (parts.saved, label)
         } else {
@@ -1629,6 +1657,8 @@ private struct RowKey: Equatable {
     var focused: Bool
     /// What is picked, while this row is: its menu is then the one for all of it.
     var picked: SidebarSelection?
+    /// What that menu says of the other picked rows (how many, open, heard).
+    var pickedShown: [Int]?
     var drop: DropZone?
     var size: CGSize?
     var palette: SidebarPalette?
