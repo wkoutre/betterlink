@@ -70,6 +70,26 @@ struct WindowPairingTests {
         #expect(!WindowPairing.titled("Primary: Re: Inbox", by: "Inbox"))
     }
 
+    /// Dia cuts the tab's title in the window's to 15 characters and "…"
+    /// (read on a Mac mini, Dia 1.58): a sidebar started while Dia wasn't in
+    /// front said it couldn't see the window's tabs until a short title came.
+    @Test func titledAcceptsDiasShortenedTitles() {
+        #expect(WindowPairing.titled("Primary: Longest word in…", by: "Longest word in English - Wikipedia"))
+        #expect(WindowPairing.titled("Primary: Star Wars: Epis…", by: "Star Wars: Episode V"))
+        #expect(WindowPairing.titled("Primary: w3c-72x48.png (…", by: "w3c-72x48.png (72×48)"))
+        #expect(WindowPairing.titled("Primary: 日本語のタイトルです長い長いタ…", by: "日本語のタイトルです長い長いタイトル"))
+        #expect(!WindowPairing.titled("Primary: Longest word in…", by: "Shortest word"))
+        #expect(!WindowPairing.titled("Primary: …", by: "Inbox"))
+        #expect(!WindowPairing.titled("Longest word in…", by: "Longest word in English"))
+    }
+
+    @Test func diaWindowWithAShortenedTitleIsPairedWithoutTheFocus() {
+        var p = WindowPairing()
+        #expect(look(&p, 0, [ours(100, "Primary: Apps + Chrome E…"), ours(101, "Primary: Inbox (3) - nic…", at: 900)],
+                     [theirs(1, "Apps + Chrome Extensions - Claude Code"), theirs(2, "Inbox (3) - nick@example.com - Gmail", at: 900)])
+                == [100: hit("/a", 1), 101: hit("/a", 2)])
+    }
+
     @Test func sameFrameAndTitleIsNeverGuessed() {
         var p = WindowPairing()
         let entries = [theirs(1, "New Tab"), theirs(2, "New Tab")]
