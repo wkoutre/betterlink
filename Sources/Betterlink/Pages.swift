@@ -247,6 +247,20 @@ struct RulesPage: View {
             ForEach(Array(model.rules.enumerated()), id: \.element.id) { i, rule in
                 VStack(alignment: .leading, spacing: DS.Space.space2) {
                     RuleSentence(index: i, count: model.rules.count, rule: rule, hidden: hidden.contains(i))
+                    if !rule.backups.isEmpty {
+                        // On its own line, so long profile names never squeeze the sentence above.
+                        HStack(spacing: DS.Space.space2) {
+                            Image(systemName: "arrow.turn.right.down").foregroundStyle(DS.Palette.textTertiary)
+                            Text("On a Mac without it, in").foregroundStyle(DS.Palette.textSecondary)
+                            ForEach(Array(rule.backups.enumerated()), id: \.element) { n, ref in
+                                if n > 0 { Text("or").foregroundStyle(DS.Palette.textSecondary) }
+                                ProfileLabel(ref: ref)
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .font(DS.TextStyle.caption)
+                        .padding(.leading, DS.Space.space6)
+                    }
                     UnresolvedRuleNote(rule: rule.id)
                 }
             }
@@ -275,10 +289,6 @@ private struct RuleSentence: View {
             Text(rule.pattern).font(DS.TextStyle.bodyStrong).lineLimit(1).truncationMode(.middle)
             Text("in").foregroundStyle(DS.Palette.textSecondary)
             ProfileLabel(ref: rule.target)
-            ForEach(rule.backups, id: \.self) { ref in
-                Text("or").foregroundStyle(DS.Palette.textSecondary)
-                ProfileLabel(ref: ref)
-            }
             Spacer(minLength: 0)
             if hidden {
                 Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(DS.Palette.warning)
